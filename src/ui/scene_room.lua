@@ -178,8 +178,13 @@ function RoomScene:draw()
   love.graphics.print(self.human.name .. "（" .. self.human.general.name .. "）", 40, 478)
   drawHp(40, 455, self.human.hp, self.human.max_hp)
 
-  for i, c in ipairs(self.human.hand) do
-    local x, y = self.handCardRect(i)
+  -- 手牌渲染（显式数字循环：与 ipairs 等价，但对数组异常免疫）
+  local hand = self.human.hand
+  local count = #hand
+  for idx = 1, count do
+    local c = hand[idx]
+    if c == nil then break end
+    local x, y = self.handCardRect(idx)
     love.graphics.setColor(0.96, 0.94, 0.88)
     love.graphics.rectangle("fill", x, y, CARD_W, CARD_H, 6, 6)
     love.graphics.setColor(0, 0, 0)
@@ -212,7 +217,7 @@ function RoomScene:draw()
   elseif req then
     prompt = "等待 " .. (req.player.name) .. " 响应…"
   end
-  love.graphics.print(prompt, 40, 620)
+  love.graphics.print("[A0.1] " .. prompt, 40, 620)
 
   -- 按钮
   for _, b in ipairs(self.buttons) do

@@ -1,7 +1,8 @@
 -- 入口：--test 无头跑测试；否则进入菜单 → 牌桌
-local is_test = false
+local is_test, autostart = false, false
 for _, a in ipairs(arg or {}) do
   if a == "--test" then is_test = true end
+  if a == "--autostart" then autostart = true end
 end
 
 local current_scene = nil
@@ -29,7 +30,11 @@ function love.load()
     love.event.quit()
     return
   end
-  backToMenu()
+  if autostart then
+    startGame() -- 无头/GUI 泛化验证：跳过菜单直达牌桌
+  else
+    backToMenu()
+  end
 end
 
 function love.update(dt)
