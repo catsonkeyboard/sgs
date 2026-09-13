@@ -35,6 +35,11 @@ end
 -- ===== 布局 =====
 
 function RoomScene:handCardRect(i)
+  if type(i) ~= "number" then
+    -- A0.2 诊断陷阱：若非法实参再次出现，打印真实类型与完整调用栈
+    error(string.format("[A0.2 diag] handCardRect got %s; caller:\n%s",
+      tostring(i), debug.traceback()), 2)
+  end
   local x0, y0 = 40, 520
   return x0 + (i - 1) * (CARD_W + 8), y0, CARD_W, CARD_H
 end
@@ -178,13 +183,14 @@ function RoomScene:draw()
   love.graphics.print(self.human.name .. "（" .. self.human.general.name .. "）", 40, 478)
   drawHp(40, 455, self.human.hp, self.human.max_hp)
 
-  -- 手牌渲染（显式数字循环：与 ipairs 等价，但对数组异常免疫）
+  -- 手牌渲染（A0.2：内联矩形计算，不再经 handCardRect 调用）
   local hand = self.human.hand
   local count = #hand
   for idx = 1, count do
     local c = hand[idx]
     if c == nil then break end
-    local x, y = self.handCardRect(idx)
+    local x = 40 + (idx - 1) * (CARD_W + 8)
+    local y = 520
     love.graphics.setColor(0.96, 0.94, 0.88)
     love.graphics.rectangle("fill", x, y, CARD_W, CARD_H, 6, 6)
     love.graphics.setColor(0, 0, 0)
@@ -217,7 +223,7 @@ function RoomScene:draw()
   elseif req then
     prompt = "等待 " .. (req.player.name) .. " 响应…"
   end
-  love.graphics.print("[A0.1] " .. prompt, 40, 620)
+  love.graphics.print("[A0.2] " .. prompt, 40, 620)
 
   -- 按钮
   for _, b in ipairs(self.buttons) do
