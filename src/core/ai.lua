@@ -38,13 +38,18 @@ local function opponentsOf(p, room)
   return ordered
 end
 
--- 第一个在攻击范围内的敌人
+-- 攻击范围内的敌人，优先打**体力最低**的（集火）。
+-- 原来取「第一个」，伤害被平均分摊，谁也杀不死，遇到【名士】这类减伤技能
+-- 必然打成僵局（孔融在压测里卡满 300 回合）。
 local function targetInRange(p, room)
   local range = p:attackRange()
+  local best, best_hp = nil, nil
   for _, q in ipairs(opponentsOf(p, room)) do
-    if room:distance(p, q) <= range then return q end
+    if room:distance(p, q) <= range and (best_hp == nil or q.hp < best_hp) then
+      best, best_hp = q, q.hp
+    end
   end
-  return nil
+  return best
 end
 
 local function findByName(p, name)
@@ -89,7 +94,7 @@ local PLAY_PRIORITY = {
 -- askForCard 分支里的 viewAsCandidates，不需要登记。
 local CONVERT_TARGETS = {
   "dismantlement", "indulgence", "supply_shortage", "await_exhausted",
-  "slash", "fire_attack", "snatch",
+  "slash", "fire_attack", "snatch", "duel",
 }
 
 function AI.makeAI()
@@ -114,7 +119,9 @@ function AI.makeAI()
       for _, want in ipairs(CONVERT_TARGETS) do
         local cands = room:viewAsCandidates(p, want)
         if #cands > 0 then
-          local made = cands[1].skill:view_as({ cands[1].card })
+          local args = { cands[1].card }
+          if cands[1].card2 then args[2] = cands[1].card2 end -- 双牌转化技
+          local made = cands[1].skill:view_as(args)
           if made then
             table.insert(pool, { card = made, cname = want, skill = cands[1].skill })
           end

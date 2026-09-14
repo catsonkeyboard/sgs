@@ -73,8 +73,20 @@ Cards.define("duel", {
     room:log("%s 对 %s 使用【决斗】", a.name, b.name)
     local attacker, defender = b, a -- 由目标先出杀
     while true do
+      -- 【无双】（锁定技）：吕布发起的决斗，对方每次需打出两张【杀】
+      -- 这里不 require generals（会造成循环依赖），直接查技能字段
+      local wushuang = false
+      for _, s in ipairs((a.general and a.general.skills) or {}) do
+        if s.wushuang then wushuang = true break end
+      end
+      local need = wushuang and 2 or 1
       local slash = room:askForCard(defender, "slash",
-        string.format("决斗：%s 需打出一张【杀】，否则受到 1 点伤害", defender.name))
+        string.format("决斗：%s 需打出%s【杀】，否则受到 1 点伤害",
+          defender.name, need > 1 and "两张" or "一张"))
+      if need > 1 and slash and defender:takeCard(slash) then
+        room:throwCard(defender, slash)
+        slash = room:askForCard(defender, "slash", "【无双】：需再打出一张【杀】")
+      end
       if slash and defender:takeCard(slash) then
         room:log("%s 打出【杀】", defender.name)
         room:throwCard(defender, slash)

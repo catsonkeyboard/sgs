@@ -333,9 +333,25 @@ function Room:viewAsCandidates(p, want_name)
   for _, s in ipairs((p.general and p.general.skills) or {}) do table.insert(skills, s) end
   for _, s in ipairs(p.extra_skills or {}) do table.insert(skills, s) end
   for _, s in ipairs(skills) do
-    if s.result_name == want_name and s.filter then
+    if s.result_name ~= want_name then
+      -- 不匹配
+    -- 【急救】：只能在自己回合外发动
+    elseif s.only_outside_turn and p.phase ~= "not_active" then
+      -- 自己的回合内不可用
+    elseif s.n == 2 and s.filter_pair then
+      -- 双牌转化技（【乱击】两张同花色当【万箭齐发】）
+      for i = 1, #p.hand do
+        for j = i + 1, #p.hand do
+          if s:filter_pair(p.hand[i], p.hand[j], p) then
+            table.insert(out, { skill = s, card = p.hand[i], card2 = p.hand[j] })
+            return out
+          end
+        end
+      end
+    elseif s.filter then
+      -- filter 需要知道持有者（【双雄】按本回合判定色过滤），故把 p 传进去
       for _, c in ipairs(p.hand) do
-        if s.filter(c) then table.insert(out, { skill = s, card = c }) end
+        if s:filter(c, p) then table.insert(out, { skill = s, card = c }) end
       end
     end
   end
@@ -497,6 +513,11 @@ function Room:_phase_discard(p)
     end
   end
   if n > 0 then self:log("%s 弃置 %d 张牌", p.name, n) end
+  -- 失去最后一张手牌：【死谏】的挂载点
+  if #p.hand == 0 then
+    self:trigger("CardsMoveOneTime", p,
+      { player = p, from_place = "hand", last_handcard = true })
+  end
 end
 
 function Room:_phase_finish(_p)
@@ -523,7 +544,14 @@ function Room:_judgeCard(p, card)
   -- 改判：技能（【鬼才】等）可把判定牌替换为一张手牌，被替换的旧判定牌进弃牌堆
   local retrial = { player = p, card = card, judge_card = judge_card, reason = card.name }
   if self:trigger("AskForRetrial", p, retrial) and retrial.judge_card ~= judge_card then
-    table.insert(self.discardPile, judge_card)
+    -- 被替换下来的旧判定牌在这里才入弃牌堆。技能若想获得它（【鬼道】），
+    -- 必须置 obtain_old/replacer 由引擎代劳——技能在触发回调里直接 obtain
+    -- 会拿不到（此时牌还没进弃牌堆），反而造成一张牌被登记两次。
+    if retrial.obtain_old and retrial.replacer then
+      table.insert(retrial.replacer.hand, judge_card)
+    else
+      table.insert(self.discardPile, judge_card)
+    end
     judge_card = retrial.judge_card
   end
 
@@ -776,6 +804,15 @@ function Room:_validateUse(from, card, targets)
     return false
   end
 
+  -- 【帷幕】（锁定技）：不能成为黑色锦囊牌的目标
+  for _, t in ipairs(targets) do
+    if t and Generals.marker(t, "no_black_trick", false) and def.ctype == Card.Type.Trick
+      and not card:isRed() then
+      self:log("%s 的【帷幕】生效，不能成为黑色锦囊【%s】的目标", t.name, card:zhName())
+      return false
+    end
+  end
+
   -- 【谦逊】（锁定技）：不能成为指定锦囊（【顺手牵羊】【乐不思蜀】）的目标
   for _, t in ipairs(targets) do
     local banned = t and Generals.marker(t, "no_target_tricks", nil)
@@ -868,6 +905,20 @@ function Room:_resolveSlash(from, to, card)
     dodged = true
     table.insert(self.discardPile, dodge)
     self:log("%s 打出【闪】", to.name)
+    self:trigger("CardResponded", to, { player = to, card = dodge })
+  end
+
+  -- 【无双】（锁定技）：吕布的【杀】需两张【闪】才能抵消
+  if dodged and Generals.marker(from, "wushuang", false) then
+    local d2 = self:askForCard(to, "dodge", "【无双】：需再打出一张【闪】")
+    if d2 and d2.name == "dodge" and to:takeCard(d2) then
+      table.insert(self.discardPile, d2)
+      self:log("%s 再打出一张【闪】", to.name)
+      self:trigger("CardResponded", to, { player = to, card = d2 })
+    else
+      dodged = false
+      self:log("%s 无法再打出【闪】，【杀】命中", to.name)
+    end
   end
 
   -- 八卦阵：未打出【闪】时可判定，红色视为打出【闪】
@@ -1089,6 +1140,14 @@ function Room:_dying(p, killer)
     self:trigger("QuitDying", p, { player = p })
     return
   end
+  -- 【完杀】（锁定技）：贾诩的回合内，只有他自己才能用【桃】救人
+  local turner = self.players[self.current_seat]
+  if turner and turner ~= p and Generals.marker(turner, "wansha", false) then
+    self:log("%s 的【完杀】生效：%s 的回合内他人无法使用【桃】救援", turner.name, turner.name)
+    self:_kill(p, killer)
+    return
+  end
+
   self:log("%s 濒死，请求【桃】", p.name)
   while p.hp <= 0 do
     local peach = self:askForCard(p, "peach", "你已濒死，请使用【桃】/【酒】（不出则阵亡）")
@@ -1115,7 +1174,7 @@ end
 function Room:_kill(p, killer)
   p.alive = false
   p.role_revealed = true -- 阵亡即亮身份
-  self:trigger("Death", p, { player = p })
+  self:trigger("Death", p, { player = p, killer = killer }) -- 【断肠】需要凶手
   self:log("%s 阵亡（身份：%s）", p.name, Player.ROLE_ZH[p.role] or "未知")
   for i = #p.hand, 1, -1 do
     table.insert(self.discardPile, table.remove(p.hand, i))

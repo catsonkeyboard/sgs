@@ -865,6 +865,202 @@ do -- 丁奉·短兵 / 奋迅
   check(t and r:distance(ps[1], t) == 1, "【奋迅】与该角色距离应固定为 1（原最远 " .. far .. "）")
 end
 
+print("\n--- 群雄武将技能 ---")
+
+do -- 华佗·急救：回合外红色手牌当【桃】
+  local r, ps = makeRoomWith({ "华佗", "白板武将" }, 51)
+  give(ps[1], "dodge", Card.Suit.Heart, 5)
+  ps[1].phase = "not_active"
+  check(#r:viewAsCandidates(ps[1], "peach") > 0, "【急救】回合外应能用红色牌当【桃】")
+  ps[1].phase = "play"
+  check(#r:viewAsCandidates(ps[1], "peach") == 0, "【急救】自己回合内不应能用")
+  ps[1].phase = "not_active"
+  local black = give(ps[1], "slash", Card.Suit.Spade, 5)
+  check(r:viewAsCard(ps[1], "peach", black) == nil, "【急救】黑色牌不应能当【桃】")
+end
+
+do -- 华佗·青囊：弃一张手牌令一名角色回复体力
+  local r, ps = makeRoomWith({ "华佗", "白板武将" }, 52)
+  ps[2].hp = 1 -- 损失 3 点体力，满足「损失 2 点以上」的 AI 策略
+  give(ps[1], "dodge", Card.Suit.Spade, 2)
+  r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  check(ps[2].hp == 2, "【青囊】应令受伤角色回复 1 点体力（" .. ps[2].hp .. "）")
+  check(ps[1].qingnang_used, "【青囊】每回合限一次")
+end
+
+do -- 吕布·无双：标记生效（杀需两张闪、决斗需两张杀）
+  local r, ps = makeRoomWith({ "吕布", "白板武将" }, 53)
+  check(Generals.marker(ps[1], "wushuang", false), "吕布【无双】应挂上标记")
+end
+
+do -- 貂蝉·离间 / 闭月
+  local r, ps = makeRoomWith({ "貂蝉", "白板武将", "白板武将" }, 54)
+  give(ps[1], "dodge", Card.Suit.Spade, 2)
+  runInRoom(function()
+    r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  end)
+  check(ps[1].lijian_used, "【离间】应发动（令两名男性角色决斗）")
+  local r2, q = makeRoomWith({ "貂蝉", "白板武将" }, 55)
+  local n = #q[1].hand
+  r2:trigger("EventPhaseStart", q[1], { player = q[1], phase = "finish" })
+  check(#q[1].hand == n + 1, "【闭月】结束阶段应摸一张牌")
+end
+
+do -- 袁绍·乱击：两张同花色手牌当【万箭齐发】
+  local r, ps = makeRoomWith({ "袁绍", "白板武将" }, 56)
+  give(ps[1], "slash", Card.Suit.Spade, 5)
+  give(ps[1], "dodge", Card.Suit.Spade, 6)
+  local cands = r:viewAsCandidates(ps[1], "archery_attack")
+  check(#cands > 0 and cands[1].card2 ~= nil, "【乱击】应能选出两张牌")
+  if #cands > 0 then
+    local made = cands[1].skill:view_as({ cands[1].card, cands[1].card2 })
+    check(made ~= nil and made.name == "archery_attack", "【乱击】两张同花色应能当【万箭齐发】")
+    check(made and #made.subcards == 2, "【乱击】虚拟牌应记录两张实体来源")
+  end
+  local r2, q = makeRoomWith({ "袁绍", "白板武将" }, 57)
+  give(q[1], "slash", Card.Suit.Spade, 5)
+  give(q[1], "dodge", Card.Suit.Heart, 6)
+  check(#r2:viewAsCandidates(q[1], "archery_attack") == 0, "【乱击】不同花色不应能转化")
+end
+
+do -- 颜良文丑·双雄：放弃摸牌改为判定，按判定色把手牌当【决斗】
+  local r, ps = makeRoomWith({ "颜良文丑", "白板武将" }, 58)
+  table.insert(r.drawPile, Card.create(1, "slash", Card.Suit.Spade, 5, Card.Type.Basic))
+  local n = #ps[1].hand
+  local skipped = r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "draw" })
+  check(skipped, "【双雄】应截断正常摸牌阶段")
+  check(#ps[1].hand == n + 1, "【双雄】应获得判定牌")
+  check(ps[1].shuangxiong == 1, "【双雄】黑色判定应记为 1（黑色手牌当决斗）")
+end
+
+do -- 贾诩·帷幕：不能成为黑色锦囊的目标
+  local r, ps = makeRoomWith({ "贾诩", "白板武将" }, 59)
+  local black_trick = give(ps[2], "dismantlement", Card.Suit.Spade, 3, Card.Type.Trick)
+  check(not r:_validateUse(ps[2], black_trick, { ps[1] }), "【帷幕】黑色锦囊不能指定贾诩")
+  local red_trick = give(ps[2], "dismantlement", Card.Suit.Heart, 3, Card.Type.Trick)
+  check(r:_validateUse(ps[2], red_trick, { ps[1] }), "【帷幕】不应挡下红色锦囊")
+  check(Generals.marker(ps[1], "wansha", false), "贾诩【完杀】应挂上标记")
+end
+
+do -- 庞德·马术 / 猛进
+  local r, ps = makeRoomWith({ "庞德", "白板武将", "白板武将", "白板武将" }, 60)
+  check(r:distance(ps[1], ps[3]) == 1, "庞德【马术】应使到对家距离 2→1")
+  give(ps[2], "dodge", Card.Suit.Heart, 2)
+  local n = #ps[2].hand
+  r:trigger("SlashMissed", ps[2], { from = ps[1], to = ps[2] })
+  check(#ps[2].hand == n - 1, "【猛进】杀被闪抵消后应弃置目标一张牌")
+end
+
+do -- 张角·鬼道：用黑色手牌替换判定牌并获得原判定牌
+  local r, ps = makeRoomWith({ "张角", "白板武将" }, 61)
+  give(ps[1], "slash", Card.Suit.Club, 5)
+  -- 原判定为黑桃：【乐不思蜀】会命中，张角才会想改判（红桃时他已经有利，不该发动）
+  local old = Card.create(1, "slash", Card.Suit.Spade, 8, Card.Type.Basic)
+  local data = { player = ps[1], card = nil, judge_card = old, reason = "indulgence" }
+  local replaced = r:trigger("AskForRetrial", ps[1], data)
+  check(replaced and data.judge_card.suit == Card.Suit.Club, "【鬼道】应以黑色牌替换判定牌")
+  check(data.obtain_old and data.replacer == ps[1], "【鬼道】应要求引擎把旧判定牌交给张角")
+end
+
+do -- 张角·雷击：打出【闪】后令一名角色判定，黑桃则 2 点雷伤害
+  local r, ps = makeRoomWith({ "张角", "白板武将" }, 62)
+  table.insert(r.drawPile, Card.create(1, "slash", Card.Suit.Spade, 5, Card.Type.Basic))
+  local hp = ps[2].hp
+  runInRoom(function()
+    r:trigger("CardResponded", ps[1],
+      { player = ps[1], card = Card.create(2, "dodge", Card.Suit.Heart, 2, Card.Type.Basic) })
+  end)
+  check(ps[2].hp == hp - 2, "【雷击】判定黑桃应造成 2 点雷伤害（" .. hp .. " → " .. ps[2].hp .. "）")
+end
+
+do -- 蔡文姬·断肠：死亡时令凶手失去所有技能
+  local r, ps = makeRoomWith({ "蔡文姬", "张飞" }, 63)
+  check(#ps[2].general.skills > 0, "张飞应有技能")
+  r:trigger("Death", ps[1], { player = ps[1], killer = ps[2] })
+  check(#ps[2].general.skills == 0, "【断肠】应令凶手失去所有技能")
+end
+
+do -- 孔融·名士：来源手牌数不少于你时伤害 -1
+  local r, ps = makeRoomWith({ "孔融", "白板武将" }, 64)
+  give(ps[2], "slash", Card.Suit.Spade, 5)
+  give(ps[2], "slash", Card.Suit.Spade, 6)
+  local data = { from = ps[2], to = ps[1], n = 1 }
+  r:trigger("DamageInflicted", ps[1], data)
+  check(data.n == 0, "【名士】应把 1 点伤害降为 0")
+  give(ps[1], "dodge", Card.Suit.Heart, 2)
+  give(ps[1], "dodge", Card.Suit.Heart, 3)
+  local data2 = { from = ps[2], to = ps[1], n = 2 }
+  r:trigger("DamageInflicted", ps[1], data2)
+  check(data2.n == 1, "【名士】应把 2 点伤害降为 1")
+end
+
+do -- 孔融·礼让：弃牌阶段结束后把弃牌分给其他角色
+  local r, ps = makeRoomWith({ "孔融", "白板武将" }, 65)
+  local d1 = Card.create(101, "dodge", Card.Suit.Spade, 2, Card.Type.Basic)
+  local d2 = Card.create(102, "dodge", Card.Suit.Spade, 3, Card.Type.Basic)
+  table.insert(r.discardPile, d1)
+  table.insert(r.discardPile, d2)
+  r.last_discard_player = ps[1]
+  r.last_discarded = { d1, d2 }
+  r:trigger("EventPhaseEnd", ps[1], { player = ps[1], phase = "discard" })
+  -- AI 策略只让出一张（全送出去会养肥对手手牌，反而触发【名士】减伤）
+  check(#ps[2].hand == 1, "【礼让】应让出一张弃牌（实得 " .. #ps[2].hand .. "）")
+  check(not hasCard(r.discardPile, d1), "【礼让】让出的牌应离开弃牌堆")
+  check(hasCard(r.discardPile, d2), "【礼让】未让出的牌应留在弃牌堆")
+end
+
+do -- 纪灵·双刃：拼点胜利视为使用【杀】
+  local r, ps = makeRoomWith({ "纪灵", "白板武将" }, 66)
+  give(ps[1], "slash", Card.Suit.Spade, 12)
+  give(ps[2], "slash", Card.Suit.Spade, 3)
+  local hp = ps[2].hp
+  runInRoom(function()
+    r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  end)
+  check(ps[2].hp < hp, "【双刃】拼点获胜应视为使用一张【杀】（" .. hp .. " → " .. ps[2].hp .. "）")
+end
+
+do -- 田丰·死谏 / 随势
+  local r, ps = makeRoomWith({ "田丰", "白板武将" }, 67)
+  give(ps[2], "dodge", Card.Suit.Spade, 2)
+  local n = #ps[2].hand
+  r:trigger("CardsMoveOneTime", ps[1],
+    { player = ps[1], from_place = "hand", last_handcard = true })
+  check(#ps[2].hand == n - 1, "【死谏】失去最后手牌时应弃置他人一张牌")
+
+  local r2, q = makeRoomWith({ "田丰", "白板武将", "白板武将" }, 68)
+  r2.identity_mode = true
+  q[1].role, q[2].role, q[3].role = "lord", "loyalist", "rebel"
+  local m = #q[1].hand
+  r2:trigger("Dying", q[3], { player = q[3] })
+  check(#q[1].hand == m, "【随势】非队友濒死时不发动")
+  local m2 = #q[1].hand
+  r2:trigger("Dying", q[2], { player = q[2] })
+  check(#q[1].hand == m2 + 1, "【随势】队友濒死时应摸一张牌")
+end
+
+do -- 潘凤·狂斧：杀造成伤害后夺取目标装备
+  local r, ps = makeRoomWith({ "潘凤", "白板武将" }, 69)
+  give(ps[2], "crossbow", Card.Suit.Spade, 2, Card.Type.Equip)
+  ps[2]:equipCard(table.remove(ps[2].hand, 1), "weapon")
+  r:trigger("Damage", ps[2], {
+    from = ps[1], to = ps[2], n = 1,
+    card = Card.create(1, "slash", Card.Suit.Spade, 5, Card.Type.Basic),
+  })
+  check(ps[1].equips.weapon ~= nil, "【狂斧】应把目标装备收归己用")
+  check(ps[2].equips.weapon == nil, "【狂斧】目标应失去该装备")
+end
+
+do -- 马腾·马术 / 雄异
+  local r, ps = makeRoomWith({ "马腾", "白板武将", "白板武将", "白板武将" }, 70)
+  check(r:distance(ps[1], ps[3]) == 1, "马腾【马术】应使到对家距离 2→1")
+  r.identity_mode = true
+  ps[1].role, ps[2].role, ps[3].role = "lord", "loyalist", "rebel"
+  local n = #ps[3].hand
+  r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  check(#ps[3].hand == n, "【雄异】只应给队友摸牌，不应给敌人")
+end
+
 print("\n--- 卡牌定义完整性 ---")
 
 local missing = {}
