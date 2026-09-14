@@ -4,11 +4,11 @@ QSanguosha（C++/Qt，2010-2014）→ LÖVE2D (Lua) 的重写项目。
 
 当前进度：**A1 + B + C 已完成** —— 标准包 60 将（蜀/魏/吴/群 各 15）、
 sgs.* 兼容层（可加载原版 DIY 扩展的**技能定义**）、接入美术与音频的牌桌 UI。
-D（网络对局）未开始。
+D（网络对局）进行中：联机对局已跑通，UI 联调未做。
 
 资源已**自带**在 `assets/`（约 28MB），不再引用原 QSanguosha 源码目录。
 
-测试：**核心 339 项 + UI 12 项 = 351 全通过**。
+测试：**核心 354 + UI 12 + 网络 33 = 399 全通过**。
 
 ## 对局规模
 
@@ -23,39 +23,57 @@ D（网络对局）未开始。
 另有 1v1 死斗（2 人）。服务端默认开 5 座。
 对局类测试（压测/网络）统一用 **5 人局与 8 人局**；4 人仅保留配置表校验。
 
-## 运行
+## 工具脚本
 
 项目自带便携版 LÖVE（`tools/love.app`，11.5），无需额外安装。
+所有脚本都从**项目根目录**执行。
+
+| 脚本 | 用途 |
+| --- | --- |
+| `./run-tests.sh` | 静态检查 + 单测（核心 354 + UI 12，约 2 秒） |
+| `./run-soak.sh` | 压测（60 将逐将覆盖 + 多种子回归 + 卡牌守恒） |
+| `./run-game.sh` | 图形界面 |
+| `./tools/lua.sh <脚本.lua>` | **跑任意 Lua 脚本**（用游戏同款 LuaJIT，见下） |
+| `./tools/serve.sh [端口] [座位数]` | 联机服务端（默认 9527 / 5 座） |
+| `./tools/join.sh [名字] [host] [port]` | 联机控制台客户端 |
+
+不常用的入口（脚本已封装，一般不用直接敲）：
 
 ```bash
-./run-tests.sh        # 无头：静态检查 + 单测（核心 339 + UI 12，约 2 秒）
-./run-soak.sh         # 无头：压测（60 将逐将覆盖 + 多种子回归 + 卡牌守恒）
-./run-game.sh         # 图形界面
+./tools/love.app/Contents/MacOS/love . --net    # 网络层测试（含真实 TCP）
+./tools/love.app/Contents/MacOS/love . --test   # 同 run-tests.sh
+./tools/love.app/Contents/MacOS/love . --soak   # 同 run-soak.sh
 ```
 
-无头模式靠 `conf.lua` 在 `--test` / `--soak` 下关闭窗口实现，**不要**用
-`SDL_VIDEODRIVER=dummy`（macOS 的 dummy 驱动建不出 OpenGL 上下文，会弹错误框）。
+无头模式靠 `conf.lua` 在 `--test` / `--soak` / `--net` 下关闭窗口实现，
+**不要**用 `SDL_VIDEODRIVER=dummy`（macOS 的 dummy 驱动建不出 OpenGL 上下文，会弹错误框）。
 
-## 随时验证一段代码：`tools/lua.sh`
+## 跑 Lua 代码：`tools/lua.sh`
 
-本机 PATH 里没有 `lua`，但 LÖVE 自带了 **Lua 5.1 / LuaJIT 2.1**（游戏运行时用的
-就是它）。`tools/lua.sh` 把它包成一个 CLI，保证版本与游戏完全一致。
+本机 PATH 里没有 `lua` / `luajit`，但 LÖVE 自带了 **Lua 5.1 / LuaJIT 2.1**
+（游戏运行时用的就是它）。`tools/lua.sh` 把它包成一个 CLI，
+**保证验证代码时的解释器版本与游戏完全一致**。
 
 ```bash
-./tools/lua.sh 脚本.lua              # 运行脚本
-echo 'print(_VERSION)' | ./tools/lua.sh -   # 跑一行代码（从标准输入读）
+./tools/lua.sh 脚本.lua                    # 运行脚本
+echo 'print(_VERSION)' | ./tools/lua.sh -  # 跑一行代码（从标准输入读）
 ```
 
 脚本内可直接 `require "src.core.*"`（package.path 已指向项目根）：
 
-```lua
-local Cards = require "src.core.cards"
-print(Cards.get("slash").zh)   -- 杀
+```bash
+$ echo 'local C=require "src.core.cards"; print(C.get("slash").zh)' | ./tools/lua.sh -
+杀
+$ echo 'print(_VERSION, jit.version)' | ./tools/lua.sh -
+Lua 5.1	LuaJIT 2.1.1700008891
 ```
 
 > 局限：`src/ui/*` 需要 `love.graphics` 等模块，windowless 下不可用。
 > UI 相关请走 `./run-tests.sh`（`test_ui.lua` 用的是打桩的 love）。
 > core/ 不依赖 love，可以放心在这里跑。
+>
+> 若想在命令行装一个通用 `lua`：要装 **LuaJIT 2.1**（对标 Lua 5.1），
+> 不要装默认的 Lua 5.4 —— 本项目用了 5.1 专有的 `setfenv`，5.4 加载就报错。
 
 ## 结构（详见 DESIGN.md）
 
@@ -65,7 +83,8 @@ src/compat/   sgs.* 兼容层，加载 diy/ 下的原版社区扩展
 src/ui/       LÖVE 场景（菜单/牌桌）+ 皮肤/音频/布局/动效
 diy/          DIY 扩展示例 3 份（武将包）：转化技 / 技能牌 / 询问类 API
 tests/        BOT vs BOT 全量对局测试 + 多种子回归 + 卡牌守恒
-tools/        lint_methods.py（点号/冒号检查）、lua.sh、love.app
+tools/        love.app（LÖVE 便携版）、lua.sh、serve.sh、join.sh、
+              lint_methods.py（点号/冒号检查）
 assets/       资源：image/  audio/  skins/  font/（自带，无需原项目）
 ```
 
@@ -80,7 +99,7 @@ assets/       资源：image/  audio/  skins/  font/（自带，无需原项目�
 | A1 | 标准包全量 + 60 将技能 | ✅ |
 | B | sgs.* 兼容层 + diy/ 扩展加载器 | ✅（国战机制与 bot 提示表按决策不做） |
 | C | 完整 UI（皮肤/布局/音频/动效） | ✅（待实机验证观感） |
-| D | LuaSocket 网络服务端 + 多人 | 🚧 进行中（房间/座位/同步已通，UI 联调未做） |
+| D | LuaSocket 网络服务端 + 多人 | 🚧 进行中（联机对局已跑通，UI 联调未做） |
 
 ## 联机（阶段 D，进行中）
 
@@ -105,8 +124,8 @@ src/net/server.lua     LuaSocket TCP 适配
 src/net/client.lua     客户端：收消息、应答请求
 ```
 
-测试全部走**内存通道**——不占端口、不依赖时序，因此完全确定。
-真实 TCP 已用 `nc` 验证：连入后能收到 `welcome`（含座位分配）与 `seats` 广播。
+测试分两层：主体走**内存通道**（不占端口、不依赖时序，完全确定），
+另有「真实 TCP」一组（回环 socket，端口动态取，监听失败则 SKIP）。
 
 尚未做：UI 联调（用真实客户端替掉本地人类玩家）、断线重连、观战、聊天、
 多房间大厅。
@@ -131,6 +150,6 @@ src/net/client.lua     客户端：收消息、应答请求
   `formation`、`jiange-defense`、`momentum`）未移植
 - **宝物**（`sgs.CreateTreasure`）没有对应槽位，映射到防具槽
 - DIY 卡牌包（`Package_CardPack`）刚支持，覆盖度不如武将包
-- 压测中约 11/200 局因长时间拉锯**判平局**（连续 80 回合无人阵亡）——
+- 压测中少量局因长时间拉锯**判平局**（连续 80 回合无人阵亡）——
   是 BOT 打不穿残局囤牌的合法结果，不是死循环；`MAX_TURNS=300` 仍是
   真正的死循环保险
