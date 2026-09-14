@@ -21,7 +21,7 @@ D（网络对局）进行中：联机/重连/观战/聊天已通，UI 联调未�
 
 资源已**自带**在 `assets/`（约 28MB），不再引用原 QSanguosha 源码目录。
 
-测试：**核心 426 + UI 55 + AI 46 = 527 全通过**（另有网络 45，走 `--net`）。
+测试：**核心 437 + UI 62 + AI 95 = 594 全通过**（另有网络 45，走 `--net`）。
 
 ## 牌堆口径
 
@@ -67,22 +67,67 @@ Standard.PRESET = "extended"   -- 切回混堆；默认 "standard"
 任意座位都能交给 AI：菜单上「AI 托管」切三档（关 / 其他座位 / 全部），
 进牌桌后按**数字键 1..N** 可随时切单个座位（想让 AI 替你打一手就按 1）。
 
+**方式一：走本机代理（推荐）**——游戏只跟 127.0.0.1 明文通信，**密钥不进游戏进程**：
+
 ```bash
+# 终端 1
 export SGS_AI_URL="https://api.openai.com/v1/chat/completions"
 export SGS_AI_KEY="sk-..."
-export SGS_AI_MODEL="gpt-4o-mini"   # 可选
+./tools/ai_proxy.py                 # 默认 127.0.0.1:8899，加 -v 看完整请求/响应
+
+# 终端 2
+export SGS_AI_TRANSPORT=proxy
 ./run-game.sh
 ```
 
-不配也能玩：拿不到模型输出时 AI 会**静默回落规则 BOT**，牌桌顶部给一行提示。
+**方式二：直连 HTTPS**——不用起代理，但密钥要经过游戏进程：
 
-设计上三条硬规矩：
+```bash
+# TokenHub hy3（Responses API）
+export SGS_AI_URL="https://tokenhub.tencentmaas.com/v1/responses"
+export SGS_AI_KEY="sk-..."
+export SGS_AI_MODEL="hy3"
+export SGS_AI_REASONING="none"      # ← 关键，见下
+./run-game.sh
+```
 
-| 规矩 | 原因 |
+**`SGS_AI_REASONING=none` 必须设**（代码里也是默认值）。hy3 默认满血思维链，
+实测单次调用 **12.7 秒**；关掉后 **1.4 秒**，一局从一小时变成几分钟。
+参数必须写成 `{"reasoning": {"effort": "none"}}` —— 传 `"low"` 不被识别（会退回默认值），
+传顶层 `reasoning_effort` 完全无效。这两条都是实测踩出来的。
+
+其它环境变量：`SGS_AI_PROTOCOL`（chat / responses，默认按 URL 猜）、
+`SGS_AI_TRANSPORT`（curl / proxy）。
+
+两种方式都不配也能玩：AI 会退化成**被动兜底**（不出牌、不响应，模型失联时最安全），不会卡死。
+
+排查 AI 问题先跑自检（配置/连通/延迟/决策格式一次出结论）：
+
+```bash
+./tools/lua.sh tools/ai-check.lua
+```
+
+想看 AI 到底在想什么（含身份判断与长期观察）：`./tools/lua.sh tools/ai-demo.lua`。
+
+### AI 是完全自主的
+
+| 设计 | 说明 |
 | --- | --- |
-| LLM 只在**枚举出的编号候选**里选 | 结构上不可能出非法动作；提示词短、解析稳 |
-| 观察层**只给该玩家可知的信息** | 别人手牌只给张数、未亮身份显示「未知」，否则身份局等于开图作弊 |
-| 任何异常都回落 BOT | 超时/解析失败/动作非法——联网的东西一定会失败，游戏一次都不能卡死 |
+| **所有请求都交给 LLM** | 包括出闪、出桃、无懈可击这类高频响应，不再是「关键决策才问」 |
+| **规则 BOT 不参与决策** | 上一版失败会回落 BOT，现在改为**重试**（把错误回喂给模型让它自纠）+ 机械选择兜底 |
+| **跨步骤记忆** | 每个座位一份：走过的每一步、写下的理由、对各自身份的判断，每次请求完整回放 |
+| **只给该玩家可知的信息** | 别人手牌只给张数、未亮身份显示「未知」，否则身份局等于开图作弊 |
+| **只在枚举出的编号候选里选** | 结构上不可能出非法动作；提示词短、解析稳 |
+
+记忆让 AI 能像人一样积累推理。实际跑出来的例子：
+
+```
+【你的决策史】共 5 步
+  第1轮 出牌：使用【桃园结义】｜桃园结义全员回血，反贼自保助阵
+  第1轮 出牌：使用【决斗】→P3｜决斗主公孙权，反贼直击目标
+【你自己的长期观察】我是反贼P1刘备，目标杀主公P3孙权，其余身份未明。
+【你上次对各自身份的判断】P3：主公
+```
 
 主线程不等网络：请求丢给后台线程跑 curl，UI 每帧 poll。
 
@@ -94,15 +139,15 @@ export SGS_AI_MODEL="gpt-4o-mini"   # 可选
 
 ```
 src/core/ai/view.lua      观察层（信息隐藏）
+src/core/ai/memory.lua    跨步骤记忆：决策史 + 身份判断 + 长期观察
 src/core/ai/actions.lua   合法动作枚举（复用 canUseCardOn 等引擎校验）
-src/core/ai/prompt.lua    提示词
+src/core/ai/prompt.lua    提示词（观察 + 记忆 + 候选 + 输出格式）
 src/core/ai/parse.lua     解析 + 校验（编号越界/数量不符一律拒）
-src/core/ai/agent.lua     响应源：异步状态机 + 降级到 BOT
-src/core/ai/transport.lua 传输层接口（mock / 同步 curl）
-src/ui/ai_transport.lua   LÖVE 实现：love.thread + curl，不阻塞主线程
+src/core/ai/agent.lua     响应源：异步状态机 + 重试/机械兜底（不碰规则 BOT）
+src/core/ai/transport.lua 传输层（mock / curl / proxy），chat 与 responses 双协议
+src/ui/ai_transport.lua   LÖVE 实现：love.thread + curl/socket，不阻塞主线程
+tools/ai_proxy.py         本机明文代理（标准库 http.server + urllib，零依赖）
 ```
-
-未接真实模型跑过——链路是用 mock 全量验证的（46 项），真机待验。
 
 ## 表现层（音效与动效）
 

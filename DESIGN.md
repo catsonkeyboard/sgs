@@ -274,32 +274,73 @@ Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
 ## 四·七、AI 玩家（`src/core/ai/`，LLM 驱动）
 
 与 BOT **并列**的第三种响应源。接入点只有 `Driver`——规则引擎一行都没改：
-座位标成 `"ai"` 后，它的请求会被转给 `Agent`，Agent 拿不到结果时静默回落 BOT。
+座位标成 `"ai"` 后，它的请求会被转给 `Agent`。
 
 | 文件 | 职责 |
 | --- | --- |
 | `view.lua` | 观察层：**信息隐藏**（别人手牌只给张数、未亮身份显示「未知」） |
+| `memory.lua` | **跨步骤记忆**：决策史 + 身份判断 + 长期观察 |
 | `actions.lua` | 合法动作枚举，复用 `canUseCardOn` / `viewAsCandidates` / `maxCards` |
-| `prompt.lua` | 提示词：状态 + 候选编号 + 输出格式 |
+| `prompt.lua` | 提示词：状态 + 记忆 + 候选编号 + 输出格式 |
 | `parse.lua` | 解析与校验：越界/数量不符/类型混杂一律拒绝 |
-| `agent.lua` | 响应源：异步状态机（thinking / ready）+ 降级 |
-| `transport.lua` | 传输层接口（mock / 同步 curl），纯 Lua |
-| `src/ui/ai_transport.lua` | LÖVE 实现：love.thread + curl，主线程不阻塞 |
+| `agent.lua` | 响应源：异步状态机（thinking / ready）+ 重试 + 机械兜底 |
+| `transport.lua` | 传输层（mock / curl / proxy），chat 与 responses 双协议 |
+| `src/ui/ai_transport.lua` | LÖVE 实现：love.thread + curl/socket，主线程不阻塞 |
+| `tools/ai_proxy.py` | 本机明文代理（标准库实现，零依赖） |
 
-三条硬规矩：
+### 完全自主：规则 BOT 退出决策路径
 
-1. **LLM 只在枚举出的编号候选里选**，不自由生成动作。
-   结构上杜绝非法响应（距离/次数/鸡肋/不存在目标），提示词与输出都很短。
-2. **观察层必须信息隐藏**。少了这层 AI 就是开图作弊，身份局里一眼看得出来，
-   而且调试时你分不清它是「推理出来的」还是「看见的」。
-3. **任何异常都回落 BOT**：超时、解析失败、动作非法、未配置接口。
-   联网的东西一定会失败，游戏一次都不能卡死。
+早期版本是「关键决策问 AI，其余走 BOT」。实测一局 245 次请求里 **148 次（60%）
+走的是 BOT**，而且全是出闪/出桃/无懈可击——恰恰最需要判断力的几类。现在：
 
-请求类型共 8 种，AI 全部要能答：`askForUseCard` / `askForCard` /
-`askForDiscard` / `askForChooseCard` / `askForDiscardFrom` /
-`askForSkillInvoke` / `askForChoice` / `askForGuanxing`。
-其中 `askForCard`（出闪/出桃/无懈）**默认不问 LLM**——一次往返 1~3 秒，
-每次被杀都卡一下，观感会非常糟；`Agent.ask_all = true` 可强制全问（测试用）。
+| 设计 | 说明 |
+| --- | --- |
+| 8 种请求全部问 LLM | `Agent.ask_all` 默认 true |
+| 兜底**不再调用** `Bot.make()` | 先**重试**（把失败原因回喂让它自纠），仍失败则**机械选择**第一个合法动作 |
+
+机械兜底的意义：模型彻底失联时游戏也不会卡死，但**决策来源始终不是规则脚本**。
+`Agent.fallback = "bot"` 仍可显式打开旧行为，留给对比测试。
+
+### 跨步骤记忆（`memory.lua`）
+
+没有记忆时每次调用都是孤立问答，AI 看不到「上轮谁打了我」「我上次判断谁是反贼」，
+身份推理无从积累。有了记忆，每一步都能回放：
+
+```
+【你的决策史】共 5 步
+  第1轮 出牌：使用【桃园结义】｜桃园结义全员回血，反贼自保助阵
+  第1轮 出牌：使用【决斗】→P3｜决斗主公孙权，反贼直击目标
+【你自己的长期观察】我是反贼P1刘备，目标杀主公P3孙权，其余身份未明。
+【你上次对各自身份的判断】P3：主公
+```
+
+- 模型可在同一份 JSON 里回传 `beliefs`（身份判断）与 `note`（长期观察）。
+  两者都是**可选**字段，只在有新判断时才写，避免每步多花 token。
+- 键名归一：`2` / `P2` / `座位2` / `曹操` 都能映射到同一玩家；
+  认不出的名字直接丢弃——**不能**写成 `nameOf(k) or k`，那样会凭空造出不存在的角色。
+- 预算：超过 `max_steps`（默认 60）后把最早的折叠成一行统计摘要。
+
+### 接入 TokenHub hy3（Responses API）
+
+不是 Chat Completions，是 **Responses API**：请求用 `instructions` + `input`，
+响应取顶层 `output_text`（没有就从 `output[].content[].text` 拼）。
+
+```bash
+export SGS_AI_URL="https://tokenhub.tencentmaas.com/v1/responses"
+export SGS_AI_KEY="sk-..."
+export SGS_AI_MODEL="hy3"
+export SGS_AI_REASONING=none     # 必须，见下表
+```
+
+| 配置 | 单次耗时 | reasoning tokens |
+| --- | --- | --- |
+| 默认（不传） | 12.7s | 915 |
+| `{"reasoning":{"effort":"low"}}` | 96.3s | 3227（low 不被识别，退回 high） |
+| 顶层 `reasoning_effort: "low"` | 96.3s | 3227（完全无效） |
+| **`{"reasoning":{"effort":"none"}}`** | **1.4~1.7s** | **0** |
+| `max_output_tokens: 150` | 5.0s | 150（推理吃光配额，正文为空） |
+
+一局 245 次调用：开思维链要一小时，关掉约 6 分钟。**这是能不能玩下去的关键开关。**
 
 > **为什么用 curl 而不是 socket.http**：LÖVE 内置的 LuaSocket 3.0 没有 luasec，
 > `ssl.https` 直接 require 失败，而 LLM 接口一律 HTTPS。系统 curl 支持 TLS，
@@ -325,13 +366,18 @@ Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
 4. **分发成本** —— 就算本机编译通过，Windows/Linux/macOS 各要带一份二进制。
 
 替代思路「本地明文代理」（游戏 → `socket.http` 明文 → 127.0.0.1 代理 → HTTPS
-转发）实测可行，代价是多一个进程要管理；需要重试/缓存/多模型切换时值得上。
+转发）**已实现**（`tools/ai_proxy.py` + `Transport.Proxy`），两种模式用
+`SGS_AI_TRANSPORT=proxy|curl` 切换。代理模式额外好处是**密钥不进游戏进程**。
+
+线程里 `require "socket"` 实测可行（LuaSocket 被 LÖVE 编译进去了，不是文件模块），
+所以代理模式也能放进 worker 线程，主线程照样不阻塞。
 </details>
 
 已知限制：
-- 尚未用真实模型跑过（链路靠 mock 验证，46 项全过）
-- 每步一次完整请求，没有对话历史复用，token 消耗偏大
-- 弃牌等「多选」请求靠编号数组，LLM 偶尔给错数量 → 直接回落 BOT
+- 每步一次完整请求，没有 KV cache 复用；记忆越长 input 越大
+- 弃牌等「多选」请求靠编号数组，模型偶尔给错数量 → 触发重试
+- 【观星】目前只给「保持原序」一个选项，没让模型真的重排
+- 关掉思维链后模型推理深度下降，身份判断主要靠提示词里的历史信息
 
 ## 五、开发约定
 
