@@ -29,7 +29,7 @@ local ANCHORS_4 = {
 }
 local ANCHORS_2 = { [1] = { 40, 440 }, [2] = { 40, 24 } }
 
-function RoomScene:init(on_exit, mode)
+function RoomScene:init(on_exit, mode, size)
   -- 皮肤配置（原版 skins/*.json）与音频。缺资源时全部安全降级，不影响对局。
   self.skin = Skin.create()
   self.cardImages = {}
@@ -44,13 +44,16 @@ function RoomScene:init(on_exit, mode)
     require("src.compat.loader").loadDirectory(engine, "diy")
   end)
   mode = mode or "identity"
+  local size = (mode == "identity") and (size or 8) or 2 -- 身份局默认 8 人（标准局）
+
+  -- 身份局按 size 建局（8/5/4 人）；武将池循环取，不写死固定四个
+  local POOL = { "刘备", "曹操", "孙权", "貂蝉", "吕布", "诸葛亮", "司马懿", "华佗" }
 
   local players = {}
   if mode == "identity" then
-    local generals = { "张飞", "曹操", "司马懿", "华佗" }
-    for i = 1, 4 do
+    for i = 1, size do
       local is_human = (i == 1)
-      local g = engine:getGeneral(generals[i]) or engine:getGeneral("白板武将")
+      local g = engine:getGeneral(POOL[((i - 1) % #POOL) + 1]) or engine:getGeneral("白板武将")
       table.insert(players,
         Player.create(is_human and "你" or ("BOT·" .. g.name), g, i, is_human))
     end

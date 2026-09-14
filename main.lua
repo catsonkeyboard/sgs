@@ -12,9 +12,9 @@ local current_scene = nil
 
 local startGame, backToMenu
 
-startGame = function(mode)
+startGame = function(mode, size)
   local RoomScene = require "src.ui.scene_room"
-  current_scene = RoomScene.create(backToMenu, mode)
+  current_scene = RoomScene.create(backToMenu, mode, size)
 end
 
 backToMenu = function()

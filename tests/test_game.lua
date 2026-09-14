@@ -1524,6 +1524,50 @@ do
   check(not ExpPattern.match(".|.|.|乱写", c, "hand"), "未知区域名不应被静默放行")
 end
 
+print("\n--- 身份局人数配置 ---")
+
+do
+  local Room = require "src.core.room"
+  local Player = require "src.core.player"
+
+  local function roles(n)
+    local engine = Engine.create()
+    Standard.setup(engine)
+    local G = require "src.core.generals"
+    local all = G.all()
+    local ps = {}
+    for i = 1, n do
+      table.insert(ps, Player.create("P" .. i, all[((i - 1) % #all) + 1], i, false))
+    end
+    local r = Room.create(engine, ps)
+    r:setupRoles(Standard.makeRng(n))
+    local c = {}
+    for _, p in ipairs(ps) do c[p.role] = (c[p.role] or 0) + 1 end
+    return c, r
+  end
+
+  -- 官方标准配置
+  local c8, r8 = roles(8)
+  check(c8.lord == 1 and c8.loyalist == 2 and c8.rebel == 4 and c8.renegade == 1,
+    string.format("8 人应为 主1 忠2 反4 内1（实得 主%d 忠%d 反%d 内%d）",
+      c8.lord or 0, c8.loyalist or 0, c8.rebel or 0, c8.renegade or 0))
+  local c5 = roles(5)
+  check(c5.lord == 1 and c5.loyalist == 1 and c5.rebel == 2 and c5.renegade == 1,
+    string.format("5 人应为 主1 忠1 反2 内1（实得 主%d 忠%d 反%d 内%d）",
+      c5.lord or 0, c5.loyalist or 0, c5.rebel or 0, c5.renegade or 0))
+  local c4 = roles(4)
+  check(c4.lord == 1 and c4.loyalist == 1 and c4.rebel == 1 and c4.renegade == 1, "4 人配置应正确")
+  -- 主公明身份且 +1 体力
+  check(r8:getLord() ~= nil and r8:getLord().role_revealed, "主公应明置身份")
+  check(r8:getLord().max_hp == r8:getLord().general.max_hp + 1, "主公应 +1 体力上限")
+  -- 其余暗置
+  local hidden = true
+  for _, p in ipairs(r8.players) do
+    if p.role ~= "lord" and p.role_revealed then hidden = false end
+  end
+  check(hidden, "非主公身份应暗置")
+end
+
 print("\n--- 座位布局 ---")
 
 do

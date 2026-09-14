@@ -49,7 +49,7 @@ end
 
 function Server:init(port, count)
   self.port = port or 9527
-  self.host = Host.create { count = count or 4 }
+  self.host = Host.create { count = count or 8 }
   self.clients = {} -- channel -> seat
 end
 
@@ -125,7 +125,7 @@ end
 function Server.main()
   local socket = require "socket"
   print("[服务端] LuaSocket " .. tostring(socket._VERSION))
-  local srv = Server.create(tonumber(arg and arg[3]) or 9527, 4)
+  local srv = Server.create(tonumber(arg and arg[3]) or 9527, 8)
   srv:bind()
   -- 命令行自测：跑 10 秒接受连接并回显，不开局（开局要等 UI 客户端）
   local deadline = socket.gettime() + 10
