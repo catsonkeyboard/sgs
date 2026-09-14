@@ -1,6 +1,9 @@
 #!/bin/bash
 # 无头跑：静态检查（方法调用语法）+ 单元/对局测试
-# 真实显示器环境下 SDL dummy 非必需，CI/沙箱需要
+#
+# 不设 SDL_VIDEODRIVER=dummy：无头靠 conf.lua 在 --test 时不建窗口实现，
+# dummy 驱动在 macOS 上建不出 OpenGL 上下文，反而会弹「Unable to create
+# OpenGL window」错误框。留空即可，用默认驱动但没有窗口。
 cd "$(dirname "$0")"
 set -e
 
@@ -14,4 +17,4 @@ fi
 
 echo
 echo "== 对局与单元测试 =="
-exec env SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}" SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}" ./tools/love.app/Contents/MacOS/love . --test
+exec ./tools/love.app/Contents/MacOS/love . --test

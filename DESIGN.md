@@ -115,10 +115,15 @@ obtain / takeOneCard / loseHp`。
 # 无头测试（不需要窗口）
 ./run-tests.sh          # 静态检查 + 单测 + UI 测试
 
-# 压力测试：1v1 / 4 人 / 5 人 / 8 人身份局各 25 局
+# 无头压力测试：1v1 / 4 人 / 5 人 / 8 人身份局各 25 局
 # + 随机武将池身份局 + 逐将覆盖（每名武将各 3 局）
-tools/love.app/Contents/MacOS/love . --soak
+./run-soak.sh
 
 # 图形界面
 ./run-game.sh
 ```
+
+**无头模式靠 `conf.lua` 关窗口，不要用 `SDL_VIDEODRIVER=dummy`。**
+dummy 驱动在 macOS 上建不出 OpenGL 上下文，LÖVE 会弹
+「Unable to create OpenGL window」错误框后退出。`conf.lua` 在
+`--test` / `--soak` 下把 `t.window` 关掉，用哪个 SDL 驱动都不会建窗口。
