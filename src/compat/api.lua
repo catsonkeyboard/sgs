@@ -265,6 +265,91 @@ define(Room, "askForPlayerChosen", function(_self, p, targets)
   end
   return nil
 end)
+
+-- 拼点：本引擎的 pindian 直接结算并返回胜负，这里补出原版 PindianStruct 的字段
+define(Room, "askForPindian", function(self, a, b, reason)
+  if not (a and b) or #a.hand == 0 or #b.hand == 0 then return nil end
+  local ca, cb = a.hand[1], b.hand[1]
+  local na, nb = ca.number, cb.number
+  local success = self:pindian(a, b)
+  return {
+    success = success, from = a, to = b, reason = reason,
+    from_card = ca, to_card = cb, from_number = na, to_number = nb,
+  }
+end)
+
+-- 展示一张手牌（【缔盟】等会用到）
+define(Room, "askForCardShow", function(_self, p, _requestor, _reason)
+  if p and #p.hand > 0 then return p.hand[1] end
+  return nil
+end)
+
+-- 从展示的若干张牌里挑一张（返回 id）
+define(Room, "askForAG", function(_self, _p, ids, refusable)
+  if not ids or #ids == 0 then return nil end
+  if refusable and #ids == 1 then return nil end
+  return ids[1]
+end)
+define(Room, "fillAG", function() end)
+define(Room, "takeAG", function() end)
+define(Room, "clearAG", function() end)
+define(Room, "closeAG", function() end)
+
+-- 分配若干张牌给其他角色（【遗计】类）。
+-- 原版脚本惯用 `while room:askForYiji(...) do ... end`，
+-- 因此这里**必须返回 false** 让循环结束，否则会无限循环。
+define(Room, "askForYiji", function(self, p, ids, _reason)
+  local to = nil
+  for _, q in ipairs(self.players) do
+    if q ~= p and q.alive then to = q break end
+  end
+  if not to then return false end
+  for _, c in ipairs(ids or {}) do
+    local card = c
+    if type(c) == "number" then -- 传进来的是 id，回弃牌堆找
+      for _, x in ipairs(self.discardPile) do
+        if x.id == c then card = x break end
+      end
+    end
+    if card and type(card) == "table" and card.name then
+      -- 必须先从原区域摘出来再进手牌，否则同一张牌会被登记两次
+      -- （牌可能在给出者手里，也可能在弃牌堆里）
+      local removed = (to == card) and false or self:_removeCardEverywhere(card)
+      if removed then table.insert(to.hand, card) end
+    end
+  end
+  self:log("%s 将 %d 张牌交给 %s", p.name, #(ids or {}), to.name)
+  return false
+end)
+
+define(Room, "askForSinglePeach", function(self, p, _dying)
+  return self:askForCard(p, "peach", "濒死：需要使用一张【桃】")
+end)
+
+-- 请求对指定目标之一使用一张【杀】
+define(Room, "askForUseSlashTo", function(_self, p, targets, _reason)
+  local slash = nil
+  for _, c in ipairs(p.hand or {}) do
+    if c.name == "slash" or c.name == "fire_slash" or c.name == "thunder_slash" then
+      slash = c
+      break
+    end
+  end
+  local to = nil
+  for _, t in ipairs(targets or {}) do
+    if t and t.alive then to = t break end
+  end
+  if not (slash and to) then return nil end
+  return { card = slash, from = p, to = { to } }
+end)
+
+-- 【观星】类：让脚本重排牌堆顶。本引擎 AI 不调整，返回空表示维持原序
+define(Room, "askForGuanxing", function() return {} end)
+
+-- 交换/调整手牌：按用途退化为「挑出 n 张」
+define(Room, "askForExchange", function(self, p, _reason, n, _m)
+  return self:askForDiscard(p, n or 1)
+end)
 define(Room, "askForCardChosen", function(_self, _p, target)
   if not target then return nil end
   if #target.hand > 0 then return target.hand[1] end
@@ -299,6 +384,106 @@ define(Room, "moveCardTo", function(self, card, from, _to, _place, _reason, _sil
   -- 本引擎目前只有「弃牌堆」一个去处，其余落点一律按弃牌处理
   table.insert(self.discardPile, card)
 end)
+
+-- 从任意区域摘除一张牌（玩家手牌/装备/判定区、弃牌堆、牌堆），成功返回 true。
+-- 卡片移动的通用前置：任何「移到别处」的操作都该以它为前提。
+function Room:_removeCardEverywhere(card)
+  for _, p in ipairs(self.players) do
+    if p:takeCard(card) then return true end
+    for _, s in ipairs(Player.EQUIP_SLOTS) do
+      if p.equips[s] == card then
+        p.equips[s] = nil
+        return true
+      end
+    end
+  end
+  for _, pile in ipairs({ self.discardPile, self.drawPile }) do
+    for i, c in ipairs(pile) do
+      if c == card then
+        table.remove(pile, i)
+        return true
+      end
+    end
+  end
+  return false
+end
+
+-- ===== 常用辅助 =====
+-- 注意：api.lua 被 sgs.lua 依赖，这里**不能** require sgs（会循环依赖），
+-- 需要的小工具就在本地实现一份。
+local function toNum(v)
+  if type(v) == "number" then return v end
+  return tonumber(v) or v
+end
+
+-- 原版 room:setPlayerProperty(player, "hp", value) 之类
+define(Room, "setPlayerProperty", function(self, p, key, value)
+  if not p then return end
+  if key == "hp" then p.hp = toNum(value)
+  elseif key == "max_hp" or key == "maxhp" then p.max_hp = toNum(value)
+  elseif key == "phase" then p.phase = value
+  elseif key == "role" then p.role = value
+  elseif key == "kingdom" then p.kingdom = value
+  elseif key == "chained" then p.chained = (value == true)
+  elseif key == "turned" or key == "faceup" then p.turned_over = (value ~= true)
+  else p[key] = value end
+  if self.log then self:log("%s 的 %s 被设置为 %s", p.name, tostring(key), tostring(value)) end
+end)
+
+define(Room, "getCardPlace", function(self, id)
+  for _, p in ipairs(self.players) do
+    for _, c in ipairs(p.hand) do if c.id == id then return "hand" end end
+    for _, s in ipairs(Player.EQUIP_SLOTS) do
+      if p.equips[s] and p.equips[s].id == id then return "equip" end
+    end
+    for _, c in ipairs(p.judges) do if c.id == id then return "judge" end end
+  end
+  for _, c in ipairs(self.discardPile) do if c.id == id then return "discardPile" end end
+  for _, c in ipairs(self.drawPile) do if c.id == id then return "drawPile" end end
+  return "unknown"
+end)
+
+define(Room, "getCardOwner", function(self, id)
+  for _, p in ipairs(self.players) do
+    for _, c in ipairs(p.hand) do if c.id == id then return p end end
+  end
+  return nil
+end)
+
+define(Room, "setTag", function(self, k, v) self.tags = self.tags or {}; self.tags[k] = v end)
+define(Room, "getTag", function(self, k) return (self.tags or {})[k] end)
+define(Room, "removeTag", function(self, k) if self.tags then self.tags[k] = nil end end)
+
+-- 技能增删：本引擎把技能挂在 general.skills / extra_skills 上
+define(Room, "acquireSkill", function(self, p, name)
+  if not (p and name) then return end
+  p.extra_skills = p.extra_skills or {}
+  for _, s in ipairs(p.extra_skills) do if s.name == name then return end end
+  table.insert(p.extra_skills, { name = name, zh = name })
+  self:log("%s 获得技能 %s", p.name, tostring(name))
+end)
+define(Room, "attachSkillToPlayer", function(self, p, name) self:acquireSkill(p, name) end)
+define(Room, "detachSkillFromPlayer", function(self, p, name)
+  if not (p and p.extra_skills) then return end
+  for i, s in ipairs(p.extra_skills) do
+    if s.name == name then table.remove(p.extra_skills, i) break end
+  end
+  self:log("%s 失去技能 %s", p.name, tostring(name))
+end)
+
+-- 纯表现层：本引擎无动画/灯箱，空实现即可
+define(Room, "setEmotion", function() end)
+define(Room, "doLightbox", function() end)
+define(Room, "doSuperLightbox", function() end)
+define(Room, "output", function(_self, msg) print(tostring(msg)) end)
+define(Room, "writeToConsole", function(_self, msg) print(tostring(msg)) end)
+define(Room, "notifyMoveCards", function() end)
+define(Room, "updateStateItem", function() end)
+define(Room, "showCard", function() end)
+define(Room, "filterCards", function() end)
+define(Room, "changeHero", function() end)
+define(Room, "swapSeat", function() end)
+define(Room, "playSkillEffect", function() end)
 
 -- 同名覆盖：必须兼容引擎内部调用与原版脚本调用两种签名
 --   引擎：  room:loseHp(p, n)

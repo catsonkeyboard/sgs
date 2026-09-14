@@ -1202,6 +1202,70 @@ do -- 中文翻译表
   check(sgs.Translations["shentou"] == "神偷", "LoadTranslationTable 应记录技能名")
 end
 
+do -- 询问类 API：askForPindian / askForAG / askForYiji / setPlayerProperty
+  local Loader = require "src.compat.loader"
+  local engine = Engine.create()
+  Standard.setup(engine)
+  Loader.loadDirectory(engine, "diy")
+
+  local g = engine:getGeneral("试炼武将")
+  check(g ~= nil, "DIY 拼点武将【试炼武将】应注册进引擎")
+
+  local ps = {}
+  for i, name in ipairs({ "试炼武将", "白板武将", "白板武将" }) do
+    table.insert(ps, Player.create("P" .. i, engine:getGeneral(name), i, false))
+  end
+  local r = Room.create(engine, ps)
+  r.drawPile = Standard.buildDrawPile(4)
+
+  -- askForPindian：返回 PindianStruct，脚本读 from_number / to_number
+  give(ps[1], "slash", Card.Suit.Spade, 12)
+  give(ps[2], "slash", Card.Suit.Spade, 3)
+  local pd = r:askForPindian(ps[1], ps[2], "测试")
+  check(pd ~= nil, "askForPindian 应返回拼点结构")
+  check(pd and pd.success == true, "点数大者应获胜")
+  check(pd and pd.from_number == 12 and pd.to_number == 3,
+    "应记录双方点数（" .. tostring(pd and pd.from_number) .. "/"
+      .. tostring(pd and pd.to_number) .. "）")
+  check(#ps[1].hand + #ps[2].hand == 0, "拼点的两张牌都应被弃置")
+
+  -- askForAG：从给定 id 列表里选一张
+  give(ps[1], "peach", Card.Suit.Heart, 5)
+  local picked = r:askForAG(ps[1], { ps[1].hand[1].id }, false)
+  check(picked ~= nil, "askForAG 应返回选中的 id")
+
+  -- askForYiji：必须返回 false，否则脚本的 while 循环会死循环
+  give(ps[1], "dodge", Card.Suit.Heart, 2)
+  local to_give = { table.remove(ps[1].hand, 1) }
+  table.insert(r.discardPile, to_give[1])
+  local n2, n3 = #ps[2].hand, #ps[3].hand
+  local ret = r:askForYiji(ps[1], to_give, "测试")
+  local got = (#ps[2].hand - n2) + (#ps[3].hand - n3)
+  check(ret == false, "askForYiji 应返回 false 以终止脚本的 while 循环")
+  check(got == 1, "askForYiji 应把牌交给一名其他角色（实得 " .. got .. " 张）")
+  check(not hasCard(r.discardPile, to_give[1]), "被交出的牌应离开弃牌堆")
+
+  -- setPlayerProperty
+  r:setPlayerProperty(ps[1], "hp", 2)
+  check(ps[1].hp == 2, "setPlayerProperty 应能设置血量（实得 " .. ps[1].hp .. "）")
+
+  -- 触发技整链路：拼点赢后摸牌。
+  -- 拼点用的是双方手牌第一张，所以先清场，否则会拿到上面遗留的杂牌。
+  for _, p in ipairs({ ps[1], ps[2] }) do
+    for _, c in ipairs(p.hand) do table.insert(r.discardPile, c) end
+    p.hand = {}
+  end
+  give(ps[1], "slash", Card.Suit.Spade, 13) -- 拼点必胜
+  give(ps[2], "slash", Card.Suit.Spade, 2)
+  runInRoom(function()
+    r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  end)
+  -- 1 张起手 -1（拼点弃置）+2（摸牌）-1（askForYiji 分出一张）= 1
+  check(#ps[1].hand == 1,
+    "【试炼】拼点获胜后应摸 2 张并分出 1 张（实得 " .. #ps[1].hand .. "）")
+  check(#ps[2].hand == 1, "分出的牌应交给另一名角色（实得 " .. #ps[2].hand .. "）")
+end
+
 do -- 名称归一 / cloneCard / Card_Parse
   local sgs = require "src.compat.sgs"
   check(sgs.lowerCardName("Duel") == "duel", "Duel 应归一为 duel")

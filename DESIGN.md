@@ -142,6 +142,20 @@ Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
 名称归一：原版脚本常写 `cloneCard("Duel")` 驼峰形式，`sgs.lowerCardName`
 统一转 snake_case。
 
+**询问类 API**（按原版扩展实际使用频次补齐）：`askForSkillInvoke`、
+`askForUseCard`、`askForDiscard`、`askForCard`、`askForCardChosen`、
+`askForPlayerChosen`、`askForChoice`、`askForPindian`、`askForCardShow`、
+`askForAG`（含 `fillAG`/`takeAG`/`clearAG`/`closeAG`）、`askForYiji`、
+`askForSuit`、`askForSinglePeach`、`askForUseSlashTo`、`askForGuanxing`、
+`askForExchange`；辅助类 `setPlayerProperty`、`getCardPlace`、`getTag/setTag`、
+`acquireSkill`/`detachSkillFromPlayer`、以及一批纯表现层的空实现
+（`setEmotion`/`doLightbox`/`notifyMoveCards` 等）。
+
+卡片移动统一走 `Room:_removeCardEverywhere`——**先从原区域摘除再放入新区域**，
+避免同一张牌被登记两次。
+
+仍未实现：阵法技、明置/暗置武将、鸡肋、FilterSkill 全局生效。
+
 ## 五、开发约定
 
 1. **core/ 禁止 require 任何 love 模块** —— UI 与 AI 只是「响应源」，规则只在 core/。

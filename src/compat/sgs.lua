@@ -506,6 +506,15 @@ end
 
 local Sanguosha = {}
 
+-- sgs.QVariant 传进来的可能是数值或字符串，取数字用这个
+function sgs.toNumber(v)
+  if type(v) == "number" then return v end
+  local n = tonumber(v)
+  if n then return n end
+  -- 兜底：非数字就保持原值，交由调用方判断
+  return v
+end
+
 -- CamelCase -> snake_case："Duel" -> "duel"，"ArcheryAttack" -> "archery_attack"
 function sgs.lowerCardName(n)
   n = tostring(n or "")
