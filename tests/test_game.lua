@@ -1414,6 +1414,116 @@ do
   end
 end
 
+print("\n--- 鸡肋 ---")
+
+do
+  local engine = Engine.create()
+  Standard.setup(engine)
+  local ps = {}
+  for i = 1, 2 do
+    table.insert(ps, Player.create("P" .. i, engine:getGeneral("白板武将"), i, false))
+  end
+  local r = Room.create(engine, ps)
+  r.drawPile = Standard.buildDrawPile(1)
+
+  local slash = Card.create(1, "slash", Card.Suit.Spade, 5, Card.Type.Basic)
+  local snatch = Card.create(2, "snatch", Card.Suit.Spade, 5, Card.Type.Trick)
+  local weapon = Card.create(3, "crossbow", Card.Suit.Spade, 5, Card.Type.Equip)
+
+  check(ps[1]:isJilei(slash) == false, "默认不应有鸡肋")
+  -- 按类别封禁
+  ps[1]:setJilei("basic")
+  check(ps[1]:isJilei(slash) == true, "封禁 basic 后基本牌应不可用")
+  check(ps[1]:isJilei(snatch) == false, "封禁 basic 不应影响锦囊")
+  check(ps[1]:isJilei(weapon) == false, "封禁 basic 不应影响装备")
+  -- 按牌名精确封禁
+  ps[1]:clearJilei()
+  ps[1]:setJilei("snatch")
+  check(ps[1]:isJilei(snatch) == true, "按牌名封禁应生效")
+  check(ps[1]:isJilei(slash) == false, "按牌名封禁不应影响其他牌")
+  ps[1]:clearJilei()
+  check(ps[1]:isJilei(snatch) == false, "clearJilei 应解除封禁")
+
+  -- 引擎层面：鸡肋的牌不能用
+  ps[1]:setJilei("basic")
+  give(ps[1], "slash", Card.Suit.Spade, 5)
+  local used
+  runInRoom(function()
+    used = r:useCard(ps[1], ps[1].hand[1], ps[2])
+  end)
+  check(used == false, "鸡肋的牌应被 _validateUse 拦下")
+  ps[1]:clearJilei()
+
+  -- BOT 层面：鸡肋的牌不会被拿出来响应
+  ps[1]:setJilei("basic")
+  give(ps[1], "dodge", Card.Suit.Heart, 2)
+  local answered = nil
+  runInRoom(function()
+    answered = r:askForCard(ps[1], "dodge", "请打出【闪】")
+  end)
+  check(answered == nil, "BOT 不应拿出鸡肋的牌响应（实得 "
+    .. tostring(answered and answered.name) .. "）")
+  ps[1]:clearJilei()
+end
+
+print("\n--- 询问类方法语义 ---")
+
+do
+  local engine = Engine.create()
+  Standard.setup(engine)
+  local ps = {}
+  for i = 1, 2 do
+    table.insert(ps, Player.create("P" .. i, engine:getGeneral("白板武将"), i, false))
+  end
+  local r = Room.create(engine, ps)
+  r.drawPile = Standard.buildDrawPile(1)
+
+  -- moveCardTo 应按 place 落到正确区域
+  local c1 = Card.create(1, "slash", Card.Suit.Spade, 5, Card.Type.Basic)
+  r:moveCardTo(c1, nil, ps[2], "hand")
+  check(ps[2].hand[#ps[2].hand] == c1, "moveCardTo(place=hand) 应进入目标手牌")
+  local c2 = Card.create(2, "peach", Card.Suit.Heart, 3, Card.Type.Basic)
+  r:moveCardTo(c2, nil, nil, "drawPile")
+  check(r.drawPile[#r.drawPile] == c2, "moveCardTo(place=drawPile) 应回到牌堆")
+  local c3 = Card.create(3, "dodge", Card.Suit.Heart, 4, Card.Type.Basic)
+  r:moveCardTo(c3, nil, nil, "discardPile")
+  check(r.discardPile[#r.discardPile] == c3, "moveCardTo(place=discardPile) 应进弃牌堆")
+  -- 从某人手里移走
+  local n = #ps[2].hand
+  r:moveCardTo(c1, ps[2], nil, "discardPile")
+  check(#ps[2].hand == n - 1, "moveCardTo 应把牌从来源摘除")
+  check(r.discardPile[#r.discardPile] == c1, "被移走的牌应出现在弃牌堆")
+
+  -- askForGuanxing 返回原序而不是空表（空表会让按索引取牌的脚本崩）
+  local cards = { c2, c3 }
+  local ordered = r:askForGuanxing(ps[1], cards, 0)
+  check(ordered == cards or #ordered == 2, "askForGuanxing 应返回牌列表（维持原序）")
+
+  -- askForAG 在空池时返回 nil
+  check(r:askForAG(ps[1], {}, false) == nil, "askForAG 空池应返回 nil")
+  check(r:askForAG(ps[1], { 7, 8 }, false) == 7, "askForAG 应返回选中的 id")
+
+  -- 展示手牌不应把牌移走
+  give(ps[1], "slash", Card.Suit.Spade, 9)
+  local before = #ps[1].hand
+  local shown = r:askForCardShow(ps[1], ps[2], "测试")
+  check(shown ~= nil, "askForCardShow 应返回一张牌")
+  check(#ps[1].hand == before, "askForCardShow 不应把手牌移走")
+end
+
+print("\n--- ExpPattern 区域段 ---")
+
+do
+  local ExpPattern = require "src.compat.exppattern"
+  local c = Card.create(1, "slash", Card.Suit.Spade, 5, Card.Type.Basic)
+  check(ExpPattern.match(".|.|.|hand", c, "hand"), "区域段 hand 应匹配")
+  check(not ExpPattern.match(".|.|.|equip", c, "hand"), "手牌不应匹配 equip 区域段")
+  check(ExpPattern.match(".|.|.|equip", c, "equip"), "区域段 equip 应匹配 equip")
+  check(ExpPattern.match(".|.|.|judge", c, "judge"), "区域段 judge 应匹配 judge")
+  -- 未知区域名以前会静默放行，现在应不匹配
+  check(not ExpPattern.match(".|.|.|乱写", c, "hand"), "未知区域名不应被静默放行")
+end
+
 print("\n--- 座位布局 ---")
 
 do

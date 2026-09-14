@@ -212,9 +212,16 @@ define(Player, "setFlags", function(self, f)
 end)
 define(Player, "getMaxCards", function(self) return math.max(self.hp, 0) end)
 -- 原版的「禁用/限制」概念（鸡肋、卡牌限制）本引擎未实现，一律放行
+-- 鸡肋设置入口（判定本身在 core/player.lua）
+-- 设置/清除鸡肋：setJilei(p, "basic") / ("slash") / clearJilei(p)
+define(Room, "setJilei", function(_self, p, kind, on)
+  if p then p:setJilei(kind, on) end
+end)
+define(Room, "clearJilei", function(_self, p) if p then p:clearJilei() end end)
 define(Player, "isProhibited", function() return false end)
 define(Player, "isCardLimited", function() return false end)
-define(Player, "isJilei", function() return false end)
+-- isJilei 的真实实现在 core/player.lua（按 ctype 或牌名判断），
+-- 这里不再重复定义——define() 的撞名守卫会拦下重复定义。
 define(Player, "canDiscard", function(_self, _who, _flags) return true end)
 define(Player, "drawCards", function(self, n)
   local room = (require "src.compat.sgs").CurrentRoom
@@ -289,10 +296,11 @@ define(Room, "askForCardShow", function(_self, p, _requestor, _reason)
   return nil
 end)
 
--- 从展示的若干张牌里挑一张（返回 id）
-define(Room, "askForAG", function(_self, _p, ids, refusable)
+-- 从展示的若干张牌里挑一张（返回 id）。
+-- 原版由玩家在界面上选；本引擎没有该界面，退化成「选第一张」。
+-- refusable 为真时允许放弃，这里一律不选为放弃只在池为空时发生。
+define(Room, "askForAG", function(_self, _p, ids, _refusable)
   if not ids or #ids == 0 then return nil end
-  if refusable and #ids == 1 then return nil end
   return ids[1]
 end)
 define(Room, "fillAG", function() end)
@@ -348,8 +356,11 @@ define(Room, "askForUseSlashTo", function(_self, p, targets, _reason)
   return { card = slash, from = p, to = { to } }
 end)
 
--- 【观星】类：让脚本重排牌堆顶。本引擎 BOT 不调整，返回空表示维持原序
-define(Room, "askForGuanxing", function() return {} end)
+-- 【观星】类：让脚本重排牌堆顶。本引擎没有该交互界面，
+-- 返回原序（而不是空表——空表会让按索引取牌的脚本崩掉）
+define(Room, "askForGuanxing", function(_self, _p, cards, _type)
+  return cards or {}
+end)
 
 -- 交换/调整手牌：按用途退化为「挑出 n 张」
 define(Room, "askForExchange", function(self, p, _reason, n, _m)
@@ -384,10 +395,36 @@ define(Room, "getThread", function(self)
 end)
 
 -- room:moveCardTo(card, from, to, place, reason, silent)
-define(Room, "moveCardTo", function(self, card, from, _to, _place, _reason, _silent)
-  if from then from:takeCard(card) end
-  -- 本引擎目前只有「弃牌堆」一个去处，其余落点一律按弃牌处理
-  table.insert(self.discardPile, card)
+-- place 用原版 Player::Place 的名字：hand / equip / judge / drawPile /
+-- discardPile / table / special。以前一律丢进弃牌堆，导致「把牌放回牌堆顶」
+-- 「置入装备区」这类调用语义全错。
+local PLACE_ALIAS = {
+  hand = "hand", h = "hand",
+  equip = "equip", e = "equip",
+  judge = "judge", j = "judge",
+  drawpile = "drawPile", draw = "drawPile",
+  discardpile = "discardPile", discard = "discardPile",
+  table = "table", ["special"] = "special",
+}
+define(Room, "moveCardTo", function(self, card, from, to, place, _reason, _silent)
+  if not card then return end
+  -- 先从原区域摘出来（手牌 / 装备 / 判定区 / 牌堆 / 弃牌堆）
+  if from then
+    from:takeCard(card)
+  else
+    self:_removeCardEverywhere(card)
+  end
+  local p = PLACE_ALIAS[string.lower(tostring(place or ""))]
+  if p == "hand" and to then
+    table.insert(to.hand, card)
+  elseif p == "judge" and to then
+    to:addJudge(card)
+  elseif p == "drawPile" then
+    table.insert(self.drawPile, card)
+  else
+    -- equip / table / special 与未知落点：本引擎没有对应区域，按弃牌处理
+    table.insert(self.discardPile, card)
+  end
 end)
 
 -- 从任意区域摘除一张牌（玩家手牌/装备/判定区、弃牌堆、牌堆），成功返回 true。

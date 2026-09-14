@@ -107,17 +107,23 @@ local function matchPlace(card, field, place)
   local places = split(field, ",")
   return anyMatch(places, function(p)
     p = string.lower(p)
+    -- 未知的区域名一律**不匹配**：以前这里返回 true，
+    -- 会让写错的区域段被静默忽略（本以为是"粗粒度"，其实是放行）
     if p == "hand" or p == "h" then return place == nil or place == "hand" end
     if p == "equip" or p == "e" then return place == "equip" end
     if p == "judge" or p == "j" then return place == "judge" end
-    return true
+    if p == "table" or p == "t" then return place == "table" end
+    if p == "special" then return place == "special" end
+    return false
   end)
 end
 
 -- pattern: 字符串；card: Card；place: "hand"/"equip"/"judge"（可选）
+-- 说明：本引擎的转化技只在**手牌**范围内筛选（原版还有装备区/判定区），
+-- 因此调用方传入的 place 目前恒为 "hand"；区域段仍会正常校验。
 function ExpPattern.match(pattern, card, place)
   if not pattern or pattern == "" or pattern == "." then return true end
-  -- 结尾的 "!" 仅表示排除【鸡肋】，本引擎不实现鸡肋，直接去掉
+  -- 结尾的 "!" 表示排除【鸡肋】牌，交给 Player:isJilei 判断（见 room.lua）
   pattern = string.gsub(pattern, "!$", "")
   local parts = split(pattern, "|")
   if not matchClass(card, parts[1] or ".") then return false end

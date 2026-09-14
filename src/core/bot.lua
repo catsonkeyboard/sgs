@@ -60,9 +60,10 @@ local function targetInRange(p, room)
   return best
 end
 
-local function findByName(p, name)
+-- ok 为额外的可用判定（如鸡肋过滤）
+local function findByName(p, name, ok)
   for _, c in ipairs(p.hand) do
-    if c.name == name then return c end
+    if c.name == name and (not ok or ok(p, c)) then return c end
   end
   return nil
 end
@@ -104,6 +105,11 @@ local CONVERT_TARGETS = {
   "dismantlement", "indulgence", "supply_shortage", "await_exhausted",
   "slash", "fire_attack", "snatch", "duel",
 }
+
+-- 该牌是否可用（鸡肋封禁的牌 BOT 也不能拿出来）
+local function usable(p, c)
+  return not p:isJilei(c)
+end
 
 function Bot.make()
   return function(req, room)
@@ -239,22 +245,25 @@ function Bot.make()
         return findByName(p, "nullification")
       end
 
-      local card = findByName(p, wanted)
+      local card = findByName(p, wanted, usable)
       -- 濒死无桃时可用酒
       if wanted == "peach" and not card and p.hp <= 0 then
-        card = findByName(p, "analeptic")
+        card = findByName(p, "analeptic", usable)
       end
       -- 没有原牌时用转化技顶上（【看破】黑色牌当无懈可击、【龙胆】杀当闪 等）
       if not card then
         local made = nil
         local cands = room:viewAsCandidates(p, wanted)
-        if #cands > 0 then
-          made = cands[1].skill:view_as({ cands[1].card })
+        for _, item in ipairs(cands) do
+          if usable(p, item.card) then
+            made = item.skill:view_as({ item.card })
+            if made then
+              room:log("%s 以【%s】转化出一张【%s】", p.name, item.skill.name, made:zhName())
+              break
+            end
+          end
         end
-        if made then
-          room:log("%s 以【%s】转化出一张【%s】", p.name, cands[1].skill.name, made:zhName())
-          card = made
-        end
+        if made then card = made end
       end
       return card
 

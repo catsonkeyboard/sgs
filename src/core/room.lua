@@ -996,6 +996,12 @@ function Room:_validateUse(from, card, targets)
   local def = Cards.get(card.name)
   if not def then return true end
 
+  -- 鸡肋：该角色不能使用/打出被封禁的那类牌
+  if from:isJilei(card) then
+    self:log("【%s】对 %s 处于鸡肋状态，无法使用", card:zhName(), from.name)
+    return false
+  end
+
   -- 禁止技（兼容层 ProhibitSkill / 原版 isProhibited）：任一角色的该技能
   -- 都可禁止这次指定
   for _, t in ipairs(targets or {}) do

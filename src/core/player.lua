@@ -76,6 +76,25 @@ function Player:takeCard(card)
 end
 
 -- 所有可见区域的总牌数（卡牌守恒校验用）
+-- 鸡肋：不能对该角色使用/打出某类牌。jilei 形如 { basic = true }。
+-- 原版是「按类别封禁」，本引擎按 ctype 判断，也支持按牌名精确封禁
+-- （jilei = { slash = true }）。
+local JILEI_BY_CTYPE = { [0] = "basic", [1] = "trick", [2] = "equip" }
+
+function Player:isJilei(card)
+  if not (card and self.jilei) then return false end
+  if self.jilei[card.name] then return true end
+  local kind = JILEI_BY_CTYPE[card.ctype]
+  return kind ~= nil and self.jilei[kind] == true
+end
+
+function Player:setJilei(kind, on)
+  self.jilei = self.jilei or {}
+  self.jilei[kind] = (on == nil) and true or (on and true or nil)
+end
+
+function Player:clearJilei() self.jilei = nil end
+
 function Player:allCardCount()
   local n = #self.hand + #self.judges
   for _, slot in ipairs(Player.EQUIP_SLOTS) do

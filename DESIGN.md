@@ -59,7 +59,7 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 | --- | --- | --- |
 | A0 | 骨架 + 杀/闪/桃迷你局 + headless 测试 + 最小 UI | ✅ 完成 |
 | A1 | 标准包全量（锦囊/装备/延时锦囊/判定）+ 触发管线 + 六阶段回合 + 身份局 + 60 将技能 | ✅ 完成 |
-| B | sgs.* 兼容层 + diy/ 扩展加载器 | 🚧 进行中（骨架可用，API 面待扩） |
+| B | sgs.* 兼容层 + diy/ 扩展加载器 | ✅ 完成（国战与 bot 提示表按决策不做） |
 | C | 完整 UI（皮肤 JSON、动画、牌桌布局）+ 音频 | 🚧 进行中（配置层与卡图/音频已通，布局待做） |
 
 | `layout.lua` | 按 layout.json 的间距参数推导座位（自适应人数，缺配置退回原锚点） |
@@ -221,18 +221,27 @@ Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
    效果走 `spec.on_effect / spec.on_use`。
    已知限制：**宝物**（CreateTreasure）本引擎无宝物槽，映射到防具槽。
 
-3. **询问类方法的语义补齐**（小～中）
-   现在是「能跑不崩」但语义是桩实现：
-   - `askForYiji` 直接分完并返回 false（原版是 `while` 轮询）
-   - `askForAG` 恒返回第一个 id；`askForGuanxing` 返回空（不重排）
-   - `askForExchange` 退化成 `askForDiscard`；`askForCardShow` 恒返回第一张
-   - `moveCardTo` 一律丢进弃牌堆（忽略传入的 place）
+3. ~~**询问类方法的语义补齐**~~ ✅ 已完成
+   - `moveCardTo` 按 `place` 落到正确区域（hand / drawPile / discardPile / judge），
+     以前一律丢进弃牌堆，导致「放回牌堆顶」「置入装备区」语义全错
+   - `askForGuanxing` 返回原序（原来返回空表，会让按索引取牌的脚本崩）
+   - `askForAG` 空池返回 nil；`askForCardShow` 明确不移走手牌
+   - 仍是桩实现（有意为之，BOT 无对应交互界面）：`askForYiji` 一次分完并返回
+     false 以终止原版的 `while` 轮询；`askForExchange` 退化成 `askForDiscard`
 
-4. **鸡肋（isJilei）**：目前一律放行。
+4. ~~**鸡肋（isJilei）**~~ ✅ 已完成
+   `Player:isJilei(card)` 按 ctype（basic/trick/equip）或牌名判断；
+   `setJilei / clearJilei` 设置。引擎在 `_validateUse` 拦下鸡肋牌，
+   BOT 也不会把鸡肋牌拿出来响应。兼容层提供 `room:setJilei / clearJilei`。
 
-5. **ExpPattern 细节**：区域段（judge / equip）只做了粗粒度匹配。
+5. ~~**ExpPattern 区域段**~~ ✅ 已完成
+   未知区域名**不再静默放行**（以前 `return true`，写错的区域段会被忽略）。
 
 6. **其余未实现的询问/表现层方法**：遇到再补，现在报错是响亮的，好定位。
+
+> 阶段 B 至此收官：可加载原版 DIY 武将包与卡牌包，Package / General /
+> ViewAs / Trigger / SkillCard / Filter / 标记类技能 / 询问类 API 均可用。
+> 未做：国战机制（已决策不做）、原版 bot 提示表（已决策不消费）。
 
 其他已实现的原版 API：`sgs.Card_Parse`（含 `@Class=` / `#obj:` 形式）、
 `CardUseStruct` / `DamageStruct` / `LogMessage` / `CardMoveReason` / `qlist`、
