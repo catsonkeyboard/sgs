@@ -25,7 +25,7 @@ love .
 src/core/   纯 Lua 规则引擎（零 love 依赖，headless 可测）
 src/ui/     LÖVE 场景（菜单/牌桌）
 src/sgs/    sgs.* 兼容层（阶段 B 吃进 diy/ 社区扩展）
-tests/      AI vs AI 全量对局测试 + 多种子回归 + 卡牌守恒
+tests/      BOT vs BOT 全量对局测试 + 多种子回归 + 卡牌守恒
 assets/     字体（复用原版 DroidSansFallback）
 ```
 

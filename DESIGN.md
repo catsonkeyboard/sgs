@@ -16,7 +16,7 @@
 │   skill.lua    技能基类 + 触发事件            │
 │   room.lua     协程房间循环（阻塞语义核心）    │
 │   standard.lua 标准包：杀/闪/桃 起步          │
-│   ai.lua       基础 AI（可被原版 smart-ai 替换）│
+│   bot.lua      基础 BOT：规则驱动的脚本对手（非机器学习/LLM）│
 ├─────────────────────────────────────────────┤
 │ src/sgs/       sgs.* 兼容 API 层             │  长出后直接吃 diy/ 社区扩展
 └─────────────────────────────────────────────┘
@@ -32,7 +32,7 @@ tools/           便携 LÖVE（love.app，gitignore）
 
 - 协程内：`self:askForCard(...)` 直觉上的阻塞调用，内部 `coroutine.yield(请求)`
 - 协程外（驱动器）：`room:step(response)` 唤醒并注入响应，取回下一个请求
-- 请求路由：人类玩家 → UI 事件等待；AI → 同步计算；网络对局 → socket 消息（阶段 D）
+- 请求路由：人类玩家 → UI 事件等待；BOT → 同步计算；网络对局 → socket 消息（阶段 D）
 
 ### 2. sgs.* 兼容层是社区内容的生命线
 
@@ -94,8 +94,8 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 
 **主动技征询**：`Room:trigger` 里对人类玩家的非锁定技先走
 `Room:askForSkillInvoke`（yield 出 `askForSkillInvoke` 请求），玩家点
-「发动【技能】」或「不发动」；AI 一律直接发动；锁定技（Compulsory/Wake）
-不征询。此前人类玩家的技能是和 AI 一样自动触发的，玩家没有选择权。
+「发动【技能】」或「不发动」；BOT 一律直接发动；锁定技（Compulsory/Wake）
+不征询。此前人类玩家的技能是和 BOT 一样自动触发的，玩家没有选择权。
 
 **待实机验证**（需要图形环境，headless 测不到）：
 - 音效是否真的播放、音量是否合适
@@ -205,9 +205,9 @@ Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
    【祸水】【倾城】完全建立在此之上，邹氏目前只有名册占位没有技能。
    注意：本引擎跑的是标准身份局，国战机制要不要做需要先定方向。
 
-3. **是否消费原版 AI 提示表**（设计决策，非实现问题）
-   `sgs.ai_view_as` 等目前只是空容器。本引擎 AI 走 `CONVERT_TARGETS` + 试算。
-   倾向**不消费**——两套 AI 逻辑并行容易打架，且原版 AI 依赖大量本引擎没有的概念。
+3. **是否消费原版 bot 提示表 `sgs.ai_*`**（设计决策，非实现问题）
+   `sgs.ai_view_as` 等目前只是空容器。本引擎 BOT 走 `CONVERT_TARGETS` + 试算。
+   倾向**不消费**——两套 bot 逻辑并行容易打架，且原版 bot 依赖大量本引擎没有的概念。
 
 4. **鸡肋（isJilei）**：目前 `isJilei` 一律放行。
 
@@ -216,8 +216,8 @@ Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
 其他已实现的原版 API：`sgs.Card_Parse`（含 `@Class=` / `#obj:` 形式）、
 `CardUseStruct` / `DamageStruct` / `LogMessage` / `CardMoveReason` / `qlist`、
 `room:getThread():trigger`、`room:moveCardTo`、`Card:getSubcards():length()`、
-`getSuitString()` / `getNumberString()`、区域与阶段常量、以及 AI 提示表
-（`sgs.ai_view_as` 等，仅作容器——本引擎 AI 不走这套）。
+`getSuitString()` / `getNumberString()`、区域与阶段常量、以及原版 bot 提示表
+（`sgs.ai_view_as` 等，仅作容器——本引擎 BOT 不走这套）。
 
 名称归一：原版脚本常写 `cloneCard("Duel")` 驼峰形式，`sgs.lowerCardName`
 统一转 snake_case。
@@ -238,7 +238,19 @@ Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
 
 ## 五、开发约定
 
-1. **core/ 禁止 require 任何 love 模块** —— UI 与 AI 只是「响应源」，规则只在 core/。
+### 0. 术语：BOT ≠ AI（务必分清）
+
+| 词 | 指代 | 位置 |
+| --- | --- | --- |
+| **BOT** | 规则驱动的脚本对手。无学习、无推理、无搜索，给定种子行为可复现 | `src/core/bot.lua` |
+| **AI** | 由大语言模型（LLM）驱动的玩家，规划中 | 尚未实现 |
+| `sgs.ai_*` | **原版**的 bot 提示表，名字沿用原版 API 不能改；本引擎 BOT 不消费 | `src/compat/sgs.lua` |
+
+历史包袱：游戏行业长期把电脑对手统称 "AI"，本项目早期的 `ai.lua`、
+`AI.makeAI()` 也是这个老用法，现已全部改名为 `bot.lua` / `Bot.make()`。
+**新增代码一律用 BOT 指代规则对手**，把 AI 留给将来真正的 LLM 玩家。
+
+1. **core/ 禁止 require 任何 love 模块** —— UI 与 BOT 只是「响应源」，规则只在 core/。
 2. **改完 Lua 先跑 `./run-tests.sh`** —— 内含 `tools/lint_methods.py`，
    静态检查方法定义与调用语法是否匹配（点号/冒号错配踩过两次，见 commit 3e4c0ac）。
 3. **新增卡牌**：在 `core/cards.lua` 用 `Cards.define` 登记，`Card.ZH`、
@@ -253,9 +265,9 @@ Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
    `Damaged` 用 `data.to`、`DamageCaused` 用 `data.from` 判断。
 6. **会询问玩家（`askForXxx`）的技能，单测里必须放进协程跑**，否则主线程 `yield`
    直接报错。测试里统一用 `runInRoom(fn)` 包裹（见 `tests/test_game.lua`）。
-7. **AI 主动使用转化技要登记 `CONVERT_TARGETS`**（`core/ai.lua`）。
+7. **BOT 主动使用转化技要登记 `CONVERT_TARGETS`**（`core/bot.lua`）。
    转化技默认只在「响应」（askForCard）时被考虑，出牌阶段不会主动转化，
-   于是【武圣】【奇袭】【国色】【度势】这类技能在 AI 手里是废的。
+   于是【武圣】【奇袭】【国色】【度势】这类技能在 BOT 手里是废的。
 8. **判队友不能只认「同身份」**：主公与忠臣同阵营但身份不同，
    `allies()` 必须取 `foes()` 的补集，否则【英魂】【缔盟】【直谏】找不到队友。
 9. **凭空生成的牌（phantom）不能被任何「收牌」逻辑拿走**。
@@ -264,7 +276,7 @@ Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
    导致压测「卡牌不守恒 119 != 118」。
 10. **技能实现要回查原版源码，不能凭记忆写**。反例：【再起】被记成
     「固定回复 1 点体力」，实为「翻 X 张牌、按红桃数回血」，
-    前者让孟获每回合回血正好抵消 AI 输出，压测大面积卡死。
+    前者让孟获每回合回血正好抵消 BOT 输出，压测大面积卡死。
 
 ## 四、运行方式
 

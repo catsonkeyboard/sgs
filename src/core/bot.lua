@@ -1,9 +1,12 @@
--- 基础 AI：覆盖全部请求类型与常用卡牌
--- 策略偏保守但不会死锁；阶段 A1 后可替换为原版 lua/ai/smart-ai.lua（经 sgs 兼容层）
+-- 基础 BOT：覆盖全部请求类型与常用卡牌
+-- 这是**规则驱动**的脚本对手，不是机器学习/LLM。
+-- 策略偏保守但不会死锁；后续会接入真正由 LLM 驱动的 AI，届时两者并存：
+--   BOT（本文件）  —— 规则启发式，无学习、无推理、无搜索，行为可复现
+--   AI（规划中）   —— 大语言模型驱动，只在关键抉择上调用
 local Cards = require "src.core.cards"
 local Card = require "src.core.card"
 
-local AI = {}
+local Bot = {}
 
 -- 候选目标：身份局下按阵营敌我排序，非身份局就是「除自己外的存活者」
 local function opponentsOf(p, room)
@@ -95,14 +98,14 @@ local PLAY_PRIORITY = {
 }
 
 -- 出牌阶段会尝试用转化技「变」出来的牌名（按性价比排序，先试收益高的）。
--- 只有出现在这里的牌名才会被 AI 主动转化使用；纯响应（闪/无懈可击）走
+-- 只有出现在这里的牌名才会被 BOT 主动转化使用；纯响应（闪/无懈可击）走
 -- askForCard 分支里的 viewAsCandidates，不需要登记。
 local CONVERT_TARGETS = {
   "dismantlement", "indulgence", "supply_shortage", "await_exhausted",
   "slash", "fire_attack", "snatch", "duel",
 }
 
-function AI.makeAI()
+function Bot.make()
   return function(req, room)
     local p = req.player
 
@@ -120,7 +123,7 @@ function AI.makeAI()
         table.insert(pool, { card = c, cname = c.name })
       end
       -- 转化技主动出牌：【奇袭】黑牌当过河拆桥、【国色】方块当乐不思蜀、
-      -- 【武圣】红牌当杀 等。没有这段的话这些技能在 AI 手里等于废的。
+      -- 【武圣】红牌当杀 等。没有这段的话这些技能在 BOT 手里等于废的。
       for _, want in ipairs(CONVERT_TARGETS) do
         local cands = room:viewAsCandidates(p, want)
         if #cands > 0 then
@@ -300,4 +303,4 @@ function AI.makeAI()
   end
 end
 
-return AI
+return Bot

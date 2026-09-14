@@ -189,7 +189,7 @@ function Room:trigger(event, player, data)
   end)
   for _, item in ipairs(list) do
     local who = item.owner or player
-    -- 人类玩家的非锁定技要先征询：否则技能会像 AI 一样自动发动，
+    -- 人类玩家的非锁定技要先征询：否则技能会像 BOT 一样自动发动，
     -- 玩家根本没有「发不发动」的选择权。锁定技（Compulsory）照常自动结算。
     if who and who.is_human and item.owner
       and not self:isCompulsorySkill(item.skill)
@@ -208,7 +208,7 @@ function Room:isCompulsorySkill(skill)
   return f == "Compulsory" or f == "Wake"
 end
 
--- 询问是否发动某个武将技；AI 一律发动，人类玩家弹选择。
+-- 询问是否发动某个武将技；BOT 一律发动，人类玩家弹选择。
 -- skill 可以是技能对象，也可以是技能名字符串（兼容层按原版签名为字符串）。
 function Room:askForSkillInvoke(player, skill)
   if not (player and player.is_human) then return true end
@@ -746,7 +746,7 @@ function Room:useCard(from, card, target)
   local use = { from = from, card = card, to = targets }
   local def = Cards.get(card.name)
 
-  -- AOE 类锦囊的作用目标由引擎展开，AI/UI 只需指定卡牌本身
+  -- AOE 类锦囊的作用目标由引擎展开，BOT/UI 只需指定卡牌本身
   if def and def.target == "all_other" then
     targets = self:otherAlivePlayers(from)
     use.to = targets

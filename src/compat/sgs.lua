@@ -87,8 +87,10 @@ sgs.Card_MethodDiscard = "discard"
 sgs.Card_MethodRecast = "recast"
 sgs.Card_MethodPindian = "pindian"
 
--- 原版 AI 提示表：脚本会往这些表里塞元素，必须先存在，否则赋值即崩。
--- 本引擎的 AI 不走这套（用 CONVERT_TARGETS + 试算），这里只为兼容。
+-- 原版的 **bot 提示表**（名字沿用原版 API 的 sgs.ai_*，不能改，
+-- 否则 DIY 脚本塞值时就崩了）。它们描述的是原版那个规则驱动的脚本对手
+-- 如何使用技能，与本引擎的 src/core/bot.lua 是两套东西。
+-- 本引擎的 BOT 不消费这些表（走 CONVERT_TARGETS + 试算），这里只为兼容。
 sgs.ai_view_as = {}
 sgs.ai_filterskill_filter = {}
 sgs.ai_skill_invoke = {}
@@ -302,7 +304,7 @@ end
 local function makeViewAsSkill(spec, kind)
   local s = ViewAsSkill.create(spec.name, { zh = spec.name, n = (kind == "zero") and 0 or 1 })
   s.__spec = spec
-  s.dynamic = true -- 结果牌名不固定，AI 需要试算
+  s.dynamic = true -- 结果牌名不固定，BOT 需要试算
 
   function s:filter(c, p)
     if kind == "zero" then return false end
@@ -430,7 +432,7 @@ function sgs.CreateSkillCard(spec)
 end
 
 -- sgs.Card_Parse("name:skill[suit:number]=id+id") 或 "@Class=ids" / "#obj:ids"
--- 主要由 AI 脚本用来构造虚拟牌；本引擎的 AI 不依赖它，这里做最小可用实现。
+-- 主要由原版 bot 脚本用来构造虚拟牌；本引擎的 BOT 不依赖它，这里做最小可用实现。
 local SUIT_BY_NAME = {
   spade = Card.Suit.Spade, heart = Card.Suit.Heart,
   club = Card.Suit.Club, diamond = Card.Suit.Diamond,

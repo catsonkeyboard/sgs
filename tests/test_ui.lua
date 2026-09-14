@@ -33,7 +33,7 @@ end
 package.loaded["src.ui.scene_room"] = nil
 local RoomScene = require "src.ui.scene_room"
 
--- 构造场景（init 会真实跑一局引擎初始化与 AI 推进）
+-- 构造场景（init 会真实跑一局引擎初始化与 BOT 推进）
 local scene = RoomScene.create(function() end)
 
 check(scene.human ~= nil, "场景应创建人类玩家")

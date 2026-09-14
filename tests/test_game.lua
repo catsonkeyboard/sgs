@@ -11,7 +11,7 @@ local Cards = require "src.core.cards"
 local Card = require "src.core.card"
 local Room = require "src.core.room"
 local Driver = require "src.core.driver"
-local AI = require "src.core.ai"
+local Bot = require "src.core.bot"
 local skillmod = require "src.core.skill"
 local Generals = require "src.core.generals"
 
@@ -40,7 +40,7 @@ local function playGame(opts)
   room.drawPile = opts.mini and Standard.buildMiniPile(seed) or Standard.buildDrawPile(seed)
   room.rng = Standard.makeRng(seed) -- 确定性推进
   room:start()
-  local driver = Driver.create(room, AI.makeAI())
+  local driver = Driver.create(room, Bot.make())
   driver:advance()
   return room
 end
@@ -211,7 +211,7 @@ do
         r.drawPile = Standard.buildDrawPile(seed * 13 + 1)
         r.rng = Standard.makeRng(seed * 13 + 1)
         r:start()
-        local d = Driver.create(r, AI.makeAI())
+        local d = Driver.create(r, Bot.make())
         d:advance()
         assertFinished(r, Standard.deckSize())
       end)
@@ -224,7 +224,7 @@ end
 
 print("\n--- 身份局 ---")
 
--- 构造一个 n 人身份局（全部 AI），可指定 seed
+-- 构造一个 n 人身份局（全部 BOT），可指定 seed
 local function makeIdentityGame(n, seed)
   local engine = Engine.create()
   Standard.setup(engine)
@@ -332,7 +332,7 @@ do
     local ok = pcall(function()
       local r = makeIdentityGame(4, seed * 17 + 3)
       r:start()
-      local d = Driver.create(r, AI.makeAI())
+      local d = Driver.create(r, Bot.make())
       d:advance()
       assert(r.game_over, "未正常结束")
       assert(r.turn_count <= Room.MAX_TURNS, "超回合")
@@ -589,7 +589,7 @@ end
 
 do -- 夏侯渊·神速：跳过判定+摸牌阶段，打出无距离限制的【杀】
   local r, ps = makeRoomWith({ "夏侯渊", "白板武将" }, 20)
-  ps[2].hp = 1 -- 残血，满足「值得放弃摸牌」的 AI 条件
+  ps[2].hp = 1 -- 残血，满足「值得放弃摸牌」的 BOT 条件
   local skipped = false
   runInRoom(function()
     skipped = r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "judge" })
@@ -892,7 +892,7 @@ end
 
 do -- 华佗·青囊：弃一张手牌令一名角色回复体力
   local r, ps = makeRoomWith({ "华佗", "白板武将" }, 52)
-  ps[2].hp = 1 -- 损失 3 点体力，满足「损失 2 点以上」的 AI 策略
+  ps[2].hp = 1 -- 损失 3 点体力，满足「损失 2 点以上」的 BOT 策略
   give(ps[1], "dodge", Card.Suit.Spade, 2)
   r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
   check(ps[2].hp == 2, "【青囊】应令受伤角色回复 1 点体力（" .. ps[2].hp .. "）")
@@ -1014,7 +1014,7 @@ do -- 孔融·礼让：弃牌阶段结束后把弃牌分给其他角色
   r.last_discard_player = ps[1]
   r.last_discarded = { d1, d2 }
   r:trigger("EventPhaseEnd", ps[1], { player = ps[1], phase = "discard" })
-  -- AI 策略只让出一张（全送出去会养肥对手手牌，反而触发【名士】减伤）
+  -- BOT 策略只让出一张（全送出去会养肥对手手牌，反而触发【名士】减伤）
   check(#ps[2].hand == 1, "【礼让】应让出一张弃牌（实得 " .. #ps[2].hand .. "）")
   check(not hasCard(r.discardPile, d1), "【礼让】让出的牌应离开弃牌堆")
   check(hasCard(r.discardPile, d2), "【礼让】未让出的牌应留在弃牌堆")
@@ -1594,13 +1594,13 @@ do
   check(asked ~= nil, "人类玩家的主动技应弹出征询（实得 " .. tostring(asked) .. "）")
   check(r.players[1].hp == 4, "玩家选择不发动时【苦肉】不应扣体力")
 
-  -- AI：不应询问，直接发动（AI 走的是技能自身逻辑）
+  -- BOT：不应询问，直接发动（BOT 走的是技能自身逻辑）
   local r2 = mk(false)
   runInRoom(function()
     r2:trigger("EventPhaseStart", r2.players[1],
       { player = r2.players[1], phase = "play" })
   end)
-  check(r2.players[1].hp == 3, "AI 应直接发动【苦肉】（hp 4→"
+  check(r2.players[1].hp == 3, "BOT 应直接发动【苦肉】（hp 4→"
     .. r2.players[1].hp .. "）")
 
   -- 锁定技不征询

@@ -34,7 +34,7 @@ define(Card, "getId", function(self) return self.id end)
 define(Card, "getEffectiveId", function(self) return self.id end)
 define(Card, "getSuit", function(self) return self.suit end)
 define(Card, "getNumber", function(self) return self.number end)
--- 原版 AI 脚本用这两个拼 Card_Parse 字符串，需要的是花色/点数的**名字**
+-- 原版 bot 脚本用这两个拼 Card_Parse 字符串，需要的是花色/点数的**名字**
 define(Card, "getSuitString", function(self)
   return string.lower(self:suitString()) == "s" and "spade"
     or string.lower(self:suitString()) == "h" and "heart"
@@ -247,7 +247,7 @@ define(Room, "broadcastSkillInvoke", function() end)
 define(Room, "removePlayerDisableShow", function() end)
 define(Room, "doAnimate", function() end)
 define(Room, "sendLog", function(self, msg) self:log("%s", tostring(msg and msg.type or msg)) end)
--- 引擎已有 Room:askForSkillInvoke（人类会弹选择、AI 直接发动），
+-- 引擎已有 Room:askForSkillInvoke（人类会弹选择、BOT 直接发动），
 -- 这里委托过去，只是适配原版「传技能名字符串」的签名。
 local engineAskForSkillInvoke = Room.askForSkillInvoke
 define(Room, "askForSkillInvoke", function(self, p, name)
@@ -348,7 +348,7 @@ define(Room, "askForUseSlashTo", function(_self, p, targets, _reason)
   return { card = slash, from = p, to = { to } }
 end)
 
--- 【观星】类：让脚本重排牌堆顶。本引擎 AI 不调整，返回空表示维持原序
+-- 【观星】类：让脚本重排牌堆顶。本引擎 BOT 不调整，返回空表示维持原序
 define(Room, "askForGuanxing", function() return {} end)
 
 -- 交换/调整手牌：按用途退化为「挑出 n 张」

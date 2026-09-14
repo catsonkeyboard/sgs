@@ -303,7 +303,7 @@ Generals.SHU = {
       -- 再起：摸牌阶段若已受伤，改为亮出牌堆顶 X 张牌（X = 已损失体力），
       -- 每有一张红桃回复 1 点体力（红桃进弃牌堆），其余收入手中，并跳过正常摸牌。
       -- 回血是**概率性**的（取决于翻到几张红桃），不是稳定 +1。
-      -- 早期曾被误写成「固定回复 1 点体力」，导致孟获每回合回血正好抵消 AI
+      -- 早期曾被误写成「固定回复 1 点体力」，导致孟获每回合回血正好抵消 BOT
       -- 每回合 1 点输出，形成打不死的死循环（压测卡满 300 回合）。
       TriggerSkill.create("再起", TriggerEvent.DrawNCards,
         function(_s, room, player, data)
@@ -598,7 +598,7 @@ Generals.WEI = {
         function(_s, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.shensu_used then return false end
-          -- AI 策略：手里还有【杀】就正常出牌，不白白牺牲出牌阶段
+          -- BOT 策略：手里还有【杀】就正常出牌，不白白牺牲出牌阶段
           for _, c in ipairs(player.hand) do
             if isSlashName(c.name) then return false end
           end
@@ -632,7 +632,7 @@ Generals.WEI = {
             return false
           end
           if #player.hand == 0 then return false end
-          -- 分阶段的 AI 策略：只在「跳过该阶段是净收益」时发动
+          -- 分阶段的 BOT 策略：只在「跳过该阶段是净收益」时发动
           if ph == "judge" and #player.judges == 0 then
             return false -- 判定区空着，跳过无意义
           elseif ph == "draw" and #player.hand < 2 then
@@ -822,7 +822,7 @@ Generals.WEI = {
           for _, slot in ipairs(EQUIP_SLOTS) do
             if turner.equips[slot] then has_equip = true break end
           end
-          -- AI 策略：只在能逼掉装备或能压低残血时发动，避免白扔基本牌
+          -- BOT 策略：只在能逼掉装备或能压低残血时发动，避免白扔基本牌
           if not has_equip and turner.hp > 2 then return false end
           player:takeCard(basic)
           table.insert(room.discardPile, basic)
@@ -910,7 +910,7 @@ Generals.WU = {
         function(_s, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.zhiheng_used then return false end
-          -- AI 策略：只把打不出去的废牌（闪/无懈可击）换掉，且留一张保命
+          -- BOT 策略：只把打不出去的废牌（闪/无懈可击）换掉，且留一张保命
           local junk = {}
           for _, c in ipairs(player.hand) do
             if JUNK[c.name] then table.insert(junk, c) end
@@ -965,7 +965,7 @@ Generals.WU = {
         function(_s, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.kurou_used then return false end
-          -- AI 策略：体力低于 2 时不再自残
+          -- BOT 策略：体力低于 2 时不再自残
           if player.hp < 3 then return false end
           player.kurou_used = true
           room:log("%s 发动【苦肉】，失去 1 点体力并摸两张牌", player.name)
@@ -1249,7 +1249,7 @@ Generals.WU = {
         function(_s, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.dimeng_used or #player.hand < 2 then return false end
-          -- AI 策略：把队友的少牌和敌人的多牌对调（经典用法）
+          -- BOT 策略：把队友的少牌和敌人的多牌对调（经典用法）
           local mate, foe = nil, nil
           for _, q in ipairs(allies(player, room)) do
             if not mate or #q.hand < #mate.hand then mate = q end
@@ -1441,7 +1441,7 @@ Generals.QUN = {
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.qingnang_used or #player.hand == 0 then return false end
           -- 优先救最缺血的队友，其次是自己
-          -- AI 策略：只救损失 2 点以上体力的角色，不把牌浪费在「补 1 点」上
+          -- BOT 策略：只救损失 2 点以上体力的角色，不把牌浪费在「补 1 点」上
           local t = nil
           for _, q in ipairs(room:alivePlayers()) do
             if q.max_hp - q.hp >= 2 then
@@ -1636,7 +1636,7 @@ Generals.QUN = {
             if not c:isRed() then black = c break end
           end
           if not black then return false end
-          -- AI 策略：只在对自己有利时改判（参照【鬼才】的判定表）
+          -- BOT 策略：只在对自己有利时改判（参照【鬼才】的判定表）
           local hit = JUDGE_HIT[data.reason]
           if hit and data.player == player
             and not hit(room, player, data.judge_card) then return false end
@@ -1730,7 +1730,7 @@ Generals.QUN = {
           if #cards == 0 then return false end
           local others = room:otherAlivePlayers(player)
           if #others == 0 then return false end
-          -- AI 策略：只让出一张。把弃牌全送出去会养肥对手的手牌数，
+          -- BOT 策略：只让出一张。把弃牌全送出去会养肥对手的手牌数，
           -- 反过来触发【名士】的减伤条件，把自己变成打不死的僵局源头。
           room:log("%s 发动【礼让】，将一张弃牌让给其他角色", player.name)
           cards = { cards[1] }

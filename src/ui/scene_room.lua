@@ -1,6 +1,6 @@
 -- 牌桌场景：身份局（4 人）与 1v1 死斗
 -- 与 headless 测试共用同一个 core/ 引擎——UI 只是协程驱动的另一个响应源。
--- core/ 里的同一份规则对 UI 与 AI 生效；UI 不实现任何规则判断，
+-- core/ 里的同一份规则对 UI 与 BOT 生效；UI 不实现任何规则判断，
 -- 只把人类玩家的鼠标点击翻译成 room:step(response)。
 local class = require "src.class"
 local Engine = require "src.core.engine"
@@ -10,7 +10,7 @@ local Cards = require "src.core.cards"
 local Card = require "src.core.card"
 local Room = require "src.core.room"
 local Driver = require "src.core.driver"
-local AI = require "src.core.ai"
+local Bot = require "src.core.bot"
 local Skin = require "src.ui.skin"
 local Audio = require "src.ui.audio"
 local Layout = require "src.ui.layout"
@@ -52,11 +52,11 @@ function RoomScene:init(on_exit, mode)
       local is_human = (i == 1)
       local g = engine:getGeneral(generals[i]) or engine:getGeneral("白板武将")
       table.insert(players,
-        Player.create(is_human and "你" or ("AI·" .. g.name), g, i, is_human))
+        Player.create(is_human and "你" or ("BOT·" .. g.name), g, i, is_human))
     end
   else
     table.insert(players, Player.create("你", engine:getGeneral("白板武将"), 1, true))
-    table.insert(players, Player.create("AI·乙", engine:getGeneral("剑阁武将"), 2, false))
+    table.insert(players, Player.create("BOT·乙", engine:getGeneral("剑阁武将"), 2, false))
   end
 
   self.mode = mode
@@ -72,7 +72,7 @@ function RoomScene:init(on_exit, mode)
     self.room:setupRoles(Standard.makeRng(seed + 1))
   end
   self.room:start()
-  self.driver = Driver.create(self.room, AI.makeAI())
+  self.driver = Driver.create(self.room, Bot.make())
   self.driver:advance()
 
   -- 布局：优先按原版 layout.json 的间距参数推导（自适应人数），

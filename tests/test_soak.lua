@@ -10,7 +10,7 @@ local Player = require "src.core.player"
 local Standard = require "src.core.standard"
 local Room = require "src.core.room"
 local Driver = require "src.core.driver"
-local AI = require "src.core.ai"
+local Bot = require "src.core.bot"
 
 local N = 25 -- 每种模式跑多少个种子
 
@@ -30,7 +30,7 @@ local function runGame(build)
   local ok, err = pcall(function()
     local r = build()
     r:start()
-    local d = Driver.create(r, AI.makeAI())
+    local d = Driver.create(r, Bot.make())
     local adv_ok, adv_err = pcall(function() d:advance() end)
     if not adv_ok then
       print("DBG " .. tostring(adv_err) .. " turns=" .. tostring(r.turn_count)
