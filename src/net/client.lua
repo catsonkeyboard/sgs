@@ -3,6 +3,7 @@
 -- 与 Host 一样只认通道，所以既能走真实 TCP，也能在测试里走内存通道。
 local class = require "src.class"
 local Protocol = require "src.net.protocol"
+local Channel = require "src.net.channel"
 
 local Client = class("Client")
 
@@ -66,6 +67,52 @@ function Client:flush(n)
     got = got + 1
   end
   return got
+end
+
+-- 连到服务端（真实 TCP）。注意：连接能力放在 Channel 上，不要在 Client 上
+-- 定义名为 connect 的方法 —— 会与 socket 的 sock:connect 在静态检查里撞名。
+function Client.connectTo(name, host, port)
+  local ch, err = Channel.open(host, port)
+  if not ch then return nil, err end
+  return Client.create(name, ch)
+end
+
+-- 控制台客户端：连上、ready、自动应答请求。
+-- auto 为应答策略：function(req_msg) -> value，默认一律 false（不发动/不出牌）
+function Client.consoleMain(name, host, port, auto)
+  local socket = require "socket"
+  -- 管道/重定向时 stdout 是块缓冲，日志会迟迟不出现；改成行缓冲
+  pcall(function() io.stdout:setvbuf("line") end)
+  local c, err = Client.connectTo(name, host, port)
+  if not c then
+    print("[客户端] 连接失败: " .. tostring(err))
+    return false
+  end
+  print(string.format("[客户端] 已连接 %s:%d（名字 %s）", host or "?", port or 0, name))
+  c:hello()
+  c:ready(true)
+  auto = auto or function() return false end
+  c.on_request = function(_self, req) return auto(req) end
+
+  local seen = 0
+  local guard = 0
+  while not c.over and guard < 200000 do
+    guard = guard + 1
+    c:flush()
+    -- 打印新日志
+    while seen < #c.logs do
+      seen = seen + 1
+      print("  | " .. c.logs[seen])
+    end
+    if c.over then break end
+    socket.sleep(0.02)
+  end
+  if c.over then
+    print(string.format("[客户端] 对局结束，胜者=%s", tostring(c.over.winner)))
+  else
+    print("[客户端] 超时退出")
+  end
+  return true
 end
 
 return Client

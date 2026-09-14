@@ -1,10 +1,11 @@
 -- 入口：--test 无头跑测试；--soak 大批量压力测试；否则进入菜单 → 牌桌
-local is_test, autostart, is_soak, is_net, is_serve = false, false, false, false, false
+local is_test, autostart, is_soak, is_net, is_serve, is_join = false, false, false, false, false, false
 for _, a in ipairs(arg or {}) do
   if a == "--test" then is_test = true end
   if a == "--soak" then is_soak = true end
   if a == "--net" then is_net = true end
   if a == "--serve" then is_serve = true end
+  if a == "--join" then is_join = true end
   if a == "--autostart" then autostart = true end
 end
 
@@ -26,9 +27,22 @@ function love.load()
   -- --serve：以服务端模式启动（阶段 D，见 src/net/server.lua）
   if is_serve then
     local ok, err = pcall(function()
-      require("src.net.server").main()
+      require("src.net.server").run(tonumber(arg and arg[3]) or 9527, tonumber(arg and arg[4]) or 5)
     end)
     if not ok then print("服务端异常: " .. tostring(err)) end
+    love.event.quit()
+    return
+  end
+
+  -- --join <名字> [host] [port]：控制台客户端，连上服务端并自动应答
+  if is_join then
+    local ok, err = pcall(function()
+      local name = (arg and arg[3]) or "玩家"
+      local host = (arg and arg[4]) or "127.0.0.1"
+      local port = tonumber((arg and arg[5]) or "9527") or 9527
+      require("src.net.client").consoleMain(name, host, port)
+    end)
+    if not ok then print("客户端异常: " .. tostring(err)) end
     love.event.quit()
     return
   end

@@ -86,6 +86,42 @@ function Host:allReady()
   return true
 end
 
+-- 开局条件：至少 1 人连接，且**所有已连接者**都 ready。
+-- （空座会由 BOT 顶替，所以不要求坐满 —— 1 人也能开局试玩）
+function Host:canStart()
+  local n = 0
+  for _, s in ipairs(self.seats) do
+    if s.channel then
+      n = n + 1
+      if not s.ready then return false end
+    end
+  end
+  return n > 0
+end
+
+-- 局面变化时广播快照（不是每帧都发，避免刷屏）
+function Host:flushState(force)
+  if not self.room then return end
+  local key = tostring(self.room.turn_count) .. ":" .. tostring(self.room.current_seat)
+    .. ":" .. tostring(self.room.game_over)
+  if force or key ~= self._state_key then
+    self._state_key = key
+    self:broadcast { type = "state", snapshot = self:snapshot() }
+  end
+end
+
+-- 结束时广播一次结果
+function Host:flushOver()
+  if not self.room or not self.room.game_over then return end
+  if self._over_sent then return end
+  self._over_sent = true
+  self:broadcast {
+    type = "over",
+    winner = self.room.winner and self.room.winner.name or nil,
+    win_role = self.room.win_role,
+  }
+end
+
 -- 建局：有客户端的座位是人类，其余由 BOT 顶上
 function Host:startGame(seed)
   local engine = Engine.create()
@@ -112,6 +148,9 @@ function Host:startGame(seed)
     return nil
   end
   self.last_log = 0
+  self._over_sent = false
+  self._state_key = nil
+  self:flushState(true)
   return true
 end
 
@@ -141,7 +180,11 @@ end
 function Host:tick()
   if not self.room then return "idle" end
   self:flushLog()
-  if self.room.game_over then return "over" end
+  self:flushState()
+  if self.room.game_over then
+    self:flushOver()
+    return "over"
+  end
 
   -- 已有请求在等人？看看应答到了没
   if self.waiting then
