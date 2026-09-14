@@ -126,6 +126,52 @@ do
   check(host2.room.game_over, "掉线后对局仍应跑完（guard=" .. g2 .. "）")
 end
 
+print("\n--- 真实 TCP：服务端 + 客户端完整对局 ---")
+
+do
+  -- 这一组用真 socket（回环），验证 TCP 适配层而不仅是内存通道。
+  -- 端口取一个不常用的；失败时跳过而不是判 FAIL，避免污染 CI 环境。
+  local socket = require "socket"
+  local Server = require "src.net.server"
+  local port = 9900 + (os.time() % 90)
+  local srv = Server.create(port, 5)
+  local ok, err = pcall(function() srv:bind() end)
+  if not ok then
+    print("SKIP  真实 TCP 测试（无法监听: " .. tostring(err) .. "）")
+  else
+    local ch = Channel.open("127.0.0.1", port)
+    check(ch ~= nil, "应能连上服务端")
+    if ch then
+      ch:send { type = "hello", name = "甲" }
+      ch:send { type = "ready", ready = true }
+      local reqs = 0
+      local g = 0
+      while not srv.finished and g < 3000 do
+        g = g + 1
+        srv:pump()
+        local m = ch:recv()
+        while m do
+          if m.type == "req" then
+            reqs = reqs + 1
+            ch:send { type = "resp", id = m.id, value = false }
+          end
+          m = ch:recv()
+        end
+        socket.sleep(0.005)
+      end
+      check(reqs > 0, "客户端应收到过请求（实得 " .. reqs .. " 次）")
+      check(srv.host.room ~= nil, "服务端应已开局")
+      check(srv.host.room and srv.host.room.game_over,
+        "对局应通过 TCP 跑完（turn="
+        .. tostring(srv.host.room and srv.host.room.turn_count) .. "）")
+      check(#(srv.host.room.loglines or {}) > 20,
+        "应产生日志（" .. #(srv.host.room.loglines or {}) .. " 条）")
+      -- 结束时服务端应广播过 over
+      check(srv.host._over_sent == true, "结束应广播 over")
+    end
+  end
+end
+
 print("\n--- 客户端：消息处理 ---")
 
 do

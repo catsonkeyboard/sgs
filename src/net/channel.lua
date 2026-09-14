@@ -64,12 +64,10 @@ function SockChannel:send(msg)
   return true
 end
 
-function SockChannel:recv()
+-- 只读 socket，不碰 pending。服务端的 drain 必须用这个：
+-- 否则会把 pending 里的 resp 取出来又塞回去，形成死循环（实测踩过）。
+function SockChannel:recvRaw()
   if self.closed then return nil end
-  -- 服务端会把收到的 resp 暂存在 pending，优先消化它
-  if self.pending and #self.pending > 0 then
-    return table.remove(self.pending, 1)
-  end
   while true do
     local msg, rest = Protocol.takeFrame(self.buf)
     if msg then self.buf = rest return msg end
@@ -91,6 +89,15 @@ function SockChannel:recv()
     end
     self.buf = rest .. part .. "\n" -- receive("*l") 会吃掉换行，补回去供分帧
   end
+end
+
+-- Host 用的入口：先消化服务端暂存的 resp，再读 socket
+function SockChannel:recv()
+  if self.closed then return nil end
+  if self.pending and #self.pending > 0 then
+    return table.remove(self.pending, 1)
+  end
+  return self:recvRaw()
 end
 
 function SockChannel:isClosed() return self.closed end

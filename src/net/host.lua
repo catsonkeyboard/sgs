@@ -207,6 +207,9 @@ function Host:tick()
   end
 
   local st = self.driver:advance()
+  -- 对局常在 advance() 内部就结束了，这里必须补一次结束广播，
+  -- 否则 tick 直接返回 "over"，客户端永远收不到 over 消息
+  if self.room and self.room.game_over then self:flushOver() end
   if st == "human" then
     local req = self.room.pending
     local seat = req and req.player and self.seatOfPlayer(req.player) or nil

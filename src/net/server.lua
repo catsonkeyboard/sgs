@@ -68,7 +68,7 @@ function Server:drain()
       self.host:detach(seat)
       self.clients[ch] = nil
     else
-      local msg = ch:recv()
+      local msg = ch:recvRaw()
       while msg do
         local t = msg.type
         if t == "hello" then
@@ -83,7 +83,7 @@ function Server:drain()
           ch.pending = ch.pending or {}
           table.insert(ch.pending, msg)
         end
-        msg = ch:recv()
+        msg = ch:recvRaw()
       end
     end
   end
