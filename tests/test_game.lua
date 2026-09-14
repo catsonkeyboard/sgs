@@ -1386,6 +1386,80 @@ do
   end
 end
 
+print("\n--- 座位布局 ---")
+
+do
+  local Skin = require "src.ui.skin"
+  local Layout = require "src.ui.layout"
+
+  -- 无配置时：退回内置默认值，且 4 人局第 1 位（自己）在底部
+  local l2 = Layout.create(Skin.create("/nonexistent/sgs-assets"), 4)
+  check(l2.anchors[1] ~= nil, "应能为每位玩家算出锚点")
+  check(l2.anchors[1][1] == 460 and l2.anchors[1][2] == 440,
+    "无配置时 1 号位应退回原锚点 (460,440)，实得 ("
+      .. tostring(l2.anchors[1][1]) .. "," .. tostring(l2.anchors[1][2]) .. ")")
+
+  -- 有配置时：按人数自适应，且锚点互不重叠
+  for _, n in ipairs({ 2, 4, 5, 8 }) do
+    local l = Layout.create(Skin.create("/nonexistent/sgs-assets"), n)
+    local cnt = 0
+    for i = 1, n do
+      if l.anchors[i] then cnt = cnt + 1 end
+    end
+    check(cnt == n, n .. " 人局应算出 " .. n .. " 个锚点（实得 " .. cnt .. "）")
+    -- 面板不应超出画面
+    local ok = true
+    for i = 1, n do
+      local a = l.anchors[i]
+      if a[1] < 0 or a[1] + l.photoW > l.sceneW or a[2] < 0 or a[2] > l.sceneH then
+        ok = false
+      end
+    end
+    check(ok, n .. " 人局的面板都应在画面内")
+  end
+
+  -- 锚点不能两两重合
+  local l = Layout.create(Skin.create("/nonexistent/sgs-assets"), 5)
+  local dup = false
+  for i = 1, 5 do
+    for j = i + 1, 5 do
+      if l.anchors[i][1] == l.anchors[j][1] and l.anchors[i][2] == l.anchors[j][2] then
+        dup = true
+      end
+    end
+  end
+  check(not dup, "5 人局的锚点不应重合")
+end
+
+print("\n--- 表现层事件（音频/动效钩子）---")
+
+do
+  local Room = require "src.core.room"
+  local Engine = require "src.core.engine"
+  local Player = require "src.core.player"
+  local engine = Engine.create()
+  Standard.setup(engine)
+  local ps = {}
+  for i = 1, 2 do
+    table.insert(ps, Player.create("P" .. i, engine:getGeneral("白板武将"), i, false))
+  end
+  local r = Room.create(engine, ps)
+  local got = {}
+  r:onEvent("useCard", function(d) table.insert(got, "useCard") end)
+  r:onEvent("damage", function(d) table.insert(got, "damage:" .. tostring(d.n)) end)
+  r:emit("useCard", { card = nil })
+  r:emit("damage", { n = 3 })
+  check(#got == 2, "注册的回调都应被调用（实得 " .. #got .. "）")
+  check(got[2] == "damage:3", "回调应收到数据（实得 " .. tostring(got[2]) .. "）")
+  -- 未注册的事件不应报错
+  local ok = pcall(function() r:emit("不存在的事件", {}) end)
+  check(ok, "未注册的事件应安全忽略")
+  -- 回调抛错不应中断游戏
+  r:onEvent("death", function() error("故意抛错") end)
+  local ok2 = pcall(function() r:emit("death", { player = ps[1] }) end)
+  check(ok2, "回调抛错应被捕获，不能中断对局")
+end
+
 print("\n--- 卡牌定义完整性 ---")
 
 local missing = {}

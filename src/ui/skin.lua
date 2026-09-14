@@ -145,6 +145,30 @@ function Skin:cardImage(cardName)
   return nil
 end
 
+-- 桌面背景：image.json 的 tableBg 指向 backdrop/default.jpg，
+-- 但资源里实际是 backdrop/table.jpg，因此按多个候选依次尝试。
+function Skin:tableBackground()
+  if not self.root then return nil end
+  local candidates = {}
+  local v = self.imageMap and self.imageMap.tableBg
+  if type(v) == "string" then
+    table.insert(candidates, v)
+    table.insert(candidates, "image/" .. v)
+  end
+  table.insert(candidates, "image/backdrop/table.jpg")
+  table.insert(candidates, "image/backdrop/bg.jpg")
+  table.insert(candidates, "image/backdrop/default.jpg")
+  for _, rel in ipairs(candidates) do
+    if readFile(self.root .. "/" .. rel) then return rel end
+  end
+  return nil
+end
+
+-- 仪表盘框体（原版 dashboardLeftFrame / dashboardRightBase 等）
+function Skin:frame(key)
+  return self:image(key)
+end
+
 -- 武将头像：原版按拼音命名（image/generals/avatar/caocao.png），
 -- 正好对应本引擎 general.key。依次尝试 avatar / card / big 三种尺寸。
 local GENERAL_DIRS = {

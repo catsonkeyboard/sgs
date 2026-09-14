@@ -62,19 +62,29 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 | B | sgs.* 兼容层 + diy/ 扩展加载器 | 🚧 进行中（骨架可用，API 面待扩） |
 | C | 完整 UI（皮肤 JSON、动画、牌桌布局）+ 音频 | 🚧 进行中（配置层与卡图/音频已通，布局待做） |
 
+| `layout.lua` | 按 layout.json 的间距参数推导座位（自适应人数，缺配置退回原锚点） |
+| `effects.lua` | 浮动伤害数字 + 出牌/阵亡横幅 |
+
 已接入的真实素材（全部按路径引用，缺则退回自绘）：
 - 卡牌图 `image/card/`（基本牌 snake_case、装备 CamelCase）
 - 武将头像 `image/generals/avatar/<key>.png`（按 general.key 拼音）
 - 体力勾玉 `image/system/magatamas/{0,3}.png`
 - 势力图标 `image/kingdom/icon/<kingdom>.png`
+- 桌面背景 `image/backdrop/table.jpg`、仪表盘底框 `dashboard*`
 - 音效 `audio/**`（按 audio.json 键名）
 
-**阶段 C 后续：**
-1. 座位布局用 layout.json 的间距参数推导（现在仍是内置锚点）
-2. 背景与界面框体（photoMainFrame / dashboard* 等）
-3. 装备与判定区图标
-4. 动画（animation.json）：出牌/受伤/判定的动效
-5. 音频实际播放验证（需要图形环境，headless 测不到）
+**表现层事件**：core 新增 `Room:onEvent/emit`，目前发出 `useCard` /
+`damage` / `death` 三个事件。UI 在上面挂音频与动效；core 只调回调，
+不依赖 UI；回调抛错会被捕获，绝不中断对局。
+
+**动画说明**：原版 `defaultSkin.animation.json` 在这个皮肤里**是空的**（只有 `}`），
+没有可复用的动效定义，因此 `effects.lua` 是自己实现的最小方案。
+
+**待实机验证**（需要图形环境，headless 测不到）：
+- 音效是否真的播放、音量是否合适
+- 背景/框体的缩放与位置
+- 座位布局在 8 人局下的观感
+- 装备小图的尺寸
 | D | LuaSocket 网络服务端 + 多人 | ⬜ 未开始 |
 
 ### 阶段内已实现（A1）

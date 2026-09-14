@@ -264,6 +264,24 @@ end
 
 -- ===== 日志与事件 =====
 
+-- 表现层钩子：UI 用来挂音频与动效。core 只做「调用回调」，
+-- 不关心谁在听，因此不产生对 UI 的依赖。
+function Room:onEvent(name, fn)
+  self.listeners = self.listeners or {}
+  self.listeners[name] = self.listeners[name] or {}
+  table.insert(self.listeners[name], fn)
+end
+
+function Room:emit(name, data)
+  if not self.listeners then return end
+  for _, fn in ipairs(self.listeners[name] or {}) do
+    local ok, err = pcall(fn, data)
+    if not ok then
+      self:log("[表现层回调出错] %s: %s", tostring(name), tostring(err))
+    end
+  end
+end
+
 function Room:log(fmt, ...)
   local msg = string.format(fmt, ...)
   table.insert(self.loglines, msg)
@@ -692,6 +710,7 @@ function Room:useCard(from, card, target)
     return self:_useSkillCard(from, card, use)
   end
 
+  self:emit("useCard", { card = card, from = from, to = use.to })
   self:trigger("CardUsed", from, use)
   -- 目标确认中：【流离】在此把【杀】转移给攻击范围内的另一名角色
   self:trigger("TargetConfirming", use.to[1], use)
@@ -1063,6 +1082,7 @@ function Room:damage(from, to, n, nature, card)
 
   self:trigger("DamageDone", to, data)
   self:trigger("Damage", to, data)
+  self:emit("damage", { to = to, from = from, n = data.n, nature = data.nature })
   self:trigger("Damaged", to, data)
 
   -- 铁索连环传导
@@ -1266,6 +1286,7 @@ function Room:_kill(p, killer)
   p.alive = false
   p.role_revealed = true -- 阵亡即亮身份
   self:trigger("Death", p, { player = p, killer = killer }) -- 【断肠】需要凶手
+  self:emit("death", { player = p, killer = killer })
   self:log("%s 阵亡（身份：%s）", p.name, Player.ROLE_ZH[p.role] or "未知")
   for i = #p.hand, 1, -1 do
     table.insert(self.discardPile, table.remove(p.hand, i))

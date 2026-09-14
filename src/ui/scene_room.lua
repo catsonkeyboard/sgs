@@ -13,6 +13,8 @@ local Driver = require "src.core.driver"
 local AI = require "src.core.ai"
 local Skin = require "src.ui.skin"
 local Audio = require "src.ui.audio"
+local Layout = require "src.ui.layout"
+local Effects = require "src.ui.effects"
 
 local RoomScene = class("RoomScene")
 
@@ -73,7 +75,14 @@ function RoomScene:init(on_exit, mode)
   self.driver = Driver.create(self.room, AI.makeAI())
   self.driver:advance()
 
-  self.anchors = (#players == 2) and ANCHORS_2 or ANCHORS_4
+  -- 布局：优先按原版 layout.json 的间距参数推导（自适应人数），
+  -- 缺少配置时 Layout 内部会退回与原来一致的固定锚点。
+  self.layout = Layout.create(self.skin, #players)
+  self.anchors = self.layout.anchors
+  self.panelW, self.panelH = self.layout:panelSize()
+  self.effects = Effects.create()
+  self:bindPresentationHooks()
+
   self.on_exit = on_exit
   self.font = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 15)
   self.font_mid = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 20)
@@ -205,7 +214,8 @@ function RoomScene:_refreshButtons()
   self.buttons = btns
 end
 
-function RoomScene:update(_dt)
+function RoomScene:update(dt)
+  if self.effects and dt then self.effects:update(dt) end
   if not self.room.game_over then
     self.driver:advance()
   end
@@ -395,6 +405,48 @@ function RoomScene:loadMagatamas()
   return nil
 end
 
+-- 把音频与动效挂到引擎的表现层事件上。
+-- 音效键名沿用原版 audio.json；缺失时 Audio 内部静默降级。
+function RoomScene:bindPresentationHooks()
+  local room = self.room
+  if not room then return end
+  local audio, fx = self.audio, self.effects
+
+  room:onEvent("useCard", function(d)
+    if d and d.card then
+      audio:play(d.card.name)
+      if d.from then
+        fx:showBanner(string.format("%s 使用【%s】", d.from.name, d.card:zhName()))
+      end
+    end
+  end)
+
+  room:onEvent("damage", function(d)
+    if d and d.to then
+      audio:play("injure")
+      local a = self:anchorOf(d.to)
+      if a and fx then
+        fx:float(a[1] + (self.panelW or 210) / 2, a[2] + 30, "-" .. tostring(d.n))
+      end
+    end
+  end)
+
+  room:onEvent("death", function(d)
+    if d and d.player then
+      audio:play("death")
+      fx:showBanner(string.format("%s 阵亡", d.player.name), { 0.9, 0.3, 0.25 })
+    end
+  end)
+end
+
+function RoomScene:anchorOf(p)
+  if not (self.anchors and p) then return nil end
+  for i, q in ipairs(self.room.players or {}) do
+    if q == p then return self.anchors[i] end
+  end
+  return nil
+end
+
 -- 势力图标：image/kingdom/icon/<kingdom>.png
 function RoomScene:kingdomIcon(p)
   if not (self.skin and p and p.kingdom) then return nil end
@@ -497,11 +549,20 @@ function RoomScene:drawPlayerPanel(p, x, y, highlighted)
     local c = p.equips[slot]
     if c then
       local ex = x + 12 + idx * (EQ_W + 4)
-      love.graphics.setColor(0.85, 0.8, 0.6)
-      love.graphics.rectangle("fill", ex, y + 72, EQ_W, EQ_H, 3, 3)
-      love.graphics.setColor(0, 0, 0)
-      love.graphics.rectangle("line", ex, y + 72, EQ_W, EQ_H, 3, 3)
-      love.graphics.printf(c:zhName(), ex, y + 76, EQ_W, "center")
+      -- 有卡图就画小图标，没有再退回文字框
+      local img = cardImage(self, c)
+      if img then
+        love.graphics.setColor(1, 1, 1)
+        love.graphics.draw(img, ex, y + 72, 0, EQ_W / img:getWidth(), EQ_H / img:getHeight())
+        love.graphics.setColor(0, 0, 0)
+        love.graphics.rectangle("line", ex, y + 72, EQ_W, EQ_H, 3, 3)
+      else
+        love.graphics.setColor(0.85, 0.8, 0.6)
+        love.graphics.rectangle("fill", ex, y + 72, EQ_W, EQ_H, 3, 3)
+        love.graphics.setColor(0, 0, 0)
+        love.graphics.rectangle("line", ex, y + 72, EQ_W, EQ_H, 3, 3)
+        love.graphics.printf(c:zhName(), ex, y + 76, EQ_W, "center")
+      end
       idx = idx + 1
     end
   end
@@ -516,12 +577,58 @@ function RoomScene:drawPlayerPanel(p, x, y, highlighted)
   end
 end
 
+-- 桌面背景 + 底部仪表盘框体（有原版素材就画，没有就保持纯色）
+function RoomScene:drawBackground()
+  if not self.skin then return end
+  local img = self.tableBg
+  if img == nil then -- 未尝试过才去加载
+    self.tableBg = false
+    local rel = self.skin:tableBackground()
+    if rel and love.graphics then
+      local path = self.skin:path(rel)
+      if path then
+        local ok, loaded = pcall(love.graphics.newImage, path)
+        if ok then self.tableBg = loaded end
+      end
+    end
+  end
+  if self.tableBg and love.graphics then
+    local w, h = love.graphics.getDimensions()
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.draw(self.tableBg, 0, 0, 0, w / self.tableBg:getWidth(),
+      h / self.tableBg:getHeight())
+  end
+
+  -- 底部仪表盘底框
+  if self.dashBase == nil then
+    self.dashBase = false
+    local rel = self.skin:frame("dashboardRightBase") or self.skin:frame("dashboardMiddleFrame")
+    if rel and love.graphics then
+      local path = self.skin:path(rel)
+      if path then
+        local ok, loaded = pcall(love.graphics.newImage, path)
+        if ok then self.dashBase = loaded end
+      end
+    end
+  end
+  if self.dashBase then
+    local w, h = love.graphics.getDimensions()
+    local dh = self.dashBase:getHeight()
+    love.graphics.setColor(1, 1, 1, 0.85)
+    love.graphics.draw(self.dashBase, w / 2 - self.dashBase:getWidth() / 2, h - dh - 40)
+    love.graphics.setColor(1, 1, 1, 1)
+  end
+end
+
 function RoomScene:draw()
   love.graphics.clear(0.09, 0.13, 0.09)
   local room = self.room
 
+  self:drawBackground()
+
   for _, p in ipairs(self.players) do
-    local x, y = self:anchorOf(p)
+    local a = self:anchorOf(p)
+    local x, y = a[1], a[2]
     local hl = (self.picked ~= nil) and self:isValidTarget(p) and (p ~= self.human)
     self:drawPlayerPanel(p, x, y, hl)
   end
@@ -537,6 +644,12 @@ function RoomScene:draw()
   if self.mode == "identity" then
     love.graphics.setColor(0.6, 0.65, 0.6)
     love.graphics.print("身份局：主公与忠臣 vs 反贼（内奸独立取胜）", 460, 340)
+  end
+
+  -- 动效（浮动伤害数字 / 出牌横幅）
+  if self.effects then
+    local w, h = love.graphics.getDimensions()
+    self.effects:draw(w, h, self.font, self.font_mid)
   end
 
   -- 五谷丰登展示区
