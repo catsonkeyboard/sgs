@@ -11,14 +11,22 @@ local View = require "src.core.ai.view"
 
 local Prompt = {}
 
-Prompt.SYSTEM = [[你是三国杀标准身份局里的一名玩家，由 AI 驱动。
+Prompt.SYSTEM = [[你是三国杀标准身份局的玩家，由 AI 驱动。你完全自主决策，没有规则脚本替你兜底。
 
-规则要点（仅供判断，具体合法性已由系统保证，你只需在给定选项中挑选）：
-- 身份：主公与忠臣的目标是消灭反贼和内奸；反贼要杀主公；内奸要先清场再单挑主公。未亮明的身份只能靠行为推断。
-- 每个回合有判定、摸牌、出牌、弃牌四个阶段；出牌阶段每回合默认只能使用一张【杀】（装备【诸葛连弩】或特定技能除外）。
+规则要点（合法性已由系统保证，你只需在给定选项里挑）：
+- 身份：主公与忠臣要消灭反贼和内奸；反贼要杀主公；内奸要先清场再单挑主公。未亮明的身份只能靠行为推断。
+- 每个回合有判定、摸牌、出牌、弃牌四个阶段；出牌阶段默认只能用一张【杀】（【诸葛连弩】或特定技能除外）。
 - 攻击范围默认 1，武器可扩大；距离按座位数计算，进攻马 -1、防御马 +1。
 - 体力降到 0 进入濒死，需有人出【桃】救援，否则阵亡。
 - 弃牌阶段手牌数不得超过当前体力值。
+
+【你要像真人一样思考】
+1. 推算身份：谁在帮谁？谁打主公、谁保主公、谁在拱火？未亮身份的人要根据他的每一个动作修正判断。
+   用你自己的决策史回看：某人前几轮做过什么、你当时怎么判断的。
+2. 因人施策：对手的技能决定你怎么打他——对【空城】的诸葛亮要留着牌再打，对有【反馈】的司马懿要少用锦囊，
+   对【奸雄】的曹操别把关键牌当伤害牌送给他。**先看技能，再决定出什么牌**。
+3. 算得失：这张牌现在值不值得用？留着能不能换更大的收益？残血的人该不该救（他可能是敌人）？
+4. 记住教训：你的决策史里有你自己写下的理由，如果之前判断错了，现在改。
 
 你的任务：在给定的合法动作中选择最优的一个，输出它的编号。]]
 
@@ -89,22 +97,39 @@ local FORMAT = [[
 【输出格式】只输出一行 JSON，不要 markdown 代码块，不要任何额外文字：
 {"action": <编号>, "reason": "<一句话理由，中文，20 字以内>"}
 需要选择多张牌时（如弃牌）改用：
-{"actions": [<编号>, <编号>], "reason": "..."}]]
+{"actions": [<编号>, <编号>], "reason": "..."}
 
--- 返回 {system=, user=}，直接可塞进 chat 接口
+可选字段（**有新的身份判断时才写**，别每次都写）：
+"beliefs": {"座位名或玩家名": "主公|忠臣|反贼|内奸|未知", ...}
+"note": "<你想长期记住的一句话观察，100 字内>"]]
+
+-- 返回 {system=, user=}，直接可塞进对话接口
 function Prompt.build(room, req, actions, opts)
   opts = opts or {}
   local view = View.build(room, req, opts)
-  local user = table.concat({
-    dumpState(view),
-    "",
-    dumpActions(req, actions),
-    "",
-    FORMAT,
-  }, "\n")
+  local parts = { dumpState(view) }
+
+  -- 决策史放在观察之后、选项之前：先看自己走过的路，再看现在的处境，
+  -- 最后才是选择。顺序反过来会让模型先锚定选项、再找理由。
+  if opts.memory then
+    parts[#parts + 1] = ""
+    parts[#parts + 1] = opts.memory:render(opts.nameOf)
+  end
+
+  -- 重试时把上一次为什么被拒说清楚，模型才有可能自己纠正
+  if opts.retry_hint then
+    parts[#parts + 1] = ""
+    parts[#parts + 1] = "【上一次的输出被拒绝】" .. opts.retry_hint
+  end
+
+  parts[#parts + 1] = ""
+  parts[#parts + 1] = dumpActions(req, actions)
+  parts[#parts + 1] = ""
+  parts[#parts + 1] = FORMAT
+
   return {
     system = Prompt.SYSTEM,
-    user = user,
+    user = table.concat(parts, "\n"),
     view = view,      -- 便于测试断言与调试
     actions = actions,
   }

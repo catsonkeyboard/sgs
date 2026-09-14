@@ -104,7 +104,16 @@ function Parse.response(raw, req, room, actions)
     if a.kind ~= kind then return nil, "一次选了不同类型的动作" end
   end
 
-  if kind == "pass" then return nil, nil end
+  -- 模型可选回传的「元信息」：身份判断与长期观察。
+  -- 它们不影响这一步的合法性，解析失败也不该让整步作废，所以不做校验，
+  -- 原样交给 Agent 去过滤（见 memory.lua 的 updateBeliefs）。
+  local extra = {
+    beliefs = type(data.beliefs) == "table" and data.beliefs or nil,
+    note = type(data.note) == "string" and data.note or nil,
+    reason = type(data.reason) == "string" and data.reason or nil,
+  }
+
+  if kind == "pass" then return nil, nil, extra end
 
   if kind == "use" then
     local a = picked[1]
@@ -115,13 +124,14 @@ function Parse.response(raw, req, room, actions)
       local ok, why = room:canUseCardOn(me, a.card, target)
       if not ok then return nil, "目标不合法：" .. tostring(why) end
     end
-    return { card = a.card, target = target }, nil
+    extra.target_name = target.name
+    return { card = a.card, target = target }, nil, extra
   end
 
   if kind == "card" then
     local a = picked[1]
     if not a.card then return nil, "动作缺少卡牌" end
-    return a.card, nil
+    return a.card, nil, extra
   end
 
   if kind == "discard" then
@@ -134,15 +144,15 @@ function Parse.response(raw, req, room, actions)
       end
       out[#out + 1] = a.card
     end
-    return out, nil
+    return out, nil, extra
   end
 
   if kind == "choose" then
-    return picked[1].card, nil
+    return picked[1].card, nil, extra
   end
 
   if kind == "invoke" or kind == "choice" then
-    return picked[1].value, nil
+    return picked[1].value, nil, extra
   end
 
   return nil, "未知动作类型：" .. tostring(kind)

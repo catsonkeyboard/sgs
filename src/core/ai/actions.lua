@@ -14,12 +14,30 @@ local Card = require "src.core.card"
 
 local Actions = {}
 
--- 出牌阶段会主动尝试用转化技「变」出来的牌名（按性价比排序）。
--- 纯响应型的转化（闪/无懈可击）走 askForCard 分支，不需要登记在这里。
+-- 常用转化目标（按性价比排序）。这只是**兜底清单**：
+-- 真正要枚举的是「这个武将身上所有转化技能能变出什么」，
+-- 光看固定清单会让【武圣】以外的技能（DIY 扩展里的尤其多）在 AI 手里失灵。
 Actions.CONVERT_TARGETS = {
   "dismantlement", "indulgence", "supply_shortage", "await_exhausted",
   "slash", "fire_attack", "snatch", "duel",
 }
+
+-- 该玩家所有转化技能能变出的牌名：技能自带 result_name 的直接取，
+-- 加上兜底清单（动态转化技没有固定 result_name，只能靠清单覆盖）
+function Actions.convertTargets(room, p)
+  local out, seen = {}, {}
+  local function add(n)
+    if type(n) == "string" and n ~= "" and not seen[n] then
+      seen[n] = true
+      out[#out + 1] = n
+    end
+  end
+  for _, s in ipairs(room:skillsOf(p)) do
+    if s.view_as and s.result_name then add(s.result_name) end
+  end
+  for _, n in ipairs(Actions.CONVERT_TARGETS) do add(n) end
+  return out
+end
 
 local function isSlashName(n)
   return n == "slash" or n == "fire_slash" or n == "thunder_slash"
@@ -107,7 +125,7 @@ local function forUseCard(req, room)
 
   -- 转化技：虚拟牌不在手牌里，把生成好的牌挂在动作上（与 BOT 同做法，
   -- 无副作用——view_as 只造对象，不进任何区域，因此不影响卡牌守恒）
-  for _, want in ipairs(Actions.CONVERT_TARGETS) do
+  for _, want in ipairs(Actions.convertTargets(room, me)) do
     for _, item in ipairs(room:viewAsCandidates(me, want)) do
       if not me:isJilei(item.card) then
         local args = { item.card }

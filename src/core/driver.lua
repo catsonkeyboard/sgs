@@ -40,8 +40,10 @@ function Driver:advance()
   return "over"
 end
 
--- AI 自己抛异常也必须能继续：整局卡死在一个网络库的报错上太不值得了，
--- 出错就当这次没问成，回落到规则 BOT。
+-- AI 的实现抛异常也要能继续，但**不静默回落规则 BOT**：
+-- 那会把 AI 的 bug 伪装成「它打得像 BOT」，排查时根本发现不了。
+-- 正常路径上这里永远不会触发——Agent 内部已整体 pcall（见 agent.lua），
+-- 走到这说明接的是一个会抛异常的自定义响应实现。被动响应 + 响亮日志。
 function Driver:_askAI(req)
   local ok, resp, state = pcall(function()
     if type(self.ai_respond) == "function" then
@@ -50,7 +52,8 @@ function Driver:_askAI(req)
     return self.ai_respond:respond(req, self.room)
   end)
   if ok then return resp, state end
-  return self.bot_respond(req, self.room), "ready"
+  print(string.format("[AI] 响应实现抛了异常（未回落规则脚本）：%s", tostring(resp)))
+  return nil, "ready"
 end
 
 return Driver
