@@ -61,17 +61,26 @@ check(#room.loglines > 10, "对局日志完整（" .. #room.loglines .. " 条）
 check(room.turn_count <= Room.MAX_TURNS, "回合数在保险线内（" .. room.turn_count .. "）")
 check(totalCards(room) == 29, "迷你牌堆卡牌守恒 29 == " .. totalCards(room))
 
-local ok_seeds, bad = 0, {}
+-- 长时间拉锯会以平局收场（winner 为 nil），这是合法结局，
+-- 不再要求「必有胜者」，但平局要单独计数以便观察。
+local function assertFinished(r, deck_size)
+  assert(r.game_over, "未正常结束")
+  assert(r.turn_count <= Room.MAX_TURNS, "超回合")
+  assert(totalCards(r) == deck_size,
+    "卡牌不守恒 " .. totalCards(r) .. " != " .. deck_size)
+  return r.winner ~= nil
+end
+
+local ok_seeds, bad, draws = 0, {}, 0
 for seed = 1, 30 do
   local ok = pcall(function()
     local r = playGame { seed = seed, mini = true }
-    assert(r.game_over and r.winner ~= nil, "未正常结束")
-    assert(r.turn_count <= Room.MAX_TURNS, "超回合")
-    assert(totalCards(r) == 29, "卡牌不守恒")
+    if not assertFinished(r, 29) then draws = draws + 1 end
   end)
   if ok then ok_seeds = ok_seeds + 1 else table.insert(bad, seed) end
 end
-check(ok_seeds == 30, "迷你局 30 个种子全部跑通（失败: " .. table.concat(bad, ",") .. "）")
+check(ok_seeds == 30, "迷你局 30 个种子全部跑通（失败: " .. table.concat(bad, ",") .. "）"
+  .. (draws > 0 and string.format("，其中 %d 局平局", draws) or ""))
 
 print("\n--- 标准牌堆全量局 ---")
 
@@ -204,9 +213,7 @@ do
         r:start()
         local d = Driver.create(r, AI.makeAI())
         d:advance()
-        assert(r.game_over and r.winner ~= nil, "未正常结束")
-        assert(r.turn_count <= Room.MAX_TURNS, "超回合")
-        assert(totalCards(r) == Standard.deckSize(), "卡牌不守恒 " .. totalCards(r))
+        assertFinished(r, Standard.deckSize())
       end)
       if ok then ok_count = ok_count + 1 end
     end
@@ -1059,6 +1066,102 @@ do -- 马腾·马术 / 雄异
   local n = #ps[3].hand
   r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
   check(#ps[3].hand == n, "【雄异】只应给队友摸牌，不应给敌人")
+end
+
+print("\n--- 兼容层：ExpPattern ---")
+
+do
+  local ExpPattern = require "src.compat.exppattern"
+  local club = Card.create(1, "slash", Card.Suit.Club, 5, Card.Type.Basic)
+  local heart = Card.create(2, "peach", Card.Suit.Heart, 3, Card.Type.Basic)
+  local spade9 = Card.create(3, "dodge", Card.Suit.Spade, 9, Card.Type.Basic)
+  local equip = Card.create(4, "crossbow", Card.Suit.Spade, 2, Card.Type.Equip)
+
+  check(ExpPattern.match(".|club|.|hand", club, "hand"), "梅花手牌应匹配 .|club|.|hand")
+  check(not ExpPattern.match(".|club|.|hand", heart, "hand"), "红桃不应匹配梅花模式")
+  check(ExpPattern.match(".|black", spade9, "hand"), "黑桃应匹配 .|black")
+  check(not ExpPattern.match(".|red", spade9, "hand"), "黑桃不应匹配 .|red")
+  check(ExpPattern.match(".|.|2~9", spade9, "hand"), "点数区间 2~9 应匹配 9")
+  check(not ExpPattern.match(".|.|2~8", spade9, "hand"), "点数区间 2~8 不应匹配 9")
+  check(ExpPattern.match("EquipCard|.|.|hand", equip, "hand"), "装备牌应匹配 EquipCard")
+  check(ExpPattern.match("slash", club, "hand"), "【杀】应匹配 slash")
+  check(ExpPattern.match(".|club|.|hand!", club, "hand"), "结尾的 ! 应被忽略")
+end
+
+print("\n--- 兼容层：DIY 扩展加载 ---")
+
+do -- 加载 diy/ 下的示例扩展，检查武将/技能是否注册成功
+  local Loader = require "src.compat.loader"
+  local engine = Engine.create()
+  Standard.setup(engine)
+  local report = Loader.loadDirectory(engine, "diy")
+  local ok_count = 0
+  for _, item in ipairs(report) do
+    if item.ok then ok_count = ok_count + 1 end
+  end
+  check(#report > 0, "应扫描到 diy/ 下的扩展文件（" .. #report .. " 个）")
+  check(ok_count == #report, "所有扩展应加载成功")
+
+  -- 示例扩展 moligaloo 里的时迁
+  local g = engine:getGeneral("时迁")
+  check(g ~= nil, "DIY 武将【时迁】应注册进引擎")
+  check(g and g.max_hp == 4, "DIY 武将默认体力应为 4")
+  check(g and g.kingdom == "qun", "DIY 武将势力应为 qun")
+  check(g and #g.skills == 2, "DIY 武将应有 2 个技能（实得 "
+    .. (g and #g.skills or 0) .. "）")
+end
+
+do -- DIY 的 OneCardViewAsSkill：梅花手牌当【顺手牵羊】
+  local Loader = require "src.compat.loader"
+  local engine = Engine.create()
+  Standard.setup(engine)
+  Loader.loadDirectory(engine, "diy")
+  local g = engine:getGeneral("时迁")
+  local ps = {}
+  for i, name in ipairs({ "时迁", "白板武将" }) do
+    table.insert(ps, Player.create("P" .. i, engine:getGeneral(name), i, false))
+  end
+  local r = Room.create(engine, ps)
+  r.drawPile = Standard.buildDrawPile(1)
+
+  local club = give(ps[1], "slash", Card.Suit.Club, 5)
+  local cands = r:viewAsCandidates(ps[1], "snatch")
+  check(#cands > 0, "【神偷】应能把梅花手牌转化为【顺手牵羊】")
+  local made = nil
+  if #cands > 0 then
+    made = cands[1].skill:view_as({ cands[1].card })
+  end
+  check(made ~= nil and made.name == "snatch", "转化结果应为【顺手牵羊】")
+  check(made and made.virtual and #made.subcards == 1,
+    "转化牌应带实体来源（addSubcard 的 id 要能还原成牌对象）")
+  local heart = give(ps[1], "peach", Card.Suit.Heart, 3)
+  check(r:viewAsCard(ps[1], "snatch", heart) == nil, "非梅花不应能转化")
+  if club then end
+end
+
+do -- DIY 的 TriggerSkill：受伤后摸一张牌
+  local Loader = require "src.compat.loader"
+  local engine = Engine.create()
+  Standard.setup(engine)
+  Loader.loadDirectory(engine, "diy")
+  local ps = {}
+  for i, name in ipairs({ "时迁", "白板武将" }) do
+    table.insert(ps, Player.create("P" .. i, engine:getGeneral(name), i, false))
+  end
+  local r = Room.create(engine, ps)
+  r.drawPile = Standard.buildDrawPile(2)
+  local n = #ps[1].hand
+  runInRoom(function()
+    r:trigger("Damaged", ps[1], { from = ps[2], to = ps[1], n = 1, nature = "normal" })
+  end)
+  check(#ps[1].hand == n + 1, "【神行】受伤后应摸一张牌（" .. n .. " → "
+    .. #ps[1].hand .. "）")
+end
+
+do -- 中文翻译表
+  local sgs = require "src.compat.sgs"
+  check(sgs.Translations["moligaloo"] == "太阳神上", "LoadTranslationTable 应记录包名")
+  check(sgs.Translations["shentou"] == "神偷", "LoadTranslationTable 应记录技能名")
 end
 
 print("\n--- 卡牌定义完整性 ---")

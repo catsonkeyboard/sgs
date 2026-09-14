@@ -108,6 +108,7 @@ local TriggerEvent = {
 -- 技能触发频率
 local Frequency = {
   NotFrequent = "NotFrequent", -- 主动技
+  Frequent = "Frequent",       -- 频繁技（原版：每次都可选择发动）
   Compulsory = "Compulsory",   -- 锁定技
   Limited = "Limited",         -- 限定技
   Wake = "Wake",               -- 觉醒技

@@ -296,13 +296,37 @@ Generals.SHU = {
     name = "孟获", key = "menghuo", max_hp = 4, kingdom = "shu",
     skills = {
       markerSkill("祸首", { savage_immune = true }),
-      -- 再起：摸牌阶段若已受伤，放弃摸牌改为回复 1 点体力
+      -- 再起：摸牌阶段若已受伤，改为亮出牌堆顶 X 张牌（X = 已损失体力），
+      -- 每有一张红桃回复 1 点体力（红桃进弃牌堆），其余收入手中，并跳过正常摸牌。
+      -- 回血是**概率性**的（取决于翻到几张红桃），不是稳定 +1。
+      -- 早期曾被误写成「固定回复 1 点体力」，导致孟获每回合回血正好抵消 AI
+      -- 每回合 1 点输出，形成打不死的死循环（压测卡满 300 回合）。
       TriggerSkill.create("再起", TriggerEvent.DrawNCards,
         function(_s, room, player, data)
-          if player.hp >= player.max_hp then return false end
+          -- DrawNCards 以「当前摸牌者」为主语广播，必须确认是自己的摸牌阶段
+          if not data or data.player ~= player then return false end
+          local x = player.max_hp - player.hp
+          if x <= 0 then return false end
+          local hearts, others = {}, {}
+          for _ = 1, x do
+            local c = drawForJudge(room)
+            if not c then break end
+            if c.suit == Card.Suit.Heart then
+              table.insert(hearts, c)
+            else
+              table.insert(others, c)
+            end
+          end
+          if #hearts > 0 then
+            room:log("%s 发动【再起】，亮出 %d 张中 %d 张红桃，回复 %d 点体力",
+              player.name, x, #hearts, #hearts)
+            for _, c in ipairs(hearts) do table.insert(room.discardPile, c) end
+            room:heal(player, #hearts)
+          else
+            room:log("%s 发动【再起】，亮出 %d 张无红桃，改为收入手中", player.name, x)
+          end
+          for _, c in ipairs(others) do table.insert(player.hand, c) end
           data.n = 0
-          room:log("%s 发动【再起】，放弃摸牌改为回复 1 点体力", player.name)
-          room:heal(player, 1)
           return false
         end, { zh = "再起" }),
     },
@@ -365,8 +389,11 @@ Generals.WEI = {
         function(_s, room, player, data)
           if not data or data.to ~= player or not data.card then return false end
           local card = data.card
-          -- 转化技的虚拟牌没有实体，取其来源实体牌
+          -- 转化技的虚拟牌没有实体，取其来源实体牌；
+          -- 【神速】这类凭空生成的牌（phantom）没有来源，不能收（否则凭空多一张）
+          if card.phantom then return false end
           local real = (card.virtual and card.subcards and card.subcards[1]) or card
+          if not real or real.virtual or real.phantom then return false end
           room:log("%s 发动【奸雄】，获得【%s】", player.name, real:zhName())
           room:obtain(player, real)
           return false

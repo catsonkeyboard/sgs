@@ -59,7 +59,7 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 | --- | --- | --- |
 | A0 | 骨架 + 杀/闪/桃迷你局 + headless 测试 + 最小 UI | ✅ 完成 |
 | A1 | 标准包全量（锦囊/装备/延时锦囊/判定）+ 触发管线 + 六阶段回合 + 身份局 + 60 将技能 | ✅ 完成 |
-| B | sgs.* 兼容层 + diy/ 扩展加载器 | ⬜ 未开始 |
+| B | sgs.* 兼容层 + diy/ 扩展加载器 | 🚧 进行中（骨架可用，API 面待扩） |
 | C | 完整 UI（皮肤 JSON、动画、牌桌布局）+ 音频 | ⬜ 未开始 |
 | D | LuaSocket 网络服务端 + 多人 | ⬜ 未开始 |
 
@@ -109,6 +109,25 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 阶段跳过、翻面、拼点、收牌等通用原语见 `Room:skipPhase / turnOver / pindian /
 obtain / takeOneCard / loseHp`。
 
+## 四·五、兼容层（`src/compat/`，阶段 B）
+
+| 文件 | 职责 |
+| --- | --- |
+| `sgs.lua` | `sgs` 全局：常量、Package/General、技能工厂、QVariant、`Sanguosha:cloneCard` |
+| `exppattern.lua` | ExpPattern 卡牌匹配（`.|club|.|hand` 这类 `filter_pattern`） |
+| `api.lua` | Room/Player/Card 的原版 API 别名 |
+| `loader.lua` | 扫描 `diy/*.lua`，沙箱执行，把 Package 注册进 Engine |
+
+三条硬规则：
+1. **别名一律经 `define()` 安装，禁止无意覆盖引擎已有方法**（见下）。
+2. **不做 `__index` 兜底**：未实现的方法照常报错，比静默返回 nil 好定位。
+3. **事件/频率常量直接复用引擎的字符串值**，`events = { sgs.Damaged }`
+   写进来就是 `{ "Damaged" }`，无需转换。
+
+已用 `diy/moligaloo.lua`（改编自 `QSanguosha/extension-doc/1-Start.lua`）验证：
+Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
+`LoadTranslationTable` 均可跑通。
+
 ## 五、开发约定
 
 1. **core/ 禁止 require 任何 love 模块** —— UI 与 AI 只是「响应源」，规则只在 core/。
@@ -131,6 +150,13 @@ obtain / takeOneCard / loseHp`。
    于是【武圣】【奇袭】【国色】【度势】这类技能在 AI 手里是废的。
 8. **判队友不能只认「同身份」**：主公与忠臣同阵营但身份不同，
    `allies()` 必须取 `foes()` 的补集，否则【英魂】【缔盟】【直谏】找不到队友。
+9. **凭空生成的牌（phantom）不能被任何「收牌」逻辑拿走**。
+   `Room:obtain` 已统一拦截；若新写技能时要取 `data.card`，需先判
+   `card.phantom`。反例：【奸雄】曾把【神速】的虚拟杀收进手牌，
+   导致压测「卡牌不守恒 119 != 118」。
+10. **技能实现要回查原版源码，不能凭记忆写**。反例：【再起】被记成
+    「固定回复 1 点体力」，实为「翻 X 张牌、按红桃数回血」，
+    前者让孟获每回合回血正好抵消 AI 输出，压测大面积卡死。
 
 ## 四、运行方式
 

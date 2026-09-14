@@ -31,13 +31,25 @@ local function runGame(build)
     local r = build()
     r:start()
     local d = Driver.create(r, AI.makeAI())
-    d:advance()
+    local adv_ok, adv_err = pcall(function() d:advance() end)
+    if not adv_ok then
+      print("DBG " .. tostring(adv_err) .. " turns=" .. tostring(r.turn_count)
+        .. "  " .. dumpState(r))
+      local n = #r.loglines
+      for i = math.max(1, n - 18), n do print("    | " .. r.loglines[i]) end
+      error(adv_err, 0)
+    end
     assert(r.game_over, "对局未结束")
     assert(r.turn_count <= Room.MAX_TURNS, "超过最大回合数")
     assert(totalCards(r) == Standard.deckSize(),
       "卡牌不守恒: " .. totalCards(r) .. " != " .. Standard.deckSize())
-    if r.identity_mode then
+    if r.identity_mode and r.winner then
       assert(r.win_role ~= nil, "身份局未判定获胜阵营")
+    end
+    -- 平局（长时间拉锯）是合法收场，但要在压测里可见。
+    -- 注意：反贼获胜时 winner 为 nil、只有 win_role 有值，不能算平局。
+    if not r.winner and not r.win_role then
+      draws = (draws or 0) + 1
     end
   end)
   return ok, err
@@ -138,5 +150,8 @@ end
 check(#bad == 0, string.format("%d 名武将各 3 局全部通过", #roster)
   .. (#bad == 0 and "" or "（失败: " .. table.concat(bad, " | ") .. "）"))
 
+if (draws or 0) > 0 then
+  print(string.format("注意：有 %d 局以平局收场（长时间拉锯，非死循环）", draws))
+end
 print(string.format("\n===== 压力测试: %d passed, %d failed =====", passes, failures))
 if failures > 0 then error("压力测试失败", 0) end

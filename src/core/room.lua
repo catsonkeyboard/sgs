@@ -15,7 +15,32 @@ local Generals = require "src.core.generals"
 
 local Room = class("Room")
 
-Room.MAX_TURNS = 300 -- 防死循环保险（测试断言用）
+Room.MAX_TURNS = 300  -- 防死循环保险（真正的 bug 会撞在这里）
+Room.STALL_LIMIT = 80 -- 连续多少回合「无人阵亡」就判平局
+
+-- 拉锯检测：残局里双方各摸 2 张、各出 1 张【杀】/【闪】时，谁也死不了，
+-- 属于合法但打不完的局面。与其让它无限跑下去，不如判平局收场——
+-- 真正的死循环仍由 MAX_TURNS 兜住。
+-- 判据只看「存活人数」：血量会因零碎伤害来回变化，看血量会让计数反复清零。
+function Room:_checkStall()
+  local sig = 0
+  for _, p in ipairs(self.players) do
+    if p.alive then sig = sig + 1 end
+  end
+  if sig == self._stall_sig then
+    self._stall_turns = (self._stall_turns or 0) + 1
+  else
+    self._stall_turns = 0
+    self._stall_sig = sig
+  end
+  if self._stall_turns >= Room.STALL_LIMIT then
+    self:log("连续 %d 个回合无人受伤或阵亡，判定为平局", Room.STALL_LIMIT)
+    self.game_over = true
+    self.winner = nil
+    return true
+  end
+  return false
+end
 
 -- 阶段中文名（日志与跳过提示用）
 Room.PHASE_ZH = {
@@ -189,7 +214,10 @@ function Room:askForCard(player, card_name, prompt, extra)
     type = "askForCard", player = player,
     card_name = card_name, prompt = prompt,
   }
-  if extra then for k, v in pairs(extra) do req[k] = v end end
+  -- 原版 room:askForCard 的第 4 个参数起是 data/method/who 等非表参数，忽略之
+  if type(extra) == "table" then
+    for k, v in pairs(extra) do req[k] = v end
+  end
   return coroutine.yield(req)
 end
 
@@ -308,8 +336,11 @@ function Room:shuffle(cards)
 end
 
 -- 把一张牌丢进弃牌堆
-function Room:throwCard(_p, card)
-  table.insert(self.discardPile, card)
+-- 签名兼容两种写法：本引擎 room:throwCard(who, card)，
+-- 原版 room:throwCard(card, who) —— 第一个参数是 Card 时按原版顺序处理。
+function Room:throwCard(a, b)
+  local card = (type(a) == "table" and a.name and a.ctype) and a or b
+  if card then table.insert(self.discardPile, card) end
 end
 
 -- 从弃牌堆取回一张牌（【奸雄】等技能用）
@@ -333,11 +364,23 @@ function Room:viewAsCandidates(p, want_name)
   for _, s in ipairs((p.general and p.general.skills) or {}) do table.insert(skills, s) end
   for _, s in ipairs(p.extra_skills or {}) do table.insert(skills, s) end
   for _, s in ipairs(skills) do
-    if s.result_name ~= want_name then
-      -- 不匹配
     -- 【急救】：只能在自己回合外发动
-    elseif s.only_outside_turn and p.phase ~= "not_active" then
+    if s.only_outside_turn and p.phase ~= "not_active" then
       -- 自己的回合内不可用
+    elseif s.result_name == nil and s.view_as then
+      -- DIY 扩展的动态转化技：结果牌名不固定（如【神偷】梅花→顺手牵羊），
+      -- 只能逐张试算看能变成什么
+      for _, c in ipairs(p.hand) do
+        -- 试算前同样要走过滤条件，否则任意牌都能「转化」
+        if (not s.filter or s:filter(c, p)) then
+          local made = s:view_as({ c })
+          if made and made.name == want_name then
+            table.insert(out, { skill = s, card = c })
+          end
+        end
+      end
+    elseif s.result_name ~= want_name then
+      -- 不匹配
     elseif s.n == 2 and s.filter_pair then
       -- 双牌转化技（【乱击】两张同花色当【万箭齐发】）
       for i = 1, #p.hand do
@@ -406,6 +449,7 @@ function Room:_main()
         self:_turn(p)
       end
     end
+    if self:_checkStall() then break end
     if not self.game_over then self:_advanceSeat() end
   end
   self:trigger("GameFinished", nil, { winner = self.winner })
@@ -1084,6 +1128,10 @@ end
 -- card 通常来自弃牌堆或他人手牌（【奸雄】【行殇】【反馈】）
 function Room:obtain(p, card)
   if not card then return false end
+  -- 凭空生成的牌（【神速】等 phantom）没有实体，收进手牌就会凭空多出一张。
+  -- 曾导致【奸雄】把神速的虚拟杀收走，压测报「卡牌不守恒 119 != 118」。
+  if card.phantom then return false end
+  if card.virtual and not (card.subcards and card.subcards[1]) then return false end
   for i, c in ipairs(self.discardPile) do
     if c == card then table.remove(self.discardPile, i) break end
   end

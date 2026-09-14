@@ -93,85 +93,40 @@ function Standard.buildMiniPile(seed)
   return cards
 end
 
--- ===== 武将技能 =====
--- 这里先用少量经典技能验证触发管线与能力标记，A1 后续按同一模式批量补齐。
-
--- 张飞·咆哮（锁定技）：出牌阶段使用【杀】无次数限制
-local function makePaoxiao()
-  local s = TriggerSkill.create("咆哮", {}, nil, {
-    zh = "咆哮", frequency = skillmod.Frequency.Compulsory,
-  })
-  s.unlimited_slash = true
-  return s
-end
-
--- 曹操·奸雄：受到伤害后，获得造成伤害的牌
-local function makeJianxiong()
-  return TriggerSkill.create("奸雄", TriggerEvent.Damaged,
-    function(_s, room, player, data)
-      local card = data and data.card
-      if not card or not data.from then return false end
-      -- 造成伤害的牌此刻已在弃牌堆，取回再入手
-      if not room:takeFromDiscard(card) then return false end
-      table.insert(player.hand, card)
-      room:log("%s 发动【奸雄】，获得 %s", player.name, card:zhName())
-      return false
-    end, { zh = "奸雄" })
-end
-
--- 司马懿·反馈：受到伤害后，抽取来源一张牌
-local function makeFankui()
-  return TriggerSkill.create("反馈", TriggerEvent.Damaged,
-    function(_s, room, player, data)
-      local from = data and data.from
-      if not from or from == player or not from.alive then return false end
-      if #from.hand == 0 then return false end
-      local idx = 1
-      local c = from.hand[idx]
-      from:takeCard(c)
-      table.insert(player.hand, c)
-      room:log("%s 发动【反馈】，抽取 %s 一张手牌", player.name, from.name)
-      return false
-    end, { zh = "反馈" })
-end
-
--- 华佗·急救：可将红色牌当【桃】使用（濒死时的兜底由 AI 决策处理）
-local function makeJijiu()
-  local s = TriggerSkill.create("急救", {}, nil, { zh = "急救" })
-  s.red_as_peach = true
-  return s
-end
-
 -- ===== 武将 =====
+-- 武将技能全部在 core/generals.lua（标准包 60 将）与 diy/ 扩展里，
+-- 这里不再内联重复定义（曾经内联过张飞/曹操/司马懿/华佗，与 generals.lua 重名
+-- 且会互相覆盖，已删除）。
 
+-- 只保留两个占位将；真正的武将全部来自 core/generals.lua 与 DIY 扩展
 local GENERALS = {
   { name = "白板武将", max_hp = 4, kingdom = "qun", skills = {} },
   { name = "剑阁武将", max_hp = 4, kingdom = "qun", skills = {} },
-  { name = "张飞",     max_hp = 4, kingdom = "shu",  skills = { makePaoxiao() } },
-  { name = "曹操",     max_hp = 4, kingdom = "wei",  skills = { makeJianxiong() } },
-  { name = "司马懿",   max_hp = 3, kingdom = "wei",  skills = { makeFankui() } },
-  { name = "华佗",     max_hp = 3, kingdom = "qun",  skills = { makeJijiu() } },
 }
+
+Standard.PLACEHOLDERS = { ["白板武将"] = true, ["剑阁武将"] = true }
 
 function Standard.setup(engine)
   for _, g in ipairs(GENERALS) do
     engine:registerGeneral(g)
   end
-  -- 蜀国十五将（core/generals.lua）
+  -- 标准包 60 将（蜀/魏/吴/群，core/generals.lua）
   local Generals = require "src.core.generals"
   for _, g in ipairs(Generals.all()) do
     engine:registerGeneral(g)
   end
 end
 
--- 给玩家随机分配一个武将（不含白板占位将）
+-- 给玩家随机分配一个武将（不含白板/剑阁占位将）
+-- 注意：从 engine.generals 取，而不是上面那张小表——否则新增武将（含 DIY 扩展）
+-- 永远不会出现在随机局里。
 function Standard.randomGeneral(engine, rng)
   local pool = {}
-  for _, g in ipairs(GENERALS) do
-    if g.name ~= "白板武将" and g.name ~= "剑阁武将" then
-      table.insert(pool, g)
-    end
+  for name, g in pairs(engine.generals or {}) do
+    if not Standard.PLACEHOLDERS[name] then table.insert(pool, g) end
   end
+  if #pool == 0 then return engine:getGeneral("白板武将") end
+  table.sort(pool, function(a, b) return a.name < b.name end) -- 保证可复现
   local idx = (rng or math.random)(#pool)
   return pool[idx]
 end

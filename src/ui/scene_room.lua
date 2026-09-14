@@ -28,6 +28,10 @@ local ANCHORS_2 = { [1] = { 40, 440 }, [2] = { 40, 24 } }
 function RoomScene:init(on_exit, mode)
   local engine = Engine.create()
   Standard.setup(engine)
+  -- 加载 diy/ 下的原版扩展脚本；单个脚本出错不应拖垮整局，故吞掉异常
+  pcall(function()
+    require("src.compat.loader").loadDirectory(engine, "diy")
+  end)
   mode = mode or "identity"
 
   local players = {}

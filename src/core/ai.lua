@@ -38,15 +38,20 @@ local function opponentsOf(p, room)
   return ordered
 end
 
--- 攻击范围内的敌人，优先打**体力最低**的（集火）。
--- 原来取「第一个」，伤害被平均分摊，谁也杀不死，遇到【名士】这类减伤技能
--- 必然打成僵局（孔融在压测里卡满 300 回合）。
+-- 攻击范围内的敌人选谁打：按「体力*2 + 手牌数」取最小。
+--   - 体力是主项：残血优先（集火）。原来取「第一个」，伤害被平均分摊，
+--     谁也杀不死，遇到【名士】这类减伤技能必然打成僵局。
+--   - 手牌数是次项：残局双方都在囤牌时，手牌少的那个才【闪】得出来，
+--     不打他就会陷入「每回合出一张杀、对方出一张闪」的永久拉锯。
 local function targetInRange(p, room)
   local range = p:attackRange()
-  local best, best_hp = nil, nil
+  local best, best_score = nil, nil
   for _, q in ipairs(opponentsOf(p, room)) do
-    if room:distance(p, q) <= range and (best_hp == nil or q.hp < best_hp) then
-      best, best_hp = q, q.hp
+    if room:distance(p, q) <= range then
+      local score = q.hp * 2 + #q.hand
+      if best_score == nil or score < best_score then
+        best, best_score = q, score
+      end
     end
   end
   return best
