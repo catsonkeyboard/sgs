@@ -82,3 +82,9 @@ function love.mousepressed(x, y, button)
     current_scene:mousepressed(x, y, button)
   end
 end
+
+function love.mousereleased(x, y, button)
+  if current_scene and current_scene.mousereleased then
+    current_scene:mousereleased(x, y, button)
+  end
+end

@@ -153,9 +153,20 @@ function RoomScene:isValidTarget(p)
   local def = Cards.get(self.picked.name)
   if not def then return false end
   if def.target == "enemy" or (def.delayed and def.target ~= "self") then
-    return p ~= self.human
+    if p == self.human then return false end
+  elseif p ~= self.human then
+    return false
   end
-  return p == self.human
+  -- 距离 / 出杀次数 / 禁止技一律问引擎，UI 不自己算规则
+  local ok = self.room:canUseCardOn(self.human, self.picked, p)
+  return ok == true
+end
+
+-- 为什么这个目标不能用（用于给玩家一句人话提示）
+function RoomScene:rejectReason(p)
+  local ok, why = self.room:canUseCardOn(self.human, self.picked, p)
+  if ok then return nil end
+  return why or "该目标不合法"
 end
 
 -- ===== 交互 =====
@@ -164,6 +175,7 @@ function RoomScene:_step(resp)
   self.selected = {}
   self.revealed = nil
   self.picked = nil
+  self.dragging = nil
   self.room:step(resp)
   self.driver:advance()
   self:_refreshButtons()
@@ -240,7 +252,34 @@ function RoomScene:update(dt)
   self:_refreshButtons()
   local req = self.room.pending
   self.revealed = (req and req.type == "askForChooseCard") and req.cards or nil
-  if not (req and req.type == "askForUseCard") then self.picked = nil end
+  if not (req and req.type == "askForUseCard") then
+    self.picked = nil
+    self.dragging = nil
+  end
+end
+
+-- 松开鼠标：把拖着的牌落到某个武将面板上。
+-- 保留「点牌 → 点人」的两段式：松手在空白处只是回到已选中状态，不取消。
+function RoomScene:mousereleased(x, y, button)
+  if button ~= 1 or not self.dragging then return end
+  local card = self.dragging
+  if self.picked ~= card then self.dragging = nil return end
+  local p = self:panelAt(x, y)
+  if p and self:isValidTarget(p) then
+    self.dragging = nil
+    self:_useOn(card, p)
+  elseif p then
+    self.msg = self:rejectReason(p) or "该目标不合法"
+  end
+  self.dragging = nil
+end
+
+-- 拖拽中的牌跟着鼠标画一张半透明副本
+function RoomScene:dragCardPos()
+  if not self.dragging then return nil end
+  if not (love and love.mouse and love.mouse.getPosition) then return nil end
+  local mx, my = love.mouse.getPosition()
+  return mx - CARD_W / 2, my - CARD_H / 2
 end
 
 function RoomScene:_useOn(card, target)
@@ -250,6 +289,7 @@ end
 
 function RoomScene:mousepressed(x, y, button)
   if button ~= 1 then return end
+  self.msg = "" -- 每次点击重新计算提示，避免上一条反馈一直挂着
   for _, b in ipairs(self.buttons) do
     if x >= b.x and x <= b.x + b.w and y >= b.y and y <= b.y + b.h then
       b.cb()
@@ -271,15 +311,16 @@ function RoomScene:mousepressed(x, y, button)
     return
   end
 
-  -- 已选中卡牌 → 点击玩家面板指定目标
+  -- 已选中卡牌 → 点击/拖拽到玩家面板指定目标
   if self.picked then
     local p = self:panelAt(x, y)
     if p and self:isValidTarget(p) then
       self:_useOn(self.picked, p)
     elseif p then
-      self.msg = "该目标不合法"
+      self.msg = self:rejectReason(p) or "该目标不合法"
     else
       self.picked = nil
+      self.dragging = nil
     end
     return
   end
@@ -292,13 +333,23 @@ function RoomScene:mousepressed(x, y, button)
     if not def then self.msg = "这张牌暂无规则" return end
     local needs_target = (def.target == "enemy") or (def.delayed and def.target ~= "self")
     if needs_target then
-      local foes = 0
-      for _, q in ipairs(self.players) do
-        if q ~= self.human and q.alive then foes = foes + 1 end
-      end
-      if foes == 0 then self.msg = "没有合法目标" return end
       self.picked = card
-      self.msg = "已选中【" .. card:zhName() .. "】，点击目标角色"
+      -- 先试算有没有合法目标：没有就直接说原因，
+      -- 免得玩家选中一张根本打不出去的牌（距离/次数限制）。
+      local legal, why = 0, nil
+      for _, q in ipairs(self.players) do
+        if q ~= self.human and q.alive then
+          local ok, reason = self.room:canUseCardOn(self.human, card, q)
+          if ok then legal = legal + 1 else why = why or reason end
+        end
+      end
+      if legal == 0 then
+        self.picked = nil
+        self.msg = why or "没有合法目标"
+        return
+      end
+      self.dragging = card -- 支持按住拖到武将身上
+      self.msg = "已选中【" .. card:zhName() .. "】，点击或拖到目标角色（" .. legal .. " 个可选）"
     else
       self:_useOn(card, self.human)
     end
@@ -707,32 +758,52 @@ function RoomScene:draw()
     love.graphics.printf(c:zhName(), x, y + 46 - lifted, CARD_W, "center")
   end
 
+  -- 拖拽中的牌：跟鼠标画一张副本（放在手牌之后，保证在最上层）
+  local dx, dy = self:dragCardPos()
+  if dx then
+    local c = self.dragging
+    love.graphics.setColor(0.98, 0.96, 0.9)
+    love.graphics.rectangle("fill", dx, dy, CARD_W, CARD_H, 6, 6)
+    love.graphics.setColor(0.95, 0.8, 0.2)
+    love.graphics.rectangle("line", dx, dy, CARD_W, CARD_H, 6, 6)
+    love.graphics.setColor(faceColor(c))
+    love.graphics.setFont(self.font_sm)
+    love.graphics.print(c:suitString() .. c.number, dx + 6, dy + 5)
+    love.graphics.setColor(0, 0, 0)
+    love.graphics.setFont(self.font_mid)
+    love.graphics.printf(c:zhName(), dx, dy + 46, CARD_W, "center")
+  end
+
   -- 提示条
   love.graphics.setColor(0.15, 0.2, 0.15)
   love.graphics.rectangle("fill", 0, 610, 1130, 40)
   love.graphics.setFont(self.font)
   local req = room.pending
   local prompt = self.msg
-  if room.game_over then
-    local role_text = room.win_role and (Player.ROLE_ZH[room.win_role] or room.win_role) or ""
-    prompt = string.format("对局结束 —— %s阵营获胜（%s）。点击【返回菜单】",
-      role_text, room.winner and room.winner.name or "—")
-  elseif req and req.player.is_human then
-    if req.prompt then
-      prompt = req.prompt
-    elseif self.picked then
-      prompt = "已选中【" .. self.picked:zhName() .. "】，点击一名角色作为目标"
-    elseif req.type == "askForUseCard" then
-      prompt = "你的出牌阶段：点手牌使用，或【结束出牌】"
-    elseif req.type == "askForDiscard" then
-      prompt = string.format("弃牌阶段：已选 %d/%d 张", self:selectedCount(), req.n)
-    elseif req.type == "askForChooseCard" then
-      prompt = "点击展示牌，选择一张收入手中"
-    elseif req.type == "askForDiscardFrom" then
-      prompt = "过河拆桥：点【确定拆牌】弃掉对手一张手牌"
+  -- self.msg 是具体操作反馈（如「距离 2 超出攻击范围 1」），优先级最高，
+  -- 不能被下面的默认提示覆盖掉 —— 否则玩家只看到一句无关的套话。
+  if (prompt or "") == "" then
+    if room.game_over then
+      local role_text = room.win_role and (Player.ROLE_ZH[room.win_role] or room.win_role) or ""
+      prompt = string.format("对局结束 —— %s阵营获胜（%s）。点击【返回菜单】",
+        role_text, room.winner and room.winner.name or "—")
+    elseif req and req.player.is_human then
+      if req.prompt then
+        prompt = req.prompt
+      elseif self.picked then
+        prompt = "已选中【" .. self.picked:zhName() .. "】，点击一名角色作为目标"
+      elseif req.type == "askForUseCard" then
+        prompt = "你的出牌阶段：点手牌使用，或【结束出牌】"
+      elseif req.type == "askForDiscard" then
+        prompt = string.format("弃牌阶段：已选 %d/%d 张", self:selectedCount(), req.n)
+      elseif req.type == "askForChooseCard" then
+        prompt = "点击展示牌，选择一张收入手中"
+      elseif req.type == "askForDiscardFrom" then
+        prompt = "过河拆桥：点【确定拆牌】弃掉对手一张手牌"
+      end
+    elseif req then
+      prompt = "等待 " .. req.player.name .. " 响应…"
     end
-  elseif req then
-    prompt = "等待 " .. req.player.name .. " 响应…"
   end
   love.graphics.setColor(1, 1, 0.85)
   love.graphics.print(prompt, 40, 620)

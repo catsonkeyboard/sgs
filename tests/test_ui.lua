@@ -68,6 +68,11 @@ check(ok_draw, "draw() 应无异常" .. (ok_draw and "" or ("：" .. tostring(er
 local ok_mp, err_mp = pcall(function() scene:mousepressed(5, 5, 1) end)
 check(ok_mp, "mousepressed() 在空白处应无异常" .. (ok_mp and "" or ("：" .. tostring(err_mp))))
 
+-- 拖拽放手：mousereleased 必须存在（main.lua 已接线），且空白处放手不应报错
+check(type(scene.mousereleased) == "function", "应实现 mousereleased（拖拽出牌）")
+local ok_mr, err_mr = pcall(function() scene:mousereleased(5, 5, 1) end)
+check(ok_mr, "mousereleased() 在空白处应无异常" .. (ok_mr and "" or ("：" .. tostring(err_mr))))
+
 -- 皮肤/卡图接线：场景应持有 skin，且缺图时必须安全降级
 check(scene.skin ~= nil, "场景应持有 Skin 实例")
 check(type(scene.cardImages) == "table", "场景应有卡图缓存")

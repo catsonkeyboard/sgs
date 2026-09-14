@@ -2042,6 +2042,37 @@ do
   check(asked3 == nil, "锁定技不应弹出征询（无双是 Compulsory）")
 end
 
+print("\n--- 出牌合法性查询（UI / BOT 共用）---")
+
+do
+  local r, ps = makeRoomWith({
+    "白板武将", "白板武将", "白板武将", "白板武将", "白板武将",
+  }, 71)
+  local slash = Card.create(1, "slash", Card.Suit.Spade, 5, Card.Type.Basic)
+  local snatch = Card.create(2, "snatch", Card.Suit.Spade, 3, Card.Type.Trick)
+
+  local ok1 = r:canUseCardOn(ps[1], slash, ps[2]) -- 相邻，距离 1
+  check(ok1 == true, "距离 1 的目标应可用【杀】")
+  local ok2, why2 = r:canUseCardOn(ps[1], slash, ps[3]) -- 距离 2
+  check(not ok2 and why2 and tostring(why2):find("攻击范围"),
+    "距离 2 的目标应被拒绝并说明原因（实得 " .. tostring(why2) .. "）")
+
+  ps[1].slash_count = 1
+  local ok3, why3 = r:canUseCardOn(ps[1], slash, ps[2])
+  check(not ok3 and why3 and tostring(why3):find("已使用过"),
+    "本回合出杀次数用尽应被拒绝（实得 " .. tostring(why3) .. "）")
+  ps[1].slash_count = 0
+
+  local ok4, why4 = r:canUseCardOn(ps[1], snatch, ps[3])
+  check(not ok4 and why4 and tostring(why4):find("顺手牵羊"),
+    "【顺手牵羊】超出距离 1 应被拒绝（实得 " .. tostring(why4) .. "）")
+  check(r:canUseCardOn(ps[1], snatch, ps[2]) == true, "【顺手牵羊】对相邻角色应可用")
+
+  -- 自己不能指定自己（需要目标的牌）
+  local ok5 = r:canUseCardOn(ps[1], slash, ps[1])
+  check(not ok5, "不应能把需要目标的牌用在自己身上")
+end
+
 print("\n--- 观星 ---")
 
 do

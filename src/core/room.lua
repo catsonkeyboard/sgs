@@ -1226,6 +1226,48 @@ function Room:_validateUse(from, card, targets)
   return true
 end
 
+-- UI / BOT 在出牌前查询「这张牌能不能指定这个目标」。
+-- 规则判断一律留在 core：之前 UI 只看「是不是敌人」，结果选中超出攻击范围
+-- 的目标后 useCard 退还、_phase_play 直接 break，整个出牌阶段被吃掉 ——
+-- 玩家的表现就是「点了牌、点了武将，什么也没发生，回合还结束了」。
+function Room:canUseCardOn(from, card, to)
+  if not (from and card and to) then return false, "缺少目标" end
+  if to == from then return false, "不能指定自己" end
+  if not to.alive then return false, "该角色已阵亡" end
+  local def = Cards.get(card.name)
+  if not def then return false, "这张牌暂无规则" end
+  if self:isProhibited(from, to, card) then
+    return false, "该角色不能被指定为此牌的目标"
+  end
+
+  if isSlashName(card.name) then
+    if Generals.marker(from, "no_slash", false) then
+      return false, "本回合不能使用【杀】"
+    end
+    if from.slash_count >= self:slashLimit(from)
+      and not self:allowsUnlimitedSlash(from) then
+      return false, "本回合已使用过【杀】（每阶段 1 张）"
+    end
+    local far = Generals.marker(from, "slash_no_distance", false)
+    local reach = self:attackRangeOf(from) + self:distanceLimitBonus(from, card)
+    if not (card.no_distance_limit or far) and self:distance(from, to) > reach then
+      return false, string.format("距离 %d 超出攻击范围 %d",
+        self:distance(from, to), self:attackRangeOf(from))
+    end
+  elseif def.distance then
+    local ignore = Generals.marker(from, "no_trick_range", false)
+    local limit = def.distance
+      + Generals.marker(from, "extra_dist_" .. card.name, 0)
+      + self:distanceLimitBonus(from, card)
+    if not (ignore and def.ctype == Card.Type.Trick)
+      and self:distance(from, to) > limit then
+      return false, string.format("距离 %d 超出【%s】的限制 %d",
+        self:distance(from, to), card:zhName(), limit)
+    end
+  end
+  return true
+end
+
 -- 装备：旧装备进弃牌堆；白银狮子失去时回血
 function Room:_equipCard(from, card)
   local def = Cards.get(card.name)
