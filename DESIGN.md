@@ -195,23 +195,46 @@ Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
 引擎侧为技能牌留了出口：`Room:_useSkillCard`。技能牌没有卡牌定义，
 若走普通卡牌分派会落进「暂无结算规则」兜底，因此必须在分派前拦下。
 
-## 四·六、阶段 B 遗留 TODO（转 Phase C，后续再补）
+## 四·六、阶段 B 已定与待办
 
-按建议的优先级排，动手前先看这里：
+### 已决策（不再反复）
 
-1. ~~**FilterSkill 全局生效**~~ ✅ 已完成（见下方「过滤技」小节）
+1. ✅ **FilterSkill 全局生效** —— 已完成，见「过滤技」小节
+2. ✅ **不做国战机制** —— 只做标准身份局。明置/暗置武将、阵法技、双将、
+   `CreateArraySummonSkill` 一律不实现。
+   → 影响：邹氏的【祸水】【倾城】纯属国战机制，她在名册里保留占位、
+   无技能；原版 AI 文件中与国战相关的部分同样不移植。
+3. ✅ **不消费原版 bot 提示表（`sgs.ai_*`）** —— 用 `src/core/bot.lua` 替代。
+   表名继续保留（DIY 脚本会往里塞值，改名就崩），但引擎不读。
 
-2. **国战机制：明置/暗置武将、阵法技**（难度：高）
-   【祸水】【倾城】完全建立在此之上，邹氏目前只有名册占位没有技能。
-   注意：本引擎跑的是标准身份局，国战机制要不要做需要先定方向。
+### 待办（按优先级）
 
-3. **是否消费原版 bot 提示表 `sgs.ai_*`**（设计决策，非实现问题）
-   `sgs.ai_view_as` 等目前只是空容器。本引擎 BOT 走 `CONVERT_TARGETS` + 试算。
-   倾向**不消费**——两套 bot 逻辑并行容易打架，且原版 bot 依赖大量本引擎没有的概念。
+1. **标记类技能接进引擎**（中）—— 当前是**空壳**
+   `sgs.CreateDistanceSkill / MaxCardsSkill / TargetModSkill / AttackRangeSkill /
+   ProhibitSkill` 目前只是 `markerSpec()` 挂上 `distance_correct`、
+   `max_cards_extra`、`target_residue`、`attack_range_extra`、`prohibit` 等字段，
+   但 **core 里一处都没查询**（已核实：0 处引用）。
+   即这类 DIY 技能能加载、不报错，但**完全不生效**。
+   需要逐个接到 `Room:distance`、手牌上限、目标校验、攻击范围、禁止目标上。
 
-4. **鸡肋（isJilei）**：目前 `isJilei` 一律放行。
+2. **卡牌包构造函数**（中）—— 完全没实现
+   `sgs.CreateTrickCard / CreateBasicCard / CreateEquipCard / CreateWeapon /
+   CreateArmor / CreateTreasure` 均为 0，因此
+   `sgs.Package(name, sgs.Package_CardPack)` 类型的扩展**加载不了**。
+   当前 `diy/` 三份示例都是武将包，所以没暴露这个问题。
 
-5. **其余未实现的询问/表现层方法**：遇到再补，现在报错是响亮的，好定位。
+3. **询问类方法的语义补齐**（小～中）
+   现在是「能跑不崩」但语义是桩实现：
+   - `askForYiji` 直接分完并返回 false（原版是 `while` 轮询）
+   - `askForAG` 恒返回第一个 id；`askForGuanxing` 返回空（不重排）
+   - `askForExchange` 退化成 `askForDiscard`；`askForCardShow` 恒返回第一张
+   - `moveCardTo` 一律丢进弃牌堆（忽略传入的 place）
+
+4. **鸡肋（isJilei）**：目前一律放行。
+
+5. **ExpPattern 细节**：区域段（judge / equip）只做了粗粒度匹配。
+
+6. **其余未实现的询问/表现层方法**：遇到再补，现在报错是响亮的，好定位。
 
 其他已实现的原版 API：`sgs.Card_Parse`（含 `@Class=` / `#obj:` 形式）、
 `CardUseStruct` / `DamageStruct` / `LogMessage` / `CardMoveReason` / `qlist`、
