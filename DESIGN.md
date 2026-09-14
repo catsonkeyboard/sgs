@@ -55,13 +55,35 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 
 ## 三、阶段计划
 
-| 阶段 | 内容 | 完成标志 |
+| 阶段 | 内容 | 状态 |
 | --- | --- | --- |
-| A0（本次） | 骨架 + 杀/闪/桃迷你局 + headless 测试 + 最小 UI | 人机 1v1 能玩完整小局 |
-| A1 | 标准包全量（锦囊/装备/全武将技能）+ 原版协议对拍 | 标准局可玩 |
-| B | sgs.* 兼容层 + diy/ 扩展加载器 | 原版扩展跑通 |
-| C | 完整 UI（皮肤 JSON、动画、牌桌布局）+ 音频 | 视听对齐原版 |
-| D | tokio…不，LuaSocket 网络服务端 + 多人 | 局域网对局 |
+| A0 | 骨架 + 杀/闪/桃迷你局 + headless 测试 + 最小 UI | ✅ 完成 |
+| A1 | 标准包全量（锦囊/装备/延时锦囊/判定）+ 触发管线 + 六阶段回合 | ✅ 基本完成（武将技能仅少量样本） |
+| B | sgs.* 兼容层 + diy/ 扩展加载器 | ⬜ 未开始 |
+| C | 完整 UI（皮肤 JSON、动画、牌桌布局）+ 音频 | ⬜ 未开始 |
+| D | LuaSocket 网络服务端 + 多人 | ⬜ 未开始 |
+
+### 阶段内已实现（A1）
+
+| 子系统 | 位置 | 说明 |
+| --- | --- | --- |
+| 触发管线 | `core/room.lua` `trigger()` | 按 priority 升序执行，返回 true 截断结算 |
+| 事件枚举 | `core/skill.lua` | 对齐原版 `structs.h` 的 70+ 事件，含伤害/卡牌两条管线 |
+| 回合阶段 | `core/room.lua` `_phase()` | RoundStart/Start/Judge/Draw/Play/Discard/Finish |
+| 卡牌定义 | `core/cards.lua` | 基本牌 6 + 锦囊 15 + 延时锦囊 3 + 装备 11 |
+| 距离 | `Room:distance()` | 环形座位差 + 攻/防马修正，最低 1 |
+| 判定 | `Room:_judgeCard()` | 乐不思蜀/兵粮寸断/闪电；闪电未命中传给下家 |
+| 标准牌堆 | `core/standard.lua` | 118 张，配比参考实体牌，LCG 确定性洗牌 |
+
+## 五、开发约定
+
+1. **core/ 禁止 require 任何 love 模块** —— UI 与 AI 只是「响应源」，规则只在 core/。
+2. **改完 Lua 先跑 `./run-tests.sh`** —— 内含 `tools/lint_methods.py`，
+   静态检查方法定义与调用语法是否匹配（点号/冒号错配踩过两次，见 commit 3e4c0ac）。
+3. **新增卡牌**：在 `core/cards.lua` 用 `Cards.define` 登记，`Card.ZH`、
+   `ctype`、效果分派由此统一，不要在 room.lua 里写 name 分支。
+4. **新增武将技能**：`TriggerSkill:create(name, events, on_trigger, opts)`，
+   注意 `TriggerSkill.create` 是点号定义，冒号调用会让实参整体右移一位。
 
 ## 四、运行方式
 
