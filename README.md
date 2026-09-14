@@ -3,8 +3,10 @@
 QSanguosha（C++/Qt，2010-2014）→ LÖVE2D (Lua) 的重写项目。
 
 当前进度：**A1 + B + C 已完成** —— 标准包 60 将（蜀/魏/吴/群 各 15）、
-sgs.* 兼容层（可加载原版 DIY 扩展）、接入原版美术与音频的牌桌 UI。
+sgs.* 兼容层（可加载原版 DIY 扩展的**技能定义**）、接入美术与音频的牌桌 UI。
 D（网络对局）未开始。
+
+资源已**自带**在 `assets/`（约 28MB），不再引用原 QSanguosha 源码目录。
 
 测试：**核心 339 项 + UI 12 项 = 351 全通过**。
 
@@ -51,7 +53,7 @@ src/ui/       LÖVE 场景（菜单/牌桌）+ 皮肤/音频/布局/动效
 diy/          DIY 扩展示例 3 份（武将包）：转化技 / 技能牌 / 询问类 API
 tests/        BOT vs BOT 全量对局测试 + 多种子回归 + 卡牌守恒
 tools/        lint_methods.py（点号/冒号检查）、lua.sh、love.app
-assets/       字体（复用原版 DroidSansFallback）
+assets/       资源：image/  audio/  skins/  font/（自带，无需原项目）
 ```
 
 **术语**：`BOT` = 规则驱动的脚本对手（`src/core/bot.lua`，无学习/推理/搜索）；
@@ -76,6 +78,9 @@ assets/       字体（复用原版 DroidSansFallback）
   她在名册里保留占位但**无技能**
 - **不消费原版 bot 提示表**（`sgs.ai_*`）。表名继续保留（DIY 脚本会往里塞值，
   改名就崩），但引擎不读；决策逻辑走自己的 `src/core/bot.lua`
+- `defaultSkin.audio.json` / `animation.json` 在原版里**是空的**，所以音效按
+  资源目录约定解析（`audio/card/<male|female>/<名>.ogg`、`audio/system/<key>.ogg`），
+  动效是自己实现的
 - DIY 的 `askForYiji` / `askForExchange` 等是桩实现 —— BOT 没有对应的
   交互界面，强做反而是假的
 

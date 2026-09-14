@@ -11,25 +11,22 @@ local Json = require "src.ui.json"
 
 local Skin = class("Skin")
 
--- 候选资源根：环境变量 > 项目同级目录 > 常见位置
-local function defaultRoots()
-  local roots = {}
-  local env = os.getenv("SGS_ASSET_ROOT")
-  if env and env ~= "" then table.insert(roots, env) end
-  table.insert(roots, "../QSanguosha")
-  table.insert(roots, "../../QSanguosha")
-  table.insert(roots, "/Users/liming/Code/AIGame/QSanguosha")
-  return roots
+-- 资源根：**默认用项目自带的 assets/**，不再引用原 QSanguosha 源码目录。
+-- 仅当显式设置 SGS_ASSET_ROOT 时才指向别处（便于调试或用完整原版资源）。
+-- 注意：这里只能用 io.open，不能用下面的 readFile —— 那是个 local，
+-- 声明在 findRoot 之后，此处不在其作用域内。
+local function hasLayout(root)
+  local f = io.open(root .. "/skins/defaultSkin.layout.json", "r")
+  if not f then return false end
+  f:close()
+  return true
 end
 
--- 逐个尝试找到一个「看起来像 QSanguosha 资源目录」的根
 local function findRoot()
-  for _, r in ipairs(defaultRoots()) do
-    local f = io.open(r .. "/skins/defaultSkin.layout.json", "r")
-    if f then
-      f:close()
-      return r
-    end
+  local env = os.getenv("SGS_ASSET_ROOT")
+  if env and env ~= "" and hasLayout(env) then return env end
+  for _, r in ipairs({ "assets", "./assets" }) do
+    if hasLayout(r) then return r end
   end
   return nil
 end
@@ -206,8 +203,30 @@ function Skin:kingdomImage(kingdom)
   return nil
 end
 
--- 音频：某事件的音效可能有多个，随机取一个
-function Skin:sound(key)
+-- 音频：某事件的音效可能有多个，随机取一个。
+--
+-- 重要：`defaultSkin.audio.json` 在这个皮肤里**是空的**（与 animation.json 一样），
+-- 只查配置会永远返回 nil —— 音频等于没接。因此这里按原版资源目录的约定兜底：
+--   audio/card/<male|female>/<card_name>.ogg   出牌音效
+--   audio/system/<key>.ogg                     系统音效（injure1 / hplost / lose ...）
+--   audio/skill/<key>.ogg                      技能音效
+--   audio/death/<general_key>.ogg              阵亡语音
+local SYSTEM_SOUND = {
+  injure = { "injure1", "injure2", "injure3" },
+  hplost = { "hplost" },
+  chained = { "chained" },
+  lose = { "lose" },
+  win = { "win" },
+  choose_item = { "choose-item" },
+}
+
+local function pick(pool)
+  if #pool == 0 then return nil end
+  return pool[math.random(#pool)]
+end
+
+function Skin:sound(key, gender)
+  -- 1) 配置优先
   local v = self.audioMap[key]
   if type(v) == "string" then return v end
   if type(v) == "table" then
@@ -219,7 +238,29 @@ function Skin:sound(key)
         table.insert(pool, item[1])
       end
     end
-    if #pool > 0 then return pool[math.random(#pool)] end
+    local r = pick(pool)
+    if r then return r end
+  end
+  if not self.root then return nil end
+
+  -- 2) 系统音效
+  if SYSTEM_SOUND[key] then
+    local n = pick(SYSTEM_SOUND[key])
+    local rel = "audio/system/" .. n .. ".ogg"
+    if readFile(self.root .. "/" .. rel) then return rel end
+  end
+
+  -- 3) 卡牌音效（按性别分目录，回落 common）
+  local dirs = { gender == "female" and "female" or "male", "common" }
+  for _, d in ipairs(dirs) do
+    local rel = string.format("audio/card/%s/%s.ogg", d, key)
+    if readFile(self.root .. "/" .. rel) then return rel end
+  end
+
+  -- 4) 技能 / 阵亡
+  for _, fmt in ipairs({ "audio/skill/%s.ogg", "audio/death/%s.ogg" }) do
+    local rel = string.format(fmt, key)
+    if readFile(self.root .. "/" .. rel) then return rel end
   end
   return nil
 end
