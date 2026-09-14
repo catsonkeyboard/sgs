@@ -203,6 +203,10 @@ function RoomScene:_refreshButtons()
         local t = req.target
         self:_step((t and t.hand[1]) or nil)
       end)
+    elseif req.type == "askForSkillInvoke" then
+      -- 主动技征询：玩家自己决定发不发动
+      push("发动【" .. tostring(req.skill) .. "】", function() self:_step(true) end)
+      push("不发动", function() self:_step(false) end)
     end
   end
 

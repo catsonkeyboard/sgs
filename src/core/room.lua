@@ -189,11 +189,37 @@ function Room:trigger(event, player, data)
   end)
   for _, item in ipairs(list) do
     local who = item.owner or player
-    if item.skill:onTrigger(event, self, who, data) then
+    -- 人类玩家的非锁定技要先征询：否则技能会像 AI 一样自动发动，
+    -- 玩家根本没有「发不发动」的选择权。锁定技（Compulsory）照常自动结算。
+    if who and who.is_human and item.owner
+      and not self:isCompulsorySkill(item.skill)
+      and not self:askForSkillInvoke(who, item.skill) then
+      -- 玩家选择不发动，跳过该技能
+    elseif item.skill:onTrigger(event, self, who, data) then
       return true
     end
   end
   return false
+end
+
+-- 锁定技/限定技不征询：锁定技必须发动，限定技的发动时机由技能自身判定
+function Room:isCompulsorySkill(skill)
+  local f = skill and skill.frequency
+  return f == "Compulsory" or f == "Wake"
+end
+
+-- 询问是否发动某个武将技；AI 一律发动，人类玩家弹选择。
+-- skill 可以是技能对象，也可以是技能名字符串（兼容层按原版签名为字符串）。
+function Room:askForSkillInvoke(player, skill)
+  if not (player and player.is_human) then return true end
+  local name = type(skill) == "string" and skill
+    or (skill and (skill.zh or skill.name) or "技能")
+  local res = coroutine.yield({
+    type = "askForSkillInvoke",
+    player = player,
+    skill = name,
+  })
+  return res == true
 end
 
 -- 纯广播（不关心返回值），保留兼容旧调用点

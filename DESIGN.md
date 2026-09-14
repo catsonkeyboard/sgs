@@ -80,6 +80,11 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 **动画说明**：原版 `defaultSkin.animation.json` 在这个皮肤里**是空的**（只有 `}`），
 没有可复用的动效定义，因此 `effects.lua` 是自己实现的最小方案。
 
+**主动技征询**：`Room:trigger` 里对人类玩家的非锁定技先走
+`Room:askForSkillInvoke`（yield 出 `askForSkillInvoke` 请求），玩家点
+「发动【技能】」或「不发动」；AI 一律直接发动；锁定技（Compulsory/Wake）
+不征询。此前人类玩家的技能是和 AI 一样自动触发的，玩家没有选择权。
+
 **待实机验证**（需要图形环境，headless 测不到）：
 - 音效是否真的播放、音量是否合适
 - 背景/框体的缩放与位置

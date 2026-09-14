@@ -247,7 +247,12 @@ define(Room, "broadcastSkillInvoke", function() end)
 define(Room, "removePlayerDisableShow", function() end)
 define(Room, "doAnimate", function() end)
 define(Room, "sendLog", function(self, msg) self:log("%s", tostring(msg and msg.type or msg)) end)
-define(Room, "askForSkillInvoke", function() return true end) -- AI 默认发动
+-- 引擎已有 Room:askForSkillInvoke（人类会弹选择、AI 直接发动），
+-- 这里委托过去，只是适配原版「传技能名字符串」的签名。
+local engineAskForSkillInvoke = Room.askForSkillInvoke
+define(Room, "askForSkillInvoke", function(self, p, name)
+  return engineAskForSkillInvoke(self, p, name)
+end, true)
 -- 注意：不覆盖 askForNullification —— 引擎内部按 (use) 调用它，
 -- 而原版签名不同，覆盖会让【无懈可击】彻底失效。
 

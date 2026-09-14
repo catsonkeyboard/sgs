@@ -475,16 +475,20 @@ print("\n--- 魏国武将技能 ---")
 
 -- 会触发询问（askForXxx → coroutine.yield）的技能必须在协程里跑，
 -- 否则在主线程里 yield 会直接报错。这里统一用 nil 应答（表示「不响应」）。
-local function runInRoom(fn)
+-- 在协程里跑会 yield 的询问流程。
+-- respond(req) 可选：给询问请求一个应答（如技能征询选择 false）。
+-- 默认一律应答 nil（等价于「不打出 / 结束出牌」）。
+local function runInRoom(fn, respond)
   local co = coroutine.create(function()
     local ok, err = pcall(fn)
     return ok, err
   end)
   local ok, r1, r2 = coroutine.resume(co)
   local guard = 0
-  while coroutine.status(co) ~= "dead" and guard < 60 do
+  while coroutine.status(co) ~= "dead" and guard < 80 do
     guard = guard + 1
-    ok, r1, r2 = coroutine.resume(co, nil)
+    local answer = respond and respond(r1) or nil
+    ok, r1, r2 = coroutine.resume(co, answer)
   end
   if not ok then error(r1, 0) end
   if r1 == false then error(r2, 0) end
@@ -1458,6 +1462,80 @@ do
   r:onEvent("death", function() error("故意抛错") end)
   local ok2 = pcall(function() r:emit("death", { player = ps[1] }) end)
   check(ok2, "回调抛错应被捕获，不能中断对局")
+end
+
+print("\n--- 主动技征询（人类玩家）---")
+
+do
+  local Room = require "src.core.room"
+  local Engine = require "src.core.engine"
+  local Player = require "src.core.player"
+  local skillmod = require "src.core.skill"
+  local Generals = require "src.core.generals"
+
+  local engine = Engine.create()
+  Standard.setup(engine)
+  -- 用【苦肉】（出牌阶段主动技，非锁定）验证征询
+  local g = engine:getGeneral("黄盖")
+  local sk = nil
+  for _, s in ipairs(g.skills) do
+    if s.name == "苦肉" or s.zh == "苦肉" then sk = s end
+  end
+  check(sk ~= nil, "应找到【苦肉】技能")
+
+  local mk = function(is_human)
+    local ps = {}
+    for i = 1, 2 do
+      table.insert(ps, Player.create("P" .. i, engine:getGeneral("黄盖"), i, i == 1 and is_human))
+    end
+    local r = Room.create(engine, ps)
+    r.drawPile = Standard.buildDrawPile(1)
+    for _, p in ipairs(ps) do
+      p.hp = 4
+      give(p, "slash", Card.Suit.Spade, 5)
+    end
+    return r
+  end
+
+  -- 人类玩家：应当弹出征询（协程 yield 出 askForSkillInvoke）
+  local r = mk(true)
+  local asked = nil
+  runInRoom(function()
+    r:trigger("EventPhaseStart", r.players[1],
+      { player = r.players[1], phase = "play" })
+  end, function(req)
+    if req.type == "askForSkillInvoke" then
+      asked = req.skill
+      return false -- 玩家选择「不发动」
+    end
+    return nil
+  end)
+  check(asked ~= nil, "人类玩家的主动技应弹出征询（实得 " .. tostring(asked) .. "）")
+  check(r.players[1].hp == 4, "玩家选择不发动时【苦肉】不应扣体力")
+
+  -- AI：不应询问，直接发动（AI 走的是技能自身逻辑）
+  local r2 = mk(false)
+  runInRoom(function()
+    r2:trigger("EventPhaseStart", r2.players[1],
+      { player = r2.players[1], phase = "play" })
+  end)
+  check(r2.players[1].hp == 3, "AI 应直接发动【苦肉】（hp 4→"
+    .. r2.players[1].hp .. "）")
+
+  -- 锁定技不征询
+  local r3 = Room.create(engine, {
+    Player.create("P1", engine:getGeneral("吕布"), 1, true),
+    Player.create("P2", engine:getGeneral("白板武将"), 2, false),
+  })
+  local asked3 = nil
+  runInRoom(function()
+    r3:trigger("Damaged", r3.players[1],
+      { from = r3.players[2], to = r3.players[1], n = 1, nature = "normal" })
+  end, function(req)
+    if req.type == "askForSkillInvoke" then asked3 = req.skill end
+    return nil
+  end)
+  check(asked3 == nil, "锁定技不应弹出征询（无双是 Compulsory）")
 end
 
 print("\n--- 卡牌定义完整性 ---")
