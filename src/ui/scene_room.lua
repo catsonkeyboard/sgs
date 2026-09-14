@@ -80,7 +80,8 @@ function RoomScene:init(on_exit, mode, size)
 
   -- 布局：优先按原版 layout.json 的间距参数推导（自适应人数），
   -- 缺少配置时 Layout 内部会退回与原来一致的固定锚点。
-  self.layout = Layout.create(self.skin, #players)
+  -- 面板尺寸必须传给布局：排版与绘制用同一个宽度，否则右侧会被画布裁掉。
+  self.layout = Layout.create(self.skin, #players, PANEL_W, PANEL_H)
   self.anchors = self.layout.anchors
   self.panelW, self.panelH = self.layout:panelSize()
   self.effects = Effects.create()
@@ -817,13 +818,44 @@ function RoomScene:draw()
     love.graphics.printf(b.text, b.x, b.y + 11, b.w, "center")
   end
 
-  -- 日志
-  love.graphics.setColor(0.65, 0.7, 0.65)
+  -- 战斗日志：放在左下、手牌上方。
+  -- 之前画在 x=620，正好压在自己的仪表盘上，长句还会超出右边缘。
+  local LOG_X, LOG_W, LOG_LINE = 12, 440, 16
+  local LOG_MAX = 5
   love.graphics.setFont(self.font_sm)
   local n = #room.loglines
-  local start = math.max(1, n - 11)
-  for i = start, n do
-    love.graphics.print(room.loglines[i], 620, 592 - 16 * (n - i))
+  local first = math.max(1, n - LOG_MAX + 1)
+  -- 量文字宽度；测试桩的 font 没有 getWidth，量不出来就跳过截断
+  local function measure(s)
+    if not (self.font_sm and self.font_sm.getWidth) then return nil end
+    local ok, w = pcall(self.font_sm.getWidth, self.font_sm, s)
+    if not ok or type(w) ~= "number" then return nil end
+    return w
+  end
+  for i = first, n do
+    local y = 508 - LOG_LINE * (n - i)
+    local text = tostring(room.loglines[i])
+    -- 超宽截断（按 UTF-8 字符逐个回退，避免截断出半个字）
+    local w = measure(text)
+    if w and w > LOG_W then
+      local chars, acc = {}, ""
+      for ch in text:gmatch("[\33-\127\192-\255][\128-\127]*") do
+        table.insert(chars, ch)
+      end
+      for k = 1, #chars do
+        local cand = table.concat(chars, "", 1, k)
+        local cw = measure(cand .. "…")
+        if cw and cw > LOG_W then break end
+        acc = cand
+      end
+      text = acc .. "…"
+    end
+    -- 深色底衬 + 浅色文字，压在背景图上也读得清
+    love.graphics.setColor(0, 0, 0, 0.45)
+    love.graphics.rectangle("fill", LOG_X - 3, y - 2,
+      (measure(text) or 0) + 6, LOG_LINE, 3, 3)
+    love.graphics.setColor(0.85, 0.9, 0.82)
+    love.graphics.print(text, LOG_X, y)
   end
 end
 

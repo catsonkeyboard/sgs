@@ -21,7 +21,7 @@ local DEFAULTS = {
   bottomBarH = 40,
 }
 
-function Layout:init(skin, n)
+function Layout:init(skin, n, panelW, panelH)
   self.skin = skin
   self.n = n or 4
   local sk = skin
@@ -29,8 +29,10 @@ function Layout:init(skin, n)
   if not self.sceneW or self.sceneW <= 0 then self.sceneW = DEFAULTS.sceneW end
   self.sceneH = DEFAULTS.sceneH
 
-  self.photoW = (sk and sk:number("photo.normalWidth")) or DEFAULTS.photoW
-  self.photoH = (sk and sk:number("photo.normalHeight")) or DEFAULTS.photoH
+  -- 面板实际绘制尺寸由调用方（scene）给定。**布局与绘制必须用同一个尺寸**，
+  -- 否则排版按 157 宽算、绘制画 210 宽，右侧面板会超出画布被裁掉。
+  self.photoW = panelW or (sk and sk:number("photo.normalWidth")) or DEFAULTS.photoW
+  self.photoH = panelH or (sk and sk:number("photo.normalHeight")) or DEFAULTS.photoH
   self.roomPadding = (sk and sk:number("room.photoRoomPadding")) or DEFAULTS.roomPadding
   self.dashPadding = (sk and sk:number("room.photoDashboardPadding")) or DEFAULTS.dashboardPadding
   self.hDist = (sk and sk:number("room.photoHDistance")) or DEFAULTS.hDistance

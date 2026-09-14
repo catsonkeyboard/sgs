@@ -99,6 +99,33 @@ if ok_pa then
     .. tostring(hit and hit.name) .. "）")
 end
 
+-- 布局回归：面板必须整体落在画布内，且互不重叠。
+-- 之前布局按皮肤里的 157 宽排版、绘制却画 210 宽，
+-- 右侧面板（963+210=1173）超出 1130 被裁掉，顶上两块还互相压住。
+do
+  local W, H = love.graphics.getDimensions()
+  local PW, PH = 210, 104
+  local problems = {}
+  for _, p in ipairs(scene.players) do
+    local a = scene:anchorOf(p)
+    if a[1] < 0 or a[2] < 0 or a[1] + PW > W or a[2] + PH > H then
+      table.insert(problems, string.format("%s(%d,%d) 超出画布", p.name, a[1], a[2]))
+    end
+  end
+  for i = 1, #scene.players do
+    for j = i + 1, #scene.players do
+      local a = scene:anchorOf(scene.players[i])
+      local b = scene:anchorOf(scene.players[j])
+      if math.abs(a[1] - b[1]) < PW and math.abs(a[2] - b[2]) < PH then
+        table.insert(problems, scene.players[i].name .. " 与 "
+          .. scene.players[j].name .. " 面板重叠")
+      end
+    end
+  end
+  check(#problems == 0, "5 人局面板应在画布内且互不重叠（"
+    .. table.concat(problems, "；") .. "）")
+end
+
 -- 音频：headless（stub 的 love 没有 audio）下必须静默降级，绝不影响对局
 local Audio = require "src.ui.audio"
 local ok_audio, err_audio = pcall(function()
