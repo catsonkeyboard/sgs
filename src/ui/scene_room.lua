@@ -259,6 +259,36 @@ function RoomScene:update(dt)
   end
 end
 
+-- 拖拽中某个面板的落点状态：ok=可落 / bad=不可落 / dead=已阵亡
+function RoomScene:dropState(p)
+  if not self.dragging then return nil end
+  if not p.alive then return "dead" end
+  return self:isValidTarget(p) and "ok" or "bad"
+end
+
+-- 拖拽时的实时提示：带攻击范围与距离，非法目标直接给出原因
+function RoomScene:dragStatusText()
+  if not self.dragging then return nil end
+  local card = self.dragging
+  local mx, my = 0, 0
+  if love and love.mouse and love.mouse.getPosition then
+    mx, my = love.mouse.getPosition()
+  end
+  local reach = self.room:attackRangeOf(self.human)
+    + self.room:distanceLimitBonus(self.human, card)
+  local text = string.format("攻击范围 %d", reach)
+  local p = self:panelAt(mx, my)
+  if p and p ~= self.human then
+    text = text .. string.format(" · 到 %s 距离 %d", p.name,
+      self.room:distance(self.human, p))
+  end
+  if not p then return text end
+  if self:isValidTarget(p) then
+    return text .. " · 松手对 " .. p.name .. " 使用【" .. card:zhName() .. "】"
+  end
+  return text .. " · " .. (self:rejectReason(p) or "该目标不合法")
+end
+
 -- 松开鼠标：把拖着的牌落到某个武将面板上。
 -- 保留「点牌 → 点人」的两段式：松手在空白处只是回到已选中状态，不取消。
 function RoomScene:mousereleased(x, y, button)
@@ -270,6 +300,7 @@ function RoomScene:mousereleased(x, y, button)
     self.dragging = nil
     self:_useOn(card, p)
   elseif p then
+    -- 距离不够 / 已出过杀 / 被禁止技拦下：一律给一句人话，不打出
     self.msg = self:rejectReason(p) or "该目标不合法"
   end
   self.dragging = nil
@@ -706,11 +737,35 @@ function RoomScene:draw()
 
   self:drawBackground()
 
+  -- 拖拽落点提示：合法目标描绿边，鼠标悬停的非法目标描红边。
+  -- 用叠加层而不是改 drawPlayerPanel，避免动那个近百行的函数。
+  local mx, my = 0, 0
+  if love and love.mouse and love.mouse.getPosition then
+    mx, my = love.mouse.getPosition()
+  end
+
   for _, p in ipairs(self.players) do
     local a = self:anchorOf(p)
     local x, y = a[1], a[2]
     local hl = (self.picked ~= nil) and self:isValidTarget(p) and (p ~= self.human)
     self:drawPlayerPanel(p, x, y, hl)
+
+    if self.dragging then
+      local st = self:dropState(p)
+      local hover = mx >= x and mx <= x + PANEL_W and my >= y and my <= y + PANEL_H
+      local setWidth = love.graphics.setLineWidth -- 打桩的 love 可能没有，需判空
+      if st == "ok" then
+        love.graphics.setColor(0.25, 0.85, 0.35, 0.95)
+        if setWidth then setWidth(hover and 4 or 2) end
+        love.graphics.rectangle("line", x, y, PANEL_W, PANEL_H, 8, 8)
+        if setWidth then setWidth(1) end
+      elseif hover and st == "bad" then
+        love.graphics.setColor(0.92, 0.28, 0.22, 0.95)
+        if setWidth then setWidth(4) end
+        love.graphics.rectangle("line", x, y, PANEL_W, PANEL_H, 8, 8)
+        if setWidth then setWidth(1) end
+      end
+    end
   end
 
   -- 中部：回合 / 牌堆
@@ -790,7 +845,8 @@ function RoomScene:draw()
   love.graphics.rectangle("fill", 0, 610, 1130, 40)
   love.graphics.setFont(self.font)
   local req = room.pending
-  local prompt = self.msg
+  -- 拖拽中优先显示实时距离/合法性（比 self.msg 更即时）
+  local prompt = self:dragStatusText() or self.msg
   -- self.msg 是具体操作反馈（如「距离 2 超出攻击范围 1」），优先级最高，
   -- 不能被下面的默认提示覆盖掉 —— 否则玩家只看到一句无关的套话。
   if (prompt or "") == "" then

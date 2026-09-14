@@ -156,6 +156,87 @@ check(scene.skin:skillSound("马术") == nil, "被动技【马术】原版就没
 check(scene.skin:sound("caocao") ~= nil, "阵亡台词应按武将拼音 key 解析（caocao）")
 
 
+print("\n--- 拖拽出牌 ---")
+do
+  local Card = require "src.core.card"
+  local Cards = require "src.core.cards"
+
+  -- 构造一个可控局面：人类手上一张【杀】，当前请求为 askForUseCard
+  local function setupDrag()
+    local sc = RoomScene.create(function() end)
+    local slash = Card.create(9001, "slash", Card.Suit.Spade, 5, Card.Type.Basic)
+    table.insert(sc.human.hand, slash)
+    sc.picked = nil
+    sc.dragging = nil
+    sc.msg = ""
+    sc.room.pending = { type = "askForUseCard", player = sc.human }
+    return sc, slash
+  end
+
+  -- 1) 按下卡牌应进入「已选中 + 拖拽中」
+  local sc, slash = setupDrag()
+  local req = sc.room.pending
+  local idx = #sc.human.hand
+  local cx, cy = sc:handCardRect(idx)
+  sc:mousepressed(cx + 5, cy + 5, 1)
+  check(sc.picked == slash, "按下卡牌应进入已选中状态")
+  check(sc.dragging == slash, "按下卡牌应同时进入拖拽状态")
+
+  -- 2) 拖到自己身上不合法（杀的目标是别人）
+  local selfPanel = sc:anchorOf(sc.human)
+  if selfPanel then
+    check(sc:dropState(sc.human) ~= "ok", "【杀】不能拖到自己身上")
+  end
+
+  -- 3) 拖到距离内的敌人：松手应打出
+  local victim = nil
+  for _, q in ipairs(sc.players) do
+    if q ~= sc.human and q.alive and sc:isValidTarget(q) then victim = q break end
+  end
+  if victim then
+    local a = sc:anchorOf(victim)
+    local before = #sc.human.hand
+    sc:mousereleased(a[1] + 5, a[2] + 5, 1)
+    check(#sc.human.hand < before, "拖到合法目标松手应打出该牌（手牌 "
+      .. before .. " -> " .. #sc.human.hand .. "）")
+    check(sc.dragging == nil, "打出后应清除拖拽状态")
+  else
+    print("SKIP  本局没有距离内的合法目标，跳过打出用例")
+  end
+
+  -- 4) 拖到距离外的目标：不应打出，且要给出原因
+  local sc2, slash2 = setupDrag()
+  sc2.picked, sc2.dragging = slash2, slash2 -- 等价于 mousepressed 后的状态
+  local far = nil
+  for _, q in ipairs(sc2.players) do
+    if q ~= sc2.human and q.alive and not sc2:isValidTarget(q) then far = q break end
+  end
+  if far then
+    local a = sc2:anchorOf(far)
+    local before = #sc2.human.hand
+    sc2:mousereleased(a[1] + 5, a[2] + 5, 1)
+    check(#sc2.human.hand == before, "拖到非法目标松手不应打出该牌")
+    check((sc2.msg or "") ~= "", "非法目标应给出提示（实得「" .. tostring(sc2.msg) .. "」）")
+    local why = sc2:rejectReason(far)
+    check(why ~= nil, "应能说明被拒绝的原因（实得 " .. tostring(why) .. "）")
+  else
+    print("SKIP  本局所有目标都合法，跳过距离不足用例")
+  end
+
+  -- 5) 距离提示文案应包含攻击范围
+  local sc3, slash3 = setupDrag()
+  sc3.picked, sc3.dragging = slash3, slash3
+  local txt = sc3:dragStatusText()
+  check(txt ~= nil and txt:find("攻击范围", 1, true) ~= nil,
+    "拖拽提示应显示攻击范围（实得 " .. tostring(txt) .. "）")
+
+  -- 6) 松手在空白处：保留已选中，不取消（两段式仍可用）
+  local sc4, slash4 = setupDrag()
+  sc4.picked, sc4.dragging = slash4, slash4
+  sc4:mousereleased(5, 5, 1)
+  check(sc4.picked == slash4, "松手在空白处应保留已选中状态")
+end
+
 print(string.format("\n===== UI: %d passed, %d failed =====", passes, failures))
 if failures > 0 then error("UI 测试失败", 0) end
 
