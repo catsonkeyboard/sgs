@@ -1,0 +1,171 @@
+-- 皮肤配置层：读取原版 QSanguosha 的 skins/*.json
+--
+-- 设计要点：
+--   1) **资源根目录可配置，缺失时全部安全降级**。headless 测试、以及没有
+--      QSanguosha 源码的机器上，所有查询返回 nil，调用方走内置默认值，绝不崩。
+--   2) 原版 json 带注释，用 src/ui/json.lua 解析。
+--   3) 图片/音频只给**路径**，加载由调用方（UI 层）按需做——core 与 skin
+--      都不碰 love.graphics / love.audio。
+local class = require "src.class"
+local Json = require "src.ui.json"
+
+local Skin = class("Skin")
+
+-- 候选资源根：环境变量 > 项目同级目录 > 常见位置
+local function defaultRoots()
+  local roots = {}
+  local env = os.getenv("SGS_ASSET_ROOT")
+  if env and env ~= "" then table.insert(roots, env) end
+  table.insert(roots, "../QSanguosha")
+  table.insert(roots, "../../QSanguosha")
+  table.insert(roots, "/Users/liming/Code/AIGame/QSanguosha")
+  return roots
+end
+
+-- 逐个尝试找到一个「看起来像 QSanguosha 资源目录」的根
+local function findRoot()
+  for _, r in ipairs(defaultRoots()) do
+    local f = io.open(r .. "/skins/defaultSkin.layout.json", "r")
+    if f then
+      f:close()
+      return r
+    end
+  end
+  return nil
+end
+
+local function readFile(path)
+  local f = io.open(path, "r")
+  if not f then return nil end
+  local content = f:read("*a")
+  f:close()
+  return content
+end
+
+local function loadJson(root, name)
+  if not root then return {} end
+  local content = readFile(root .. "/" .. name)
+  if not content then return {} end
+  local ok, t = pcall(Json.decode, content)
+  if not ok or type(t) ~= "table" then return {} end
+  return t
+end
+
+function Skin:init(root)
+  self.root = root or findRoot()
+  self.layout = loadJson(self.root, "skins/defaultSkin.layout.json")
+  self.imageMap = loadJson(self.root, "skins/defaultSkin.image.json")
+  self.audioMap = loadJson(self.root, "skins/defaultSkin.audio.json")
+  self.animation = loadJson(self.root, "skins/defaultSkin.animation.json")
+  self.cardSizes = (self.layout and self.layout.common) or {}
+end
+
+-- 按 "a.b.c" 路径取值
+local function getPath(t, path)
+  if type(t) ~= "table" then return nil end
+  local cur = t
+  for part in string.gmatch(path, "[^%.]+") do
+    if type(cur) ~= "table" then return nil end
+    cur = cur[part]
+  end
+  return cur
+end
+
+function Skin:number(path, default)
+  local v = getPath(self.layout, path)
+  if type(v) == "number" then return v end
+  return default
+end
+
+-- 原版布局里的区域一律是 [x, y, w, h]
+function Skin:rect(path)
+  local v = getPath(self.layout, path)
+  if type(v) == "table" and #v >= 4 then return v end
+  return nil
+end
+
+-- 图片：值可能是 "path" 或 ["path", [x,y,w,h]]，也可能带 %1 占位符
+function Skin:image(key, ...)
+  local v = self.imageMap[key]
+  if type(v) == "string" then
+    return self:_fill(v, ...)
+  elseif type(v) == "table" then
+    if type(v[1]) == "string" then return self:_fill(v[1], ...) end
+  end
+  return nil
+end
+
+function Skin:_fill(str, ...)
+  local args = { ... }
+  local i = 0
+  local out = string.gsub(str, "%%(%d)", function(d)
+    return tostring(args[tonumber(d)] or ("%" .. d))
+  end)
+  return out
+end
+
+-- 资源根下的绝对路径
+function Skin:path(relative)
+  if not (self.root and relative) then return nil end
+  return self.root .. "/" .. relative
+end
+
+-- 卡牌图片：原版 image.json 没有逐张卡的映射，靠目录约定
+--   基本牌/锦囊：image/card/slash.png（snake_case）
+--   装备：      image/card/Crossbow.png（CamelCase）
+local CARD_CAMEL = {
+  crossbow = "Crossbow", axe = "Axe", blade = "Blade",
+  ["double_sword"] = "DoubleSword", ["qinggang_sword"] = "QingGang",
+  ["spear"] = "Spear", ["halberd"] = "Halberd", ["kylin_bow"] = "KylinBow",
+  ["eight_diagram"] = "EightDiagram", ["silver_lion"] = "SilverLion",
+  ["vine"] = "Vine", ["renwang_shield"] = "RenWangShield",
+  ["chitu"] = "ChiTu", ["dayuan"] = "DaYuan", ["dilu"] = "DiLu",
+  ["jueying"] = "JueYing", ["zhuahuangfeidian"] = "ZhuaHuangFeiDian",
+  ["dilu_horse"] = "DiLu",
+}
+
+function Skin:cardImage(cardName)
+  if not (self.root and cardName) then return nil end
+  local candidates = {
+    "image/card/" .. cardName .. ".png",
+    "image/card/" .. cardName .. ".jpg",
+  }
+  local camel = CARD_CAMEL[cardName]
+  if camel then
+    table.insert(candidates, 1, "image/card/" .. camel .. ".png")
+  else
+    -- 没登记的也试一次首字母大写形式
+    local upper = string.gsub(cardName, "^%l", string.upper)
+    table.insert(candidates, 1, "image/card/" .. upper .. ".png")
+  end
+  for _, rel in ipairs(candidates) do
+    local p = self.root .. "/" .. rel
+    if readFile(p) then return rel end
+  end
+  return nil
+end
+
+-- 音频：某事件的音效可能有多个，随机取一个
+function Skin:sound(key)
+  local v = self.audioMap[key]
+  if type(v) == "string" then return v end
+  if type(v) == "table" then
+    local pool = {}
+    for _, item in ipairs(v) do
+      if type(item) == "string" then
+        table.insert(pool, item)
+      elseif type(item) == "table" and type(item[1]) == "string" then
+        table.insert(pool, item[1])
+      end
+    end
+    if #pool > 0 then return pool[math.random(#pool)] end
+  end
+  return nil
+end
+
+-- 是否真的接上了原版资源
+function Skin:available()
+  return self.root ~= nil and next(self.layout) ~= nil
+end
+
+return Skin

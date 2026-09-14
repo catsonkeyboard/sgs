@@ -68,6 +68,29 @@ check(ok_draw, "draw() 应无异常" .. (ok_draw and "" or ("：" .. tostring(er
 local ok_mp, err_mp = pcall(function() scene:mousepressed(5, 5, 1) end)
 check(ok_mp, "mousepressed() 在空白处应无异常" .. (ok_mp and "" or ("：" .. tostring(err_mp))))
 
+-- 皮肤/卡图接线：场景应持有 skin，且缺图时必须安全降级
+check(scene.skin ~= nil, "场景应持有 Skin 实例")
+check(type(scene.cardImages) == "table", "场景应有卡图缓存")
+local ok_img, err_img = pcall(function() scene:draw() end)
+check(ok_img, "接入卡图后 draw() 仍应无异常"
+  .. (ok_img and "" or ("：" .. tostring(err_img))))
+
+-- 音频：headless（stub 的 love 没有 audio）下必须静默降级，绝不影响对局
+local Audio = require "src.ui.audio"
+local ok_audio, err_audio = pcall(function()
+  local a = scene.audio or Audio.create(scene.skin)
+  a:play("slash")
+  a:play("不存在的键")
+  a:play(nil)
+  a:playCard("peach")
+  a:setMuted(true)
+  a:setVolume(0.5)
+  a:setEnabled(false)
+  assert(a:play("slash") == false, "禁用后应返回 false")
+end)
+check(ok_audio, "无音频环境下播放应静默降级"
+  .. (ok_audio and "" or ("：" .. tostring(err_audio))))
+
 print(string.format("\n===== UI: %d passed, %d failed =====", passes, failures))
 if failures > 0 then error("UI 测试失败", 0) end
 

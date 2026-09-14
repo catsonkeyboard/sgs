@@ -11,6 +11,8 @@ local Card = require "src.core.card"
 local Room = require "src.core.room"
 local Driver = require "src.core.driver"
 local AI = require "src.core.ai"
+local Skin = require "src.ui.skin"
+local Audio = require "src.ui.audio"
 
 local RoomScene = class("RoomScene")
 
@@ -26,6 +28,10 @@ local ANCHORS_4 = {
 local ANCHORS_2 = { [1] = { 40, 440 }, [2] = { 40, 24 } }
 
 function RoomScene:init(on_exit, mode)
+  -- 皮肤配置（原版 skins/*.json）与音频。缺资源时全部安全降级，不影响对局。
+  self.skin = Skin.create()
+  self.cardImages = {}
+  self.audio = Audio.create(self.skin)
   local engine = Engine.create()
   Standard.setup(engine)
   -- 加载 diy/ 下的原版扩展脚本；单个脚本出错不应拖垮整局，故吞掉异常
@@ -303,7 +309,38 @@ local function faceColor(c)
   return red and 0.8 or 0.1, red and 0.1 or 0.1, red and 0.1 or 0.1
 end
 
-local function drawCard(x, y, w, h, c, font, font_sm)
+-- 卡图：有原版资源就画真图，没有（或加载失败）退回色块。
+-- 图片缓存挂在 scene 上，避免每帧重复解码。
+local function cardImage(scene, c)
+  if not (scene and scene.skin and c) then return nil end
+  local cache = scene.cardImages
+  if not cache then return nil end
+  if cache[c.name] ~= nil then return cache[c.name] or nil end
+  local rel = scene.skin:cardImage(c.name)
+  local img = nil
+  if rel then
+    local path = scene.skin:path(rel)
+    if path and love.graphics then
+      local ok, loaded = pcall(love.graphics.newImage, path)
+      if ok then img = loaded end
+    end
+  end
+  cache[c.name] = img or false -- 记 false 表示「已知不可用」
+  return img
+end
+
+local function drawCard(x, y, w, h, c, font, font_sm, scene)
+  local img = scene and cardImage(scene, c)
+  if img then
+    love.graphics.setColor(1, 1, 1)
+    love.graphics.draw(img, x, y, 0, w / img:getWidth(), h / img:getHeight())
+    love.graphics.setColor(0, 0, 0)
+    love.graphics.rectangle("line", x, y, w, h, 6, 6)
+    -- 真图上叠一行牌名，保证小尺寸下也能认出来
+    love.graphics.setFont(font_sm)
+    love.graphics.printf(c:zhName(), x, y + h - 18, w, "center")
+    return
+  end
   love.graphics.setColor(0.96, 0.94, 0.88)
   love.graphics.rectangle("fill", x, y, w, h, 6, 6)
   love.graphics.setColor(0, 0, 0)
@@ -414,7 +451,8 @@ function RoomScene:draw()
     love.graphics.setColor(0.9, 0.85, 0.6)
     love.graphics.print("五谷丰登：点击一张收入手中", 40, 298)
     for i, c in ipairs(self.revealed) do
-      drawCard(40 + (i - 1) * (CARD_W + 8), 320, CARD_W, CARD_H, c, self.font, self.font_sm)
+      drawCard(40 + (i - 1) * (CARD_W + 8), 320, CARD_W, CARD_H, c,
+        self.font, self.font_sm, self)
     end
   end
 

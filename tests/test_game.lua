@@ -1290,6 +1290,93 @@ do -- 名称归一 / cloneCard / Card_Parse
       .. tostring(skillcard and skillcard.name) .. "）")
 end
 
+print("\n--- 皮肤配置：JSON 解析 ---")
+
+do
+  local Json = require "src.ui.json"
+  -- 原版 skins/*.json 同时带 /* */ 头注释与 // 行注释
+  -- 注意用 [==[ ]==]：JSON 里的 `[3]]` 含 `]]`，用 [[]] 会被提前闭合
+  local txt = [==[
+/* 头部注释
+   多行 */
+{
+  "a": 1,          // 行注释
+  "b": [1, 2, [3]],
+  "c": {"d": true, "e": null, "f": false},
+  "url": "http://x//y",   // 字符串里的 // 不该被剥掉
+  "g": -1.5e2,
+  "h": "转义\"引号"
+}
+]==]
+  local t, err = Json.decode(txt)
+  check(t ~= nil, "应能解析带 C 风格注释的 JSON（" .. tostring(err) .. "）")
+  if t then
+    check(t.a == 1, "应解析数字")
+    check(t.b[3][1] == 3, "应解析嵌套数组")
+    check(t.c.d == true and t.c.f == false, "应解析布尔值")
+    check(t.c.e == nil, "null 应解析为 nil")
+    check(t.url == "http://x//y",
+      "字符串里的 // 不应被当注释删掉（实得 " .. tostring(t.url) .. "）")
+    check(t.g == -150, "应解析科学计数法与负号（实得 " .. tostring(t.g) .. "）")
+    check(t.h == '转义"引号', "应解析转义字符（实得 " .. tostring(t.h) .. "）")
+  end
+  check(Json.decode("这不是 json") == nil, "解析失败应返回 nil 而不是抛错")
+  check(Json.decode(nil) == nil, "非字符串输入应安全返回 nil")
+end
+
+print("\n--- 皮肤配置：Skin 查询 ---")
+
+do
+  local Skin = require "src.ui.skin"
+  -- 显式传一个不存在的根，模拟「没有原版资源」的环境（如纯 headless）
+  local s = Skin.create("/nonexistent/sgs-assets")
+  check(s ~= nil, "无资源根时也应能创建 Skin")
+  check(not s:available(), "资源不可用时 available() 应为 false")
+  check(s:rect("photo.mainFrameArea") == nil, "无配置时 rect 应返回 nil")
+  check(s:image("photoMainFrame") == nil, "无配置时 image 应返回 nil")
+  check(s:sound("slash") == nil, "无配置时 sound 应返回 nil")
+  check(s:number("common.cardNormalWidth", 93) == 93, "应能带回退默认值")
+end
+
+do
+  -- 用一段内联配置验证查询语义（不依赖外部文件）
+  local Skin = require "src.ui.skin"
+  local s = Skin.create("/nonexistent/sgs-assets")
+  s.layout = {
+    common = { cardNormalWidth = 93, cardNormalHeight = 130 },
+    photo = { mainFrameArea = { 0, 0, 100, 120 } },
+  }
+  s.imageMap = { photoMainFrame = "image/system/photo-back.png" }
+  s.audioMap = { ["slash"] = { "audio/card/slash_1.ogg" } }
+  check(s:number("common.cardNormalWidth") == 93, "应能按路径取数值")
+  check(s:number("common.cardNormalHeight") == 130, "应能按路径取数值（高度）")
+  local r = s:rect("photo.mainFrameArea")
+  check(r and r[1] == 0 and r[3] == 100 and r[4] == 120, "rect 应返回 [x,y,w,h]")
+  check(s:image("photoMainFrame") == "image/system/photo-back.png", "应能取图片路径")
+  check(s:sound("slash") ~= nil, "应能取音频路径")
+  check(s:rect("photo.不存在的键") == nil, "取不到的键应返回 nil 而非报错")
+  check(s:number("a.b.c", 7) == 7, "取不到时应返回默认值")
+end
+
+print("\n--- 卡图解析 ---")
+
+do
+  local Skin = require "src.ui.skin"
+  local s = Skin.create() -- 自动寻找原版资源目录
+  if not s:available() then
+    print("（未找到原版 QSanguosha 资源，跳过真实资源校验；"
+      .. "设 SGS_ASSET_ROOT 指向资源根目录可启用）")
+  else
+    check(s:available(), "应接上原版资源")
+    check(s:number("common.cardNormalWidth") ~= nil, "应能读到卡牌宽度配置")
+    -- 原版卡牌图：基本牌用 snake_case，装备用 CamelCase
+    check(s:cardImage("slash") ~= nil, "【杀】应能解析出图片路径")
+    check(s:cardImage("crossbow") ~= nil, "【诸葛连弩】应能解析出图片路径（CamelCase）")
+    check(s:cardImage("不存在的牌") == nil, "未知卡牌应返回 nil")
+    print("  已接入原版资源：" .. tostring(s.root))
+  end
+end
+
 print("\n--- 卡牌定义完整性 ---")
 
 local missing = {}

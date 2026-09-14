@@ -60,7 +60,14 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 | A0 | 骨架 + 杀/闪/桃迷你局 + headless 测试 + 最小 UI | ✅ 完成 |
 | A1 | 标准包全量（锦囊/装备/延时锦囊/判定）+ 触发管线 + 六阶段回合 + 身份局 + 60 将技能 | ✅ 完成 |
 | B | sgs.* 兼容层 + diy/ 扩展加载器 | 🚧 进行中（骨架可用，API 面待扩） |
-| C | 完整 UI（皮肤 JSON、动画、牌桌布局）+ 音频 | ⬜ 未开始 |
+| C | 完整 UI（皮肤 JSON、动画、牌桌布局）+ 音频 | 🚧 进行中（配置层与卡图/音频已通，布局待做） |
+
+**阶段 C 后续：**
+1. 座位布局用 layout.json 的间距参数推导（现在仍是内置锚点）
+2. 武将头像（image/generals/）、血条/勾玉、装备与判定区图标
+3. 动画（animation.json）：出牌/受伤/判定的动效
+4. 背景与界面框体（photoMainFrame / dashboard* 等）
+5. 音频实际播放验证（需要图形环境，headless 测不到）
 | D | LuaSocket 网络服务端 + 多人 | ⬜ 未开始 |
 
 ### 阶段内已实现（A1）
@@ -109,6 +116,27 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 阶段跳过、翻面、拼点、收牌等通用原语见 `Room:skipPhase / turnOver / pindian /
 obtain / takeOneCard / loseHp`。
 
+## 四·五五、皮肤与资源（`src/ui/`，阶段 C）
+
+原版资源（57MB 图片 + 19MB 音频）**不复制进仓库**，改为按路径引用：
+`Skin` 会依次尝试 `SGS_ASSET_ROOT` 环境变量 → `../QSanguosha` → `../../QSanguosha`
+→ 常见绝对路径。找不到就全部降级，所有查询返回 nil，UI 走内置默认值。
+
+| 文件 | 职责 |
+| --- | --- |
+| `src/ui/json.lua` | 极简 JSON 解析；**必须**先剥 `/* */` 与 `//` 注释（原版 skins/*.json 带） |
+| `src/ui/skin.lua` | layout/image/audio/animation 四类配置的查询；卡牌图片按目录约定解析 |
+| `src/ui/audio.lua` | 按 audio.json 的键名播放；缺文件/缺 love.audio/headless 一律静默 |
+
+三条硬规则：
+1. **资源缺失时安全降级**，绝不抛错、绝不打断对局。
+2. **音频与图片都不参与规则判定**，只做表现。
+3. skin/audio 只给**路径**，加载由 UI 层按需做——core 与 skin 都不碰
+   `love.graphics` / `love.audio`。
+
+已知差异：原版 layout.json 给的是「间距/内边距参数」而非绝对座位坐标，
+座位锚点仍由本引擎自己算；目前已接入的是卡图、卡牌尺寸配置与音频映射。
+
 ## 四·五、兼容层（`src/compat/`，阶段 B）
 
 | 文件 | 职责 |
@@ -132,6 +160,29 @@ Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
 
 引擎侧为技能牌留了出口：`Room:_useSkillCard`。技能牌没有卡牌定义，
 若走普通卡牌分派会落进「暂无结算规则」兜底，因此必须在分派前拦下。
+
+## 四·六、阶段 B 遗留 TODO（转 Phase C，后续再补）
+
+按建议的优先级排，动手前先看这里：
+
+1. **FilterSkill 全局生效**（难度：中高）
+   现状：只挂了标记（`spade_as_heart`），没接到花色查询路径上，
+   因此【红颜】这类技能只能影响它自己的判定，对【闪电】【乐不思蜀】等
+   全局花色判定无效。
+   做法：把所有 `card.suit` 的查询收敛到统一入口（如 `Room:effSuit(p, card)`），
+   再让过滤技挂到该入口。改动面不小，建议等 UI 定型后做。
+
+2. **国战机制：明置/暗置武将、阵法技**（难度：高）
+   【祸水】【倾城】完全建立在此之上，邹氏目前只有名册占位没有技能。
+   注意：本引擎跑的是标准身份局，国战机制要不要做需要先定方向。
+
+3. **是否消费原版 AI 提示表**（设计决策，非实现问题）
+   `sgs.ai_view_as` 等目前只是空容器。本引擎 AI 走 `CONVERT_TARGETS` + 试算。
+   倾向**不消费**——两套 AI 逻辑并行容易打架，且原版 AI 依赖大量本引擎没有的概念。
+
+4. **鸡肋（isJilei）**：目前 `isJilei` 一律放行。
+
+5. **其余未实现的询问/表现层方法**：遇到再补，现在报错是响亮的，好定位。
 
 其他已实现的原版 API：`sgs.Card_Parse`（含 `@Class=` / `#obj:` 形式）、
 `CardUseStruct` / `DamageStruct` / `LogMessage` / `CardMoveReason` / `qlist`、
