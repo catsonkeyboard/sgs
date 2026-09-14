@@ -15,6 +15,9 @@ function Client:init(name, channel)
   self.logs = {}
   self.requests = {}  -- 收到的待应答请求（id -> msg）
   self.over = nil
+  self.chats = {}
+  self.token = nil      -- 重连令牌（welcome 下发）
+  self.spectating = false
   self.on_request = nil -- 可选回调：function(client, req_msg) -> 应答表
 end
 
@@ -24,6 +27,21 @@ end
 
 function Client:ready(v)
   self.channel:send { type = "ready", ready = (v ~= false) }
+end
+
+-- 聊天
+function Client:chat(text)
+  self.channel:send { type = "chat", text = text }
+end
+
+-- 观战（必须在 hello 时说明，服务端据此不分配座位）
+function Client:hello(spectate)
+  self.channel:send { type = "hello", name = self.name, spectate = spectate and true or nil }
+end
+
+-- 重连：用 welcome 下发的令牌坐回原座
+function Client:resume(token)
+  self.channel:send { type = "resume", token = token }
 end
 
 -- 应答某个请求
@@ -39,6 +57,8 @@ function Client:poll()
   local t = msg.type
   if t == "welcome" then
     self.seat = msg.seat
+    if msg.token then self.token = msg.token end
+    if msg.resumed then self.resumed = true end
   elseif t == "seats" then
     self.seats = msg.seats
   elseif t == "start" then
@@ -53,6 +73,10 @@ function Client:poll()
       local ans = self.on_request(self, msg)
       if ans ~= nil then self:respond(msg.id, ans) end
     end
+  elseif t == "chat" then
+    table.insert(self.chats, msg)
+  elseif t == "spectating" then
+    self.spectating = true
   elseif t == "over" then
     self.over = msg
   end
@@ -79,7 +103,7 @@ end
 
 -- 控制台客户端：连上、ready、自动应答请求。
 -- auto 为应答策略：function(req_msg) -> value，默认一律 false（不发动/不出牌）
-function Client.consoleMain(name, host, port, auto)
+function Client.consoleMain(name, host, port, auto, spectate)
   local socket = require "socket"
   -- 管道/重定向时 stdout 是块缓冲，日志会迟迟不出现；改成行缓冲
   pcall(function() io.stdout:setvbuf("line") end)
@@ -89,12 +113,13 @@ function Client.consoleMain(name, host, port, auto)
     return false
   end
   print(string.format("[客户端] 已连接 %s:%d（名字 %s）", host or "?", port or 0, name))
-  c:hello()
-  c:ready(true)
+  c:hello(spectate)
+  if not spectate then c:ready(true) end
   auto = auto or function() return false end
   c.on_request = function(_self, req) return auto(req) end
 
   local seen = 0
+  local seen_chat = 0
   local guard = 0
   while not c.over and guard < 200000 do
     guard = guard + 1
@@ -103,6 +128,11 @@ function Client.consoleMain(name, host, port, auto)
     while seen < #c.logs do
       seen = seen + 1
       print("  | " .. c.logs[seen])
+    end
+    while seen_chat < #c.chats do
+      seen_chat = seen_chat + 1
+      local m = c.chats[seen_chat]
+      print(string.format("  [%s] %s", tostring(m.name), tostring(m.text)))
     end
     if c.over then break end
     socket.sleep(0.02)

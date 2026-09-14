@@ -34,6 +34,8 @@ function Host:init(opts)
   self.next_req_id = 1
   self.waiting = nil   -- { seat=, id= }
   self.last_log = 0
+  self.spectators = {} -- 只收 log/state，不占座、不会被请求
+  self.chats = {}      -- 聊天记录（新连入的人也能看到历史）
   self.general_names = opts.generals or { "张飞", "曹操", "司马懿", "华佗" }
 end
 
@@ -63,7 +65,55 @@ function Host:attach(name, channel)
   s.name = name or ("玩家" .. i)
   s.channel = channel
   s.ready = false
-  return i
+  s.dropped_at = nil
+  -- 重连令牌在占座时就生成并随 welcome 下发，掉线后凭它认座
+  s.resume_token = string.format("s%d-%d-%d", i, os.time(), math.random(100000))
+  return i, s.resume_token
+end
+
+-- 掉线：保留座位一段时间（宽限期内可重连），不是立即清空
+function Host:dropSeat(seat)
+  local s = self.seats[seat]
+  if not s then return end
+  s.channel = nil
+  s.dropped_at = os.time()
+end
+
+-- 重连：宽限期内且令牌一致才能坐回原位
+function Host:resumeSeat(channel, token)
+  for i, s in ipairs(self.seats) do
+    if not s.channel and s.resume_token == token then
+      if not s.dropped_at then return nil end
+      if os.time() - (s.dropped_at or 0) > RESUME_GRACE then
+        s.dropped_at = nil
+        return nil
+      end
+      s.channel = channel
+      s.dropped_at = nil
+      return i
+    end
+  end
+  return nil
+end
+
+-- 观战：不占座
+function Host:addSpectator(ch, name)
+  table.insert(self.spectators, { channel = ch, name = name or "观战者" })
+end
+
+function Host:removeSpectator(ch)
+  for i, sp in ipairs(self.spectators) do
+    if sp.channel == ch then table.remove(self.spectators, i) return true end
+  end
+  return false
+end
+
+-- 聊天：记历史并广播
+function Host:chat(seat, name, text)
+  local msg = { type = "chat", seat = seat, name = name, text = text }
+  table.insert(self.chats, msg)
+  if #self.chats > 50 then table.remove(self.chats, 1) end
+  self:broadcast(msg)
 end
 
 function Host:detach(seat)
@@ -159,9 +209,21 @@ function Host:broadcast(msg)
   for _, s in ipairs(self.seats) do
     if s.channel then
       local ok = pcall(function() s.channel:send(msg) end)
-      if not ok then self:detach(s.index) end
+      if not ok then self:dropSeat(s.index) end
     end
   end
+  -- 观战者同样收到（只是不会被发请求）
+  for _, sp in ipairs(self.spectators) do
+    pcall(function() sp.channel:send(msg) end)
+  end
+end
+
+-- 掉线宽限（秒）：超时未重连则座位让出，等待中的请求判为放弃
+RESUME_GRACE = 60
+
+-- 宽限是否到期
+local function graceExpired(s)
+  return not s.dropped_at or (os.time() - s.dropped_at) > RESUME_GRACE
 end
 
 -- 增量日志（只发新增部分）
@@ -189,6 +251,10 @@ function Host:tick()
   -- 已有请求在等人？看看应答到了没
   if self.waiting then
     local s = self.seats[self.waiting.seat]
+    -- 掉线宽限期内**继续等**，给重连留出时间；过期才判放弃
+    if s and not s.channel and s.dropped_at and not graceExpired(s) then
+      return "waiting"
+    end
     if not s or not s.channel then
       self.waiting = nil
       if self.room.pending then self.room:step(nil) end
@@ -199,6 +265,9 @@ function Host:tick()
       if msg.type == "resp" and msg.id == self.waiting.id then
         self.waiting = nil
         self.room:step(self:toResponse(msg))
+        -- 对局也可能是在这次应答后结束的（比如应答者阵亡导致胜负已定），
+        -- 这个分支直接 return，必须补一次结束广播，否则 over 消息时有时无
+        if self.room.game_over then self:flushOver() end
         return "running"
       end
       msg = s.channel:recv()

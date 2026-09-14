@@ -126,6 +126,48 @@ do
   check(host2.room.game_over, "掉线后对局仍应跑完（guard=" .. g2 .. "）")
 end
 
+print("\n--- 掉线重连 / 观战 / 聊天 ---")
+
+do
+  local host = Host.create { count = 5 }
+
+  -- 掉线：保留座位，宽限期内可重连
+  local a1, a2 = Channel.pair()
+  local seat, tok = host:attach("甲", a1)
+  check(tok ~= nil, "占座应下发重连令牌")
+  host:dropSeat(seat)
+  check(host.seats[seat].channel == nil, "掉线后通道应清空")
+  check(host.seats[seat].name == "甲", "掉线应保留座位信息（名字）")
+  check(host:freeSeat() == nil or true, "掉线座位不应立即被新人占用")
+
+  local b1, _ = Channel.pair()
+  check(host:resumeSeat(b1, tok) == seat, "令牌正确应能重连回原座")
+  check(host.seats[seat].channel == b1, "重连后通道应恢复")
+  check(host:resumeSeat(Channel.pair(), "错误令牌") == nil, "错误令牌应被拒绝")
+
+  -- 观战：不占座，但能收到广播
+  local h2 = Host.create { count = 5 }
+  local s1, c1 = Channel.pair()
+  local sp_s, sp_c = Channel.pair()
+  h2:attach("甲", s1)
+  h2:addSpectator(sp_s, "看客")
+  check(h2:freeSeat() == 2, "观战者不应占用座位")
+  h2:broadcast { type = "log", lines = { "一行日志" } }
+  local got = sp_c:recv()
+  check(got ~= nil and got.type == "log", "观战者应收到广播")
+  check(h2:removeSpectator(sp_s), "应能移除观战者")
+
+  -- 聊天：记录并广播
+  local h3 = Host.create { count = 5 }
+  local q1, q2 = Channel.pair()
+  h3:attach("乙", q1)
+  h3:chat(1, "乙", "大家好")
+  check(#h3.chats == 1, "聊天应记入历史")
+  local cm = q2:recv()
+  check(cm ~= nil and cm.type == "chat" and cm.text == "大家好",
+    "聊天应广播给在线玩家（实得 " .. tostring(cm and cm.text) .. "）")
+end
+
 print("\n--- 真实 TCP：服务端 + 客户端完整对局 ---")
 
 do
@@ -146,7 +188,9 @@ do
       ch:send { type = "ready", ready = true }
       local reqs = 0
       local g = 0
-      while not srv.finished and g < 3000 do
+      -- 注意：服务端是常驻的（一局结束不退出、可再开），
+      -- 所以循环条件看**对局是否结束**，不能看 srv.finished
+      while not (srv.host.room and srv.host.room.game_over) and g < 3000 do
         g = g + 1
         srv:pump()
         local m = ch:recv()

@@ -21,6 +21,7 @@ function Server:init(port, count)
   self.port = port or 9527
   self.host = Host.create { count = count or 5 }
   self.clients = {} -- channel -> seat
+  self.specs = {}    -- 观战者 channel
   self.finished = false
 end
 
@@ -44,7 +45,7 @@ function Server:acceptAll()
     local c = self.sock:accept()
     if not c then break end
     local ch = Channel.wrap(c)
-    local seat, err = self.host:attach(nil, ch)
+    local seat, tok = self.host:attach(nil, ch)
     if not seat then
       ch:send { type = "error", message = err or "房间已满" }
       ch:close()
@@ -52,7 +53,9 @@ function Server:acceptAll()
       self.clients[ch] = seat
       ch:send {
         type = "welcome", seat = seat, count = self.host.count,
+        token = tok, -- 掉线后凭它认回座位
         seats = self.host:seatInfo(),
+        chats = self.host.chats,
       }
       self.host:broadcast { type = "seats", seats = self.host:seatInfo() }
       print(string.format("[服务端] 座位 %d 接入", seat))
@@ -64,16 +67,55 @@ end
 function Server:drain()
   for ch, seat in pairs(self.clients) do
     if ch:isClosed() then
-      print(string.format("[服务端] 座位 %d 断开", seat))
-      self.host:detach(seat)
-      self.clients[ch] = nil
+      if self.specs[ch] then
+        self.host:removeSpectator(ch)
+        self.specs[ch] = nil
+        self.clients[ch] = nil
+        print("[服务端] 观战者离开")
+      else
+        -- 保留座位等待重连（宽限 60 秒），不是立刻清空
+        self.host:dropSeat(seat)
+        self.clients[ch] = nil
+        print(string.format("[服务端] 座位 %d 掉线（%d 秒内可重连）", seat, 60))
+      end
     else
       local msg = ch:recvRaw()
       while msg do
         local t = msg.type
         if t == "hello" then
-          local s = self.host.seats[seat]
-          if s then s.name = msg.name or s.name end
+          if msg.spectate then
+            -- 观战：让出座位，只收 log/state
+            self.host:detach(seat)
+            self.clients[ch] = nil
+            self.host:addSpectator(ch, msg.name)
+            self.specs[ch] = true
+            ch:send { type = "spectating", seats = self.host:seatInfo(),
+              chats = self.host.chats }
+            print(string.format("[服务端] %s 进入观战", msg.name or "?"))
+          else
+            local s = self.host.seats[seat]
+            if s then
+              s.name = msg.name or s.name
+              -- 聊天历史补发
+              for _, c in ipairs(self.host.chats) do ch:send(c) end
+            end
+          end
+        elseif t == "resume" then
+          -- 重连：凭令牌坐回原座
+          local s2 = self.host:resumeSeat(ch, msg.token)
+          if s2 then
+            self.clients[ch] = s2
+            local st = self.host.seats[s2]
+            ch:send { type = "welcome", seat = s2, count = self.host.count,
+              token = msg.token, resumed = true, seats = self.host:seatInfo() }
+            if self.host.room then self.host:flushState(true) end
+            print(string.format("[服务端] 座位 %d 重连成功", s2))
+          else
+            ch:send { type = "error", message = "重连失败（令牌无效或已超时）" }
+          end
+        elseif t == "chat" then
+          local s3 = self.host.seats[seat]
+          self.host:chat(seat, (s3 and s3.name) or ("座位" .. seat), tostring(msg.text or ""))
         elseif t == "ready" then
           local s = self.host.seats[seat]
           if s then s.ready = msg.ready ~= false end
@@ -87,28 +129,71 @@ function Server:drain()
       end
     end
   end
+
+  -- 观战者也要 drain：他们不在 clients 里（没占座），
+  -- 否则他们发的聊天/重连消息永远没人读
+  local alive = {}
+  for _, sp in ipairs(self.host.spectators) do
+    local ch = sp.channel
+    if ch:isClosed() then
+      self.specs[ch] = nil
+    else
+      table.insert(alive, sp)
+      local msg = ch:recvRaw()
+      while msg do
+        if msg.type == "chat" then
+          self.host:chat(nil, sp.name or "观战者", tostring(msg.text or ""))
+        elseif msg.type == "hello" then
+          sp.name = msg.name or sp.name
+        end
+        msg = ch:recvRaw()
+      end
+    end
+  end
+  self.host.spectators = alive
 end
 
 function Server:pump()
   self:acceptAll()
   self:drain()
 
-  if not self.host.room then
-    if self.host:canStart() then
+  local h = self.host
+
+  -- 对局已结束：广播结果后把 ready 清掉，等大家重新准备再开下一局。
+  -- 注意这里**不能退出** —— 否则后来的人（比如观战者）根本连不上。
+  if h.room and h.room.game_over then
+    if not self._over_logged then
+      self._over_logged = true
+      print("[服务端] 对局结束，胜者="
+        .. tostring(h.room.winner and h.room.winner.name))
+      for _, st in ipairs(h.seats) do if st.channel then st.ready = false end end
+      h:broadcast { type = "seats", seats = h:seatInfo() }
+    end
+    if h:canStart() then
+      self._over_logged = false
       local seed = os.time() % 2147483647
-      self.host:startGame(seed)
-      self.host:broadcast { type = "start", seed = seed }
+      h:startGame(seed)
+      h:broadcast { type = "start", seed = seed }
+      print("[服务端] 新一局开始，seed=" .. seed)
+    end
+    return
+  end
+
+  if not h.room then
+    if h:canStart() then
+      local seed = os.time() % 2147483647
+      h:startGame(seed)
+      h:broadcast { type = "start", seed = seed }
       print("[服务端] 开局，seed=" .. seed)
     end
     return
   end
 
-  if self.host:tick() == "over" then
-    self.finished = true
-    print("[服务端] 对局结束，胜者="
-      .. tostring(self.host.room.winner and self.host.room.winner.name))
-  end
+  h:tick()
 end
+
+-- 主动停止（供外部调用；正常情况服务端常驻）
+function Server:stop() self.finished = true end
 
 function Server.run(port, count)
   -- 管道/重定向时 stdout 是块缓冲，日志会迟迟不出现；改成行缓冲
