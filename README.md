@@ -2,15 +2,18 @@
 
 QSanguosha（C++/Qt，2010-2014）→ LÖVE2D (Lua) 的重写项目。
 
-当前进度：**A1 + B + C 已完成** —— 标准包 60 将、sgs.* 兼容层（可加载原版 DIY
-扩展）、接入原版美术与音频的牌桌 UI。D（网络对局）未开始。
+当前进度：**A1 + B + C 已完成** —— 标准包 60 将（蜀/魏/吴/群 各 15）、
+sgs.* 兼容层（可加载原版 DIY 扩展）、接入原版美术与音频的牌桌 UI。
+D（网络对局）未开始。
+
+测试：**核心 339 项 + UI 12 项 = 351 全通过**。
 
 ## 运行
 
 项目自带便携版 LÖVE（`tools/love.app`，11.5），无需额外安装。
 
 ```bash
-./run-tests.sh        # 无头：静态检查 + 339 项单测（约 2 秒）
+./run-tests.sh        # 无头：静态检查 + 单测（核心 339 + UI 12，约 2 秒）
 ./run-soak.sh         # 无头：压测（60 将逐将覆盖 + 多种子回归 + 卡牌守恒）
 ./run-game.sh         # 图形界面
 ```
@@ -45,7 +48,7 @@ print(Cards.get("slash").zh)   -- 杀
 src/core/     纯 Lua 规则引擎（零 love 依赖，headless 可测）
 src/compat/   sgs.* 兼容层，加载 diy/ 下的原版社区扩展
 src/ui/       LÖVE 场景（菜单/牌桌）+ 皮肤/音频/布局/动效
-diy/          DIY 扩展示例（武将包）
+diy/          DIY 扩展示例 3 份（武将包）：转化技 / 技能牌 / 询问类 API
 tests/        BOT vs BOT 全量对局测试 + 多种子回归 + 卡牌守恒
 tools/        lint_methods.py（点号/冒号检查）、lua.sh、love.app
 assets/       字体（复用原版 DroidSansFallback）
@@ -63,3 +66,24 @@ assets/       字体（复用原版 DroidSansFallback）
 | B | sgs.* 兼容层 + diy/ 扩展加载器 | ✅（国战机制与 bot 提示表按决策不做） |
 | C | 完整 UI（皮肤/布局/音频/动效） | ✅（待实机验证观感） |
 | D | LuaSocket 网络服务端 + 多人 | ⬜ 未开始 |
+
+## 已知限制
+
+按「有意为之」与「尚未覆盖」分开列，避免接手时误判成 bug：
+
+**有意为之（决策结果）**
+- **不做国战机制**，只做标准身份局 → 邹氏的【祸水】【倾城】纯属国战机制，
+  她在名册里保留占位但**无技能**
+- **不消费原版 bot 提示表**（`sgs.ai_*`）。表名继续保留（DIY 脚本会往里塞值，
+  改名就崩），但引擎不读；决策逻辑走自己的 `src/core/bot.lua`
+- DIY 的 `askForYiji` / `askForExchange` 等是桩实现 —— BOT 没有对应的
+  交互界面，强做反而是假的
+
+**尚未覆盖**
+- 只移植了**标准包**。原版扩展包（`strategic-advantage` 军争、
+  `formation`、`jiange-defense`、`momentum`）未移植
+- **宝物**（`sgs.CreateTreasure`）没有对应槽位，映射到防具槽
+- DIY 卡牌包（`Package_CardPack`）刚支持，覆盖度不如武将包
+- 压测中约 11/200 局因长时间拉锯**判平局**（连续 80 回合无人阵亡）——
+  是 BOT 打不穿残局囤牌的合法结果，不是死循环；`MAX_TURNS=300` 仍是
+  真正的死循环保险
