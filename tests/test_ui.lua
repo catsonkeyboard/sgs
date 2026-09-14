@@ -289,19 +289,60 @@ do
   local Cards = require "src.core.cards"
 
   -- 构造一个可控局面：人类手上一张【杀】，当前请求为 askForUseCard
+  --
+  -- **不能直接覆盖 room.pending**：协程停在哪个 yield 上是有状态的。
+  -- 开局时 pending 完全可能是 askForSkillInvoke（随机武将先弹技能征询），
+  -- 此时把 pending 改写成 askForUseCard，后续 room:step 传入的
+  -- {card, target} 会被协程当成「是否发动技能」来解读（非 true → 不发动），
+  -- 【杀】根本进不了结算 —— 表现就是「拖过去什么也没发生」，测试随机红。
+  -- 正确做法是**推进到真实的出牌请求**，而不是伪造一个。
   local function setupDrag()
-    local sc = RoomScene.create(function() end)
-    local slash = Card.create(9001, "slash", Card.Suit.Spade, 5, Card.Type.Basic)
-    table.insert(sc.human.hand, slash)
-    sc.picked = nil
-    sc.dragging = nil
-    sc.msg = ""
-    sc.room.pending = { type = "askForUseCard", player = sc.human }
-    return sc, slash
+    local sc = nil
+    for _ = 1, 10 do
+      -- 固定 seed：武将、发牌、身份、第一个 pending 的类型全部确定，
+      -- 用例才是可复现的（否则「有没有距离内的目标」每次都不一样）
+      sc = RoomScene.create(function() end, "identity", 5, "off", { seed = 20260914 })
+      local guard = 0
+      while not sc.room.game_over and guard < 200 do
+        guard = guard + 1
+        local req = sc.room.pending
+        if not req then break end
+        if req.type == "askForUseCard" and req.player == sc.human then break end
+        sc:_step(nil) -- 其余请求一律「不发动 / 跳过」，把引擎推到出牌阶段
+      end
+      local req = sc.room.pending
+      -- 还得有距离内的合法目标：没有的话 mousepressed 会以「没有合法目标」
+      -- 直接拒绝选中（picked 保持 nil），用例照样无从验证
+      if req and req.type == "askForUseCard" and req.player == sc.human then
+        local slash = Card.create(9001, "slash", Card.Suit.Spade, 5, Card.Type.Basic)
+        table.insert(sc.human.hand, slash)
+        sc.picked = slash
+        local reachable = false
+        for _, q in ipairs(sc.players) do
+          if q ~= sc.human and q.alive and sc:isValidTarget(q) then
+            reachable = true break
+          end
+        end
+        sc.picked = nil
+        if reachable then
+          sc.dragging = nil
+          sc.msg = ""
+          -- 推进对局会触发技能/出牌的演示动画（presentQueue）。
+          -- 演示没播完时 mousepressed 直接 return（isPresenting 保护），
+          -- picked 永远是 nil。这里直接清空队列：update(dt) 每帧只消费一项，
+          -- 引擎又会补新的，等不完。
+          sc.presentQueue = {}
+          return sc, slash
+        end
+      end
+      sc = nil
+    end
+    return nil, nil
   end
 
   -- 1) 按下卡牌应进入「已选中 + 拖拽中」
   local sc, slash = setupDrag()
+  if sc then -- 拿不到出牌阶段就整体跳过（见 setupDrag 注释）
   local req = sc.room.pending
   local idx = #sc.human.hand
   local cx, cy = sc:handCardRect(idx)
@@ -324,8 +365,16 @@ do
     local a = sc:anchorOf(victim)
     local before = #sc.human.hand
     sc:mousereleased(a[1] + 5, a[2] + 5, 1)
-    check(#sc.human.hand < before, "拖到合法目标松手应打出该牌（手牌 "
-      .. before .. " -> " .. #sc.human.hand .. "）")
+    local after = #sc.human.hand
+    check(after < before, "拖到合法目标松手应打出该牌（手牌 "
+      .. before .. " -> " .. after .. "）"
+      .. (after < before and "" or
+        ("  [诊断] 目标=" .. tostring(victim.name)
+          .. " 点中=" .. tostring(sc:panelAt(a[1] + 5, a[2] + 5) == victim)
+          .. " 拒绝原因=" .. tostring(sc:rejectReason(victim))
+          .. " msg=" .. tostring(sc.msg)
+          .. " pending=" .. tostring(sc.room.pending and sc.room.pending.type)
+          .. " 演示中=" .. tostring(sc:isPresenting()))))
     check(sc.dragging == nil, "打出后应清除拖拽状态")
   else
     print("SKIP  本局没有距离内的合法目标，跳过打出用例")
@@ -333,35 +382,44 @@ do
 
   -- 4) 拖到距离外的目标：不应打出，且要给出原因
   local sc2, slash2 = setupDrag()
-  sc2.picked, sc2.dragging = slash2, slash2 -- 等价于 mousepressed 后的状态
-  local far = nil
-  for _, q in ipairs(sc2.players) do
-    if q ~= sc2.human and q.alive and not sc2:isValidTarget(q) then far = q break end
-  end
-  if far then
-    local a = sc2:anchorOf(far)
-    local before = #sc2.human.hand
-    sc2:mousereleased(a[1] + 5, a[2] + 5, 1)
-    check(#sc2.human.hand == before, "拖到非法目标松手不应打出该牌")
-    check((sc2.msg or "") ~= "", "非法目标应给出提示（实得「" .. tostring(sc2.msg) .. "」）")
-    local why = sc2:rejectReason(far)
-    check(why ~= nil, "应能说明被拒绝的原因（实得 " .. tostring(why) .. "）")
-  else
-    print("SKIP  本局所有目标都合法，跳过距离不足用例")
+  if sc2 then
+    sc2.picked, sc2.dragging = slash2, slash2 -- 等价于 mousepressed 后的状态
+    local far = nil
+    for _, q in ipairs(sc2.players) do
+      if q ~= sc2.human and q.alive and not sc2:isValidTarget(q) then far = q break end
+    end
+    if far then
+      local a = sc2:anchorOf(far)
+      local before = #sc2.human.hand
+      sc2:mousereleased(a[1] + 5, a[2] + 5, 1)
+      check(#sc2.human.hand == before, "拖到非法目标松手不应打出该牌")
+      check((sc2.msg or "") ~= "", "非法目标应给出提示（实得「" .. tostring(sc2.msg) .. "」）")
+      local why = sc2:rejectReason(far)
+      check(why ~= nil, "应能说明被拒绝的原因（实得 " .. tostring(why) .. "）")
+    else
+      print("SKIP  本局所有目标都合法，跳过距离不足用例")
+    end
   end
 
   -- 5) 距离提示文案应包含攻击范围
   local sc3, slash3 = setupDrag()
-  sc3.picked, sc3.dragging = slash3, slash3
-  local txt = sc3:dragStatusText()
-  check(txt ~= nil and txt:find("攻击范围", 1, true) ~= nil,
-    "拖拽提示应显示攻击范围（实得 " .. tostring(txt) .. "）")
+  if sc3 then
+    sc3.picked, sc3.dragging = slash3, slash3
+    local txt = sc3:dragStatusText()
+    check(txt ~= nil and txt:find("攻击范围", 1, true) ~= nil,
+      "拖拽提示应显示攻击范围（实得 " .. tostring(txt) .. "）")
+  end
 
   -- 6) 松手在空白处：保留已选中，不取消（两段式仍可用）
   local sc4, slash4 = setupDrag()
-  sc4.picked, sc4.dragging = slash4, slash4
-  sc4:mousereleased(5, 5, 1)
-  check(sc4.picked == slash4, "松手在空白处应保留已选中状态")
+  if sc4 then
+    sc4.picked, sc4.dragging = slash4, slash4
+    sc4:mousereleased(5, 5, 1)
+    check(sc4.picked == slash4, "松手在空白处应保留已选中状态")
+  end
+  else
+    print("SKIP  没能推进到出牌阶段，跳过拖拽用例")
+  end
 end
 
 print()

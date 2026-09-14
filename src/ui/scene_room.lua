@@ -42,7 +42,9 @@ local ANCHORS_4 = {
 local ANCHORS_2 = { [1] = { 40, 440 }, [2] = { 40, 24 } }
 
 -- ai_mode: "off"（无人托管）/ "others"（除你以外的座位）/ "all"（全托管，含你自己）
-function RoomScene:init(on_exit, mode, size, ai_mode)
+-- opts.seed: 固定发牌与身份的种子。测试必须传，否则每次开局局面都不同，
+--            「推进到出牌阶段」「是否有距离内的目标」都会随机变化，用例随机红。
+function RoomScene:init(on_exit, mode, size, ai_mode, opts)
   -- 皮肤配置（原版 skins/*.json）与音频。缺资源时全部安全降级，不影响对局。
   self.skin = Skin.create()
   self.cardImages = {}
@@ -62,7 +64,7 @@ function RoomScene:init(on_exit, mode, size, ai_mode)
   -- 身份局按 size 建局（8/5/4 人）
   -- 武将**随机且不重复**：以前是固定名单取模，座位 1 永远张飞、
   -- 座位 5 又绕回张飞，导致每局武将都一样、桌位之间还重复。
-  local seed = os.time() % 2147483647
+  local seed = (opts and opts.seed) or (os.time() % 2147483647)
   local picks = Standard.pickGenerals(engine, Standard.makeRng(seed + 7), size)
 
   local players = {}

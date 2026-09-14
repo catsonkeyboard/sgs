@@ -40,6 +40,12 @@ LOVE_MODULES = {
     "physics", "touch", "joystick", "thread", "data", "font",
 }
 
+# LuaSocket 的模块名。它的 API 是**函数式**的（socket.bind / http.request /
+# ltn12.sink.table），点号调用才是正确写法；不加进来的话，一旦项目里
+# 存在同名的冒号方法（本项目就有 Curl:request / Proxy:request），
+# 就会被误报成「应改为冒号调用」。
+LUA_MODULES = {"socket", "http", "ltn12", "mime", "ssl", "url", "ftp", "smtp"}
+
 # 标准库/常见方法名：本仓库里若有同名定义也不该据此报错
 # （例如自己写了 ExpPattern.match，不代表 s:match() 这种字符串调用有错）
 STDLIB_METHODS = {
@@ -101,7 +107,7 @@ def scan(root, colon_defs, dot_defs):
             for recv, meth, first in re.findall(
                 r"\b(\w+)\.(\w+)\s*\(\s*([\w.]+)?", line
             ):
-                if recv in STDLIB_RECEIVERS or recv in LOVE_MODULES:
+                if recv in STDLIB_RECEIVERS or recv in LOVE_MODULES or recv in LUA_MODULES:
                     continue
                 if meth in EXPLICIT_SELF_OK:
                     continue
@@ -112,10 +118,9 @@ def scan(root, colon_defs, dot_defs):
 
             # 方向 2：点号定义的方法被冒号调用
             for recv, meth in re.findall(r"\b(\w+):(\w+)\s*\(", line):
-                if recv in STDLIB_RECEIVERS or recv in LOVE_MODULES:
+                if recv in STDLIB_RECEIVERS or recv in LOVE_MODULES or recv in LUA_MODULES:
                     continue
                 if meth in EXPLICIT_SELF_OK or meth in STDLIB_METHODS:
-                    continue
                     continue
                 if meth in dot_defs and meth not in colon_defs:
                     issues.append((str(f), ln, f"{recv}:{meth}()", f"{recv}.{meth}()", stripped))

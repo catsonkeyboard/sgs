@@ -2578,5 +2578,38 @@ do -- 白名单改为遍历牌堆配比，防止名单本身腐坏（历史教�
   check(Card.ZH["ex_nihilo"] == "无中生有", "中文名映射由 cards.lua 注册")
 end
 
+print("\n--- 目标禁止判定：UI 查询与引擎结算必须一致 ---")
+
+do
+  -- 曾经踩过：canUseCardOn 没检查【空城】/【帷幕】/【谦逊】/判定区同名，
+  -- 而这些只在真正结算的 _validateUse 里判。结果 UI 把目标标绿，
+  -- 玩家拖过去却被悄悄退还 —— 表现是「点了牌、点了武将，什么也没发生」。
+  local engine = Engine.create()
+  Standard.setup(engine)
+  local zhuge = engine:getGeneral("诸葛亮")   -- 【空城】：无手牌不能被杀/决斗指定
+  if not zhuge then
+    print("SKIP  名册里没有诸葛亮，跳过空城用例")
+  else
+    local a = Player.create("甲", engine:getGeneral("白板武将"), 1, false)
+    local b = Player.create("乙", zhuge, 2, false)
+    local r = Room.create(engine, { a, b })
+    local slash = Card.create(90001, "slash", Card.Suit.Spade, 5, Card.Type.Basic)
+    local duel = Card.create(90003, "duel", Card.Suit.Spade, 3, Card.Type.Trick)
+
+    local ok1, why1 = r:canUseCardOn(a, slash, b)
+    check(ok1 == false, "【空城】无手牌时，出牌前的查询就该拒绝（而不是打出去才退还）")
+    check(type(why1) == "string" and why1:find("空城") ~= nil,
+      "拒绝时应给出原因（实得 " .. tostring(why1) .. "）")
+
+    local ok2 = r:canUseCardOn(a, duel, b)
+    check(ok2 == false, "【空城】同样挡住【决斗】")
+
+    -- 有手牌时恢复正常（不能被这个检查误伤）
+    table.insert(b.hand, Card.create(90002, "dodge", Card.Suit.Heart, 2, Card.Type.Basic))
+    local ok3, why3 = r:canUseCardOn(a, slash, b)
+    check(ok3 == true, "【空城】有手牌时可以被【杀】指定（实得 " .. tostring(why3) .. "）")
+  end
+end
+
 print(string.format("\n===== 核心: %d passed, %d failed =====", passes, failures))
 if failures > 0 then error("核心测试失败", 0) end

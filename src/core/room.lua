@@ -1233,7 +1233,44 @@ function Room:_validateUse(from, card, targets)
   return true
 end
 
--- UI / BOT 在出牌前查询「这张牌能不能指定这个目标」。
+-- 目标是否因技能/状态而无法被指定。
+--
+-- 这一组判定原先**只写在 _validateUse 里**，canUseCardOn 没有，
+-- 于是出现「UI 把目标标绿 → 玩家拖过去 → 引擎悄悄退还」：
+-- 玩家看到的就是点了没反应，回合还莫名结束。
+-- 典型触发：诸葛亮【空城】且手牌为空时，UI 认为可以出【杀】，引擎拒绝。
+-- 现在 canUseCardOn 与 _validateUse 共用同一份判定，二者永远一致。
+function Room:_rejectsTarget(from, card, to)
+  local def = Cards.get(card.name)
+  if not def then return nil end
+
+  -- 【帷幕】（锁定技）：不能成为黑色锦囊牌的目标
+  if Generals.marker(to, "no_black_trick", false) and def.ctype == Card.Type.Trick
+    and not card:isRed() then
+    return "【帷幕】不能成为黑色锦囊的目标"
+  end
+
+  -- 【谦逊】（锁定技）：不能成为指定锦囊（【顺手牵羊】【乐不思蜀】）的目标
+  local banned = Generals.marker(to, "no_target_tricks", nil)
+  if banned and def.ctype == Card.Type.Trick and banned[card.name] then
+    return "【谦逊】不能成为此牌的目标"
+  end
+
+  -- 延时锦囊：判定区同名只能有一张
+  if def.delayed and to:hasDelayed(card.name) then
+    return string.format("判定区已有【%s】", card:zhName())
+  end
+
+  -- 【空城】（锁定技）：没有手牌时不能成为【杀】/【决斗】的目标
+  if Generals.marker(to, "no_target_empty", false) and #to.hand == 0
+    and (isSlashName(card.name) or card.name == "duel") then
+    return "【空城】无手牌时不能成为此牌的目标"
+  end
+
+  return nil
+end
+
+-- UI / BOT / AI 在出牌前查询「这张牌能不能指定这个目标」。
 -- 规则判断一律留在 core：之前 UI 只看「是不是敌人」，结果选中超出攻击范围
 -- 的目标后 useCard 退还、_phase_play 直接 break，整个出牌阶段被吃掉 ——
 -- 玩家的表现就是「点了牌、点了武将，什么也没发生，回合还结束了」。
@@ -1272,6 +1309,10 @@ function Room:canUseCardOn(from, card, to)
         self:distance(from, to), card:zhName(), limit)
     end
   end
+
+  -- 目标侧的禁止判定：必须与 _validateUse 一致，见 _rejectsTarget 的注释
+  local why = self:_rejectsTarget(from, card, to)
+  if why then return false, why end
   return true
 end
 
