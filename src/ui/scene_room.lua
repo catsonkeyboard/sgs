@@ -115,15 +115,15 @@ function RoomScene:cardAt(x, y)
   return nil
 end
 
-function RoomScene:anchorOf(p)
-  local a = self.anchors[p.seat] or { 40, 24 }
-  return a[1], a[2]
-end
-
+-- 注意：本文件里**只应有这一份** anchorOf 定义（返回 {x, y} 表）。
+-- 之前在文件开头还有一份返回两个数字的同名定义，被这份覆盖，
+-- 导致 panelAt 里 `local px, py = self:anchorOf(p)` 拿到 (table, nil)
+-- → 点牌时报 "attempt to compare table with number"。
 function RoomScene:panelAt(x, y)
   for _, p in ipairs(self.players) do
-    local px, py = self:anchorOf(p)
-    if x >= px and x <= px + PANEL_W and y >= py and y <= py + PANEL_H then
+    local a = self:anchorOf(p)
+    local px, py = a and a[1], a and a[2]
+    if px and x >= px and x <= px + PANEL_W and y >= py and y <= py + PANEL_H then
       return p
     end
   end

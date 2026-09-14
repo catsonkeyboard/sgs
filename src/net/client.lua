@@ -21,8 +21,10 @@ function Client:init(name, channel)
   self.on_request = nil -- 可选回调：function(client, req_msg) -> 应答表
 end
 
-function Client:hello()
-  self.channel:send { type = "hello", name = self.name }
+-- hello / 观战：观战必须在 hello 时说明，服务端据此不分配座位。
+-- （这里原本还有一份无参数的 Client:hello，被下面这份覆盖成了死代码，已删除。）
+function Client:hello(spectate)
+  self.channel:send { type = "hello", name = self.name, spectate = spectate and true or nil }
 end
 
 function Client:ready(v)
@@ -32,11 +34,6 @@ end
 -- 聊天
 function Client:chat(text)
   self.channel:send { type = "chat", text = text }
-end
-
--- 观战（必须在 hello 时说明，服务端据此不分配座位）
-function Client:hello(spectate)
-  self.channel:send { type = "hello", name = self.name, spectate = spectate and true or nil }
 end
 
 -- 重连：用 welcome 下发的令牌坐回原座

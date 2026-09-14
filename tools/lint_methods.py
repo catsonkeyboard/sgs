@@ -63,6 +63,29 @@ def collect(root):
     return colon_defs, dot_defs
 
 
+# 同一个类里重复定义同名方法：后写的静默覆盖先写的，是极难查的一类 bug。
+# 本项目踩过：scene_room.lua 里 anchorOf 定义了两次（一份返回 {x,y} 表、
+# 一份返回两个数字），后者覆盖前者 → panelAt 拿到 (table, nil)，
+# 表现为点牌时报 "attempt to compare table with number"。
+# 只检查大写开头的接收者（真正的类）；`function s:filter()` 这类
+# 技能闭包里的局部方法不参与（同名出现多次是合法的）。
+CLASS_DEF = re.compile(r"function\s+([A-Z]\w*)[:.](\w+)\s*\(")
+
+
+def duplicates(root):
+    seen = {}
+    for f in sorted(pathlib.Path(root).rglob("*.lua")):
+        if ".git" in str(f):
+            continue
+        for ln, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            if line.strip().startswith("--"):
+                continue
+            m = CLASS_DEF.search(line)
+            if m:
+                seen.setdefault(m.groups(), []).append(f"{f}:{ln}")
+    return {k: v for k, v in seen.items() if len(v) > 1}
+
+
 def scan(root, colon_defs, dot_defs):
     issues = []
     for f in sorted(pathlib.Path(root).rglob("*.lua")):
@@ -110,6 +133,16 @@ def main():
     issues = []
     for r in roots:
         issues += scan(r, colon_defs, dot_defs)
+
+    dupes = {}
+    for r in roots:
+        dupes.update(duplicates(r))
+
+    if dupes:
+        print("发现同一个类的同名方法被重复定义（后者会静默覆盖前者）：")
+        for (cls, meth), locs in sorted(dupes.items()):
+            print(f"  {cls}:{meth}  ->  {', '.join(locs)}")
+        print("  修法：删掉多余的那份，或改名。\n")
 
     if issues:
         print("发现方法定义与调用语法不匹配：")

@@ -75,6 +75,25 @@ local ok_img, err_img = pcall(function() scene:draw() end)
 check(ok_img, "接入卡图后 draw() 仍应无异常"
   .. (ok_img and "" or ("：" .. tostring(err_img))))
 
+-- anchorOf / panelAt：曾因「同一份文件里 anchorOf 定义了两次」而崩溃。
+-- 一份返回两个数字、一份返回 {x,y} 表，后者覆盖前者，panelAt 拿到
+-- (table, nil) → 点牌时报 "attempt to compare table with number"。
+local a = scene:anchorOf(scene.human)
+check(type(a) == "table" and type(a[1]) == "number" and type(a[2]) == "number",
+  "anchorOf 应返回 {x, y} 且元素都是数字（实得 " .. type(a) .. "）")
+
+-- 注意 anchorOf 返回的是**表**，不能写 `local x, y = self:anchorOf(p)`
+-- （那就是当初踩的坑：会拿到 (table, nil)）
+local ok_pa, hit = pcall(function()
+  local pa = scene:anchorOf(scene.human)
+  return scene:panelAt(pa[1] + 5, pa[2] + 5)
+end)
+check(ok_pa, "panelAt 不应报错" .. (ok_pa and "" or ("：" .. tostring(hit))))
+if ok_pa then
+  check(hit == scene.human, "点击自己面板内应命中自己（实得 "
+    .. tostring(hit and hit.name) .. "）")
+end
+
 -- 音频：headless（stub 的 love 没有 audio）下必须静默降级，绝不影响对局
 local Audio = require "src.ui.audio"
 local ok_audio, err_audio = pcall(function()
