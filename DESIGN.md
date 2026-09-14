@@ -209,19 +209,17 @@ Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
 
 ### 待办（按优先级）
 
-1. **标记类技能接进引擎**（中）—— 当前是**空壳**
-   `sgs.CreateDistanceSkill / MaxCardsSkill / TargetModSkill / AttackRangeSkill /
-   ProhibitSkill` 目前只是 `markerSpec()` 挂上 `distance_correct`、
-   `max_cards_extra`、`target_residue`、`attack_range_extra`、`prohibit` 等字段，
-   但 **core 里一处都没查询**（已核实：0 处引用）。
-   即这类 DIY 技能能加载、不报错，但**完全不生效**。
-   需要逐个接到 `Room:distance`、手牌上限、目标校验、攻击范围、禁止目标上。
+1. ~~**标记类技能接进引擎**~~ ✅ 已完成
+   新增 core 查询：`Room:attackRangeOf / maxCards / slashLimit /
+   distanceLimitBonus / extraTargets / isProhibited`，并接到 `Room:distance`、
+   出杀的距离与次数校验、弃牌上限、`_validateUse` 上。
+   BOT 侧同步改用 `room:attackRangeOf`，否则标记技对 BOT 不可见。
 
-2. **卡牌包构造函数**（中）—— 完全没实现
+2. ~~**卡牌包构造函数**~~ ✅ 已完成
    `sgs.CreateTrickCard / CreateBasicCard / CreateEquipCard / CreateWeapon /
-   CreateArmor / CreateTreasure` 均为 0，因此
-   `sgs.Package(name, sgs.Package_CardPack)` 类型的扩展**加载不了**。
-   当前 `diy/` 三份示例都是武将包，所以没暴露这个问题。
+   CreateArmor / CreateTreasure` 均已实现，登记进 `Cards.define`，
+   效果走 `spec.on_effect / spec.on_use`。
+   已知限制：**宝物**（CreateTreasure）本引擎无宝物槽，映射到防具槽。
 
 3. **询问类方法的语义补齐**（小～中）
    现在是「能跑不崩」但语义是桩实现：

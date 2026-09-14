@@ -47,7 +47,7 @@ end
 --   - 手牌数是次项：残局双方都在囤牌时，手牌少的那个才【闪】得出来，
 --     不打他就会陷入「每回合出一张杀、对方出一张闪」的永久拉锯。
 local function targetInRange(p, room)
-  local range = p:attackRange()
+  local range = room:attackRangeOf(p)
   local best, best_score = nil, nil
   for _, q in ipairs(opponentsOf(p, room)) do
     if room:distance(p, q) <= range then

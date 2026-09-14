@@ -1202,13 +1202,13 @@ end
 
 do -- DIY 的 FilterSkill 也应接入 effSuit
   local sgs = require "src.compat.sgs"
+  -- 注意用原版约定：回调是**方法**，第一个参数是技能自身
   local filter = sgs.CreateFilterSkill{
     name = "测试过滤",
-    view_filter = function(card) return card.suit == Card.Suit.Spade end,
-    view_as = function(card)
+    view_filter = function(self, card) return card.suit == Card.Suit.Spade end,
+    view_as = function(self, card)
       -- 原版返回一张改过的牌；兼容层应能从中取出花色
-      local c = Card.create(card.id, card.name, Card.Suit.Heart, card.number, card.ctype)
-      return c
+      return Card.create(card.id, card.name, Card.Suit.Heart, card.number, card.ctype)
     end,
   }
   local engine = Engine.create()
@@ -1543,6 +1543,141 @@ do
       { from = ps4[2], to = ps4[1], n = 1, nature = "normal" })
   end)
   check(ps4[2].hp < hp, "【天香】应能用黑桃牌发动（红颜改写花色）")
+end
+
+print("\n--- 标记类技能接进引擎 ---")
+
+do
+  local sgs = require "src.compat.sgs"
+  local engine = Engine.create()
+  Standard.setup(engine)
+  local mk = function(n)
+    local ps = {}
+    for i = 1, (n or 3) do
+      table.insert(ps, Player.create("P" .. i, engine:getGeneral("白板武将"), i, false))
+    end
+    local r = Room.create(engine, ps)
+    r.drawPile = Standard.buildDrawPile(1)
+    return r, ps
+  end
+
+  -- DistanceSkill：距离 -1
+  local r, ps = mk()
+  local dist0 = r:distance(ps[1], ps[3]) -- 3 人环形：1 与 3 相邻，距离为 1
+  ps[1].extra_skills = {
+    sgs.CreateDistanceSkill{
+      name = "减距",
+      correct_func = function(self, from, to) return -1 end,
+    },
+  }
+  local dist1 = r:distance(ps[1], ps[3])
+  check(dist0 == 1, "3 人局 1↔3 基础距离应为 1（实得 " .. dist0 .. "）")
+  check(dist1 == 1, "距离最低为 1，不应被减到 0（实得 " .. dist1 .. "）")
+
+  -- 换个能看出差别的场景：4 人局对家距离 2
+  local r2, ps2 = mk(4)
+  local d0 = r2:distance(ps2[1], ps2[3])
+  ps2[1].extra_skills = {
+    sgs.CreateDistanceSkill{
+      name = "减距",
+      correct_func = function(self, from, to) return -1 end,
+    },
+  }
+  local d1 = r2:distance(ps2[1], ps2[3])
+  check(d0 == 2 and d1 == 1, string.format("DistanceSkill 应使距离 %d → %d", d0, d1))
+
+  -- MaxCardsSkill：手牌上限 +2
+  local r3, ps3 = mk()
+  local base = r3:maxCards(ps3[1])
+  ps3[1].extra_skills = {
+    sgs.CreateMaxCardsSkill{
+      name = "扩容",
+      extra_func = function(self, player) return 2 end,
+    },
+  }
+  check(r3:maxCards(ps3[1]) == base + 2,
+    string.format("MaxCardsSkill 应使上限 %d → %d", base, r3:maxCards(ps3[1])))
+
+  -- AttackRangeSkill：攻击范围 +1
+  local r4, ps4 = mk()
+  local ar0 = r4:attackRangeOf(ps4[1])
+  ps4[1].extra_skills = {
+    sgs.CreateAttackRangeSkill{
+      name = "长臂",
+      extra_func = function(self, player) return 1 end,
+    },
+  }
+  check(r4:attackRangeOf(ps4[1]) == ar0 + 1,
+    string.format("AttackRangeSkill 应使范围 %d → %d", ar0, r4:attackRangeOf(ps4[1])))
+
+  -- TargetModSkill：出杀次数 +1
+  local r5, ps5 = mk()
+  local sl0 = r5:slashLimit(ps5[1])
+  ps5[1].extra_skills = {
+    sgs.CreateTargetModSkill{
+      name = "连击",
+      residue_func = function(self, player, card) return 1 end,
+    },
+  }
+  check(r5:slashLimit(ps5[1]) == sl0 + 1,
+    string.format("TargetModSkill 应使出杀上限 %d → %d", sl0, r5:slashLimit(ps5[1])))
+
+  -- ProhibitSkill：禁止被指定
+  local r6, ps6 = mk()
+  local card = Card.create(1, "slash", Card.Suit.Spade, 5, Card.Type.Basic)
+  check(r6:isProhibited(ps6[1], ps6[2], card) == false, "默认不应禁止")
+  ps6[2].extra_skills = {
+    sgs.CreateProhibitSkill{
+      name = "护体",
+      is_prohibited = function(self, from, to, c) return to == ps6[2] end,
+    },
+  }
+  check(r6:isProhibited(ps6[1], ps6[2], card) == true, "ProhibitSkill 应拦下对该角色的指定")
+  check(r6:isProhibited(ps6[1], ps6[3], card) == false, "不应影响其他角色")
+end
+
+print("\n--- 卡牌包：新建卡种 ---")
+
+do
+  local sgs = require "src.compat.sgs"
+  local Cards = require "src.core.cards"
+
+  -- 定义一张新锦囊：指定一名角色，令其摸一张牌
+  local fired = false
+  local newcard = sgs.CreateTrickCard{
+    name = "测试锦囊",
+    target_fixed = false,
+    on_effect = function(self, effect)
+      fired = true
+      effect.from.room_dummy = effect.to
+    end,
+  }
+  check(Cards.get("测试锦囊") ~= nil, "新建锦囊应登记进卡种表")
+  check(Cards.isTrick("测试锦囊"), "CreateTrickCard 的卡种应为锦囊")
+  check(newcard ~= nil and newcard.name == "测试锦囊", "构造应返回一张该卡的实例")
+
+  -- 定义一张新武器，攻击范围 3
+  sgs.CreateWeapon{
+    name = "测试刀",
+    range = 3,
+    on_effect = function() end,
+  }
+  local def = Cards.get("测试刀")
+  check(def ~= nil, "新建武器应登记进卡种表")
+  check(Cards.isEquip("测试刀"), "CreateWeapon 的卡种应为装备")
+  check(def and def.equip == "weapon", "CreateWeapon 的槽位应为 weapon")
+  check(def and def.range == 3, "CreateWeapon 应记录攻击范围（实得 "
+    .. tostring(def and def.range) .. "）")
+
+  -- 防具 / 宝物
+  sgs.CreateArmor{ name = "测试甲", on_effect = function() end }
+  check((Cards.get("测试甲") or {}).equip == "armor", "CreateArmor 槽位应为 armor")
+  sgs.CreateTreasure{ name = "测试宝物", on_effect = function() end }
+  check(Cards.get("测试宝物") ~= nil, "CreateTreasure 应能登记（映射到防具槽）")
+
+  -- 基本牌
+  sgs.CreateBasicCard{ name = "测试基本", on_effect = function() end }
+  check((Cards.get("测试基本") or {}).ctype == Card.Type.Basic, "CreateBasicCard 卡种应为基本")
 end
 
 print("\n--- 主动技征询（人类玩家）---")

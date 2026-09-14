@@ -375,19 +375,119 @@ function sgs.CreateProhibitSkill(spec)
 end
 
 function sgs.CreateFilterSkill(spec)
-  -- 原版 FilterSkill 的 view_as 返回一张改过的牌；本引擎的 effSuit 需要的是
-  -- 「花色」，因此做一层适配：view_as 返回的若是牌就取其花色。
+  -- 原版这些回调是**方法**：脚本写成 function(self, card)。
+  -- 调用时必须把技能自身作为第一个参数传进去（等价于原版的冒号调用）。
+  local s
   local function suitOf(card)
-    local ok, made = pcall(spec.view_as, card)
+    -- FilterSkill 的 view_as 返回一张改过的牌；effSuit 要的是「花色」
+    local ok, made = pcall(spec.view_as, s, card)
     if not ok then return nil end
     if type(made) == "number" then return made end
     if type(made) == "table" and made.suit then return made.suit end
     return nil
   end
-  return markerSpec(spec, {
+  s = markerSpec(spec, {
     filter_view = suitOf,
-    filter_view_filter = spec.view_filter,
+    filter_view_filter = function(card) return spec.view_filter(s, card) == true end,
   })
+  return s
+end
+
+-- ===== 卡牌构造（卡牌包扩展用）=====
+-- 原版 sgs.CreateTrickCard / CreateBasicCard / CreateEquipCard / CreateWeapon /
+-- CreateArmor / CreateTreasure 用于定义**新卡种**（卡牌包扩展包）。
+-- 本引擎用 Cards.define 登记卡种定义，效果走 spec.on_effect / spec.on_use。
+
+-- 子类（对应原版 LuaTrickCard::SubClass 等）
+sgs.LuaTrickCard_TypeNormal = 0
+sgs.LuaTrickCard_TypeDelayedTrick = 1
+sgs.LuaTrickCard_TypeAOE = 2
+sgs.LuaTrickCard_TypeGlobalEffect = 3
+sgs.LuaTrickCard_TypeSingleTargetTrick = 4
+
+-- 把 spec 的效果函数包成引擎 Cards.define 需要的 effect(room, use)
+local function makeCardEffect(spec)
+  return function(room, use)
+    local from, to = use.from, use.to and use.to[1]
+    if spec.on_use then
+      spec.on_use(spec.__card, room, from, use.to or {})
+      return
+    end
+    if spec.on_effect then
+      for _, t in ipairs(use.to or {}) do
+        spec.on_effect(spec.__card, { card = use.card, from = from, to = t })
+      end
+    end
+  end
+end
+
+-- 统一登记：ctype 由调用方给，target 由 target_fixed / subclass 推导
+local function defineLuaCard(spec, ctype, overrides)
+  local name = spec.name or spec.class_name
+  assert(type(name) == "string", "卡牌需要 name")
+
+  local target = "enemy"
+  if spec.target_fixed then
+    target = "self"
+  else
+    local sc = spec.subclass or 0
+    if sc == sgs.LuaTrickCard_TypeAOE then
+      target = "all_other"
+    elseif sc == sgs.LuaTrickCard_TypeGlobalEffect then
+      target = "all"
+    end
+  end
+
+  local def = {
+    zh = sgs.Translations[name] or name,
+    ctype = ctype,
+    target = target,
+    nullifiable = (ctype == Card.Type.Trick) and (spec.nullifiable ~= false),
+    effect = makeCardEffect(spec),
+  }
+  if (spec.subclass or 0) == sgs.LuaTrickCard_TypeDelayedTrick then
+    def.delayed = true
+  end
+  for k, v in pairs(overrides or {}) do def[k] = v end
+
+  Cards.define(name, def)
+
+  -- 返回一张可用的实例（与原版一致：构造函数返回一张卡）
+  local c = Card.create(-1, name, spec.suit or Card.Suit.NoSuit, spec.number or 0, ctype)
+  spec.__card = c
+  spec.__def = def
+  return c
+end
+
+function sgs.CreateTrickCard(spec)
+  return defineLuaCard(spec, Card.Type.Trick)
+end
+
+function sgs.CreateBasicCard(spec)
+  return defineLuaCard(spec, Card.Type.Basic)
+end
+
+function sgs.CreateEquipCard(spec)
+  return defineLuaCard(spec, Card.Type.Equip, {
+    equip = spec.equip_slot or "weapon",
+  })
+end
+
+function sgs.CreateWeapon(spec)
+  return defineLuaCard(spec, Card.Type.Equip, {
+    equip = "weapon",
+    range = spec.range or 1,
+  })
+end
+
+function sgs.CreateArmor(spec)
+  return defineLuaCard(spec, Card.Type.Equip, { equip = "armor" })
+end
+
+-- 宝物：本引擎只有 武器/防具/进攻马/防御马 四个槽位，没有宝物槽。
+-- 这里登记为防具槽以便能装备，但语义上并不等价（已在下方注明）。
+function sgs.CreateTreasure(spec)
+  return defineLuaCard(spec, Card.Type.Equip, { equip = "armor" })
 end
 
 -- ===== 技能牌 =====

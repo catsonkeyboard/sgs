@@ -343,8 +343,86 @@ function Room:distance(a, b)
   -- 进攻马 -1、防御马 +1、技能标记（如【马术】-1）；最低为 1
   local skill_mod = Generals.marker(a, "distance_mod", 0) or 0
   local dist = d + (a:distanceModifier() or 0) + (b:defenseModifier() or 0) + skill_mod
+  -- 兼容层的 DistanceSkill：correct_func 返回修正值（原版是方法，故用冒号调用）
+  for _, s in ipairs(self:skillsOf(a)) do
+    if type(s.distance_correct) == "function" then
+      dist = dist + (s:distance_correct(a, b) or 0)
+    end
+  end
   if dist < 1 then dist = 1 end
   return dist
+end
+
+-- 攻击范围：武器基础值 + 兼容层 AttackRangeSkill 的 extra_func
+function Room:attackRangeOf(p)
+  local base = p:attackRange()
+  for _, s in ipairs(self:skillsOf(p)) do
+    if type(s.attack_range_extra) == "function" then
+      base = base + (s:attack_range_extra(p) or 0)
+    end
+  end
+  return base
+end
+
+-- 手牌上限：默认等于体力；兼容层 MaxCardsSkill 可修正
+function Room:maxCards(p)
+  local n = math.max(p.hp, 0)
+  for _, s in ipairs(self:skillsOf(p)) do
+    if type(s.max_cards_fixed) == "function" then
+      local fixed = s:max_cards_fixed(p)
+      if type(fixed) == "number" then return fixed end
+    end
+    if type(s.max_cards_extra) == "function" then
+      n = n + (s:max_cards_extra(p) or 0)
+    end
+  end
+  return n
+end
+
+-- 出【杀】的次数上限：默认 1，兼容层 TargetModSkill 的 residue_func 可增加
+function Room:slashLimit(p)
+  local n = 1
+  for _, s in ipairs(self:skillsOf(p)) do
+    if type(s.target_residue) == "function" then
+      n = n + (s:target_residue(p, nil) or 0)
+    end
+  end
+  return n
+end
+
+-- 是否可额外指定目标（兼容层 TargetModSkill 的 extra_target_func）
+function Room:extraTargets(p, card)
+  local n = 0
+  for _, s in ipairs(self:skillsOf(p)) do
+    if type(s.target_extra) == "function" then
+      n = n + (s:target_extra(p, card) or 0)
+    end
+  end
+  return n
+end
+
+-- 目标距离限制的放宽量（兼容层 TargetModSkill 的 distance_limit_func）
+function Room:distanceLimitBonus(p, card)
+  local n = 0
+  for _, s in ipairs(self:skillsOf(p)) do
+    if type(s.target_distance_limit) == "function" then
+      n = n + (s:target_distance_limit(p, card) or 0)
+    end
+  end
+  return n
+end
+
+-- 禁止技能（ProhibitSkill）：任意角色的该技能都可禁止某次指定
+function Room:isProhibited(from, to, card)
+  for _, p in ipairs(self.players) do
+    for _, s in ipairs(self:skillsOf(p)) do
+      if type(s.prohibit) == "function" then
+        local ok, blocked = pcall(s.prohibit, s, from, to, card)
+        if ok and blocked then return true end
+      end
+    end
+  end
+  return false
 end
 
 function Room:seatOf(p)
@@ -587,7 +665,7 @@ function Room:_phase_play(p)
 end
 
 function Room:_phase_discard(p)
-  local excess = #p.hand - p.hp
+  local excess = #p.hand - self:maxCards(p)
   if excess <= 0 then return end
   local discarded = self:askForDiscard(p, excess)
   local n = 0
@@ -837,7 +915,7 @@ function Room:_useBasic(from, card, targets)
 
   if name == "slash" or name == "fire_slash" or name == "thunder_slash" then
     local target = targets[1]
-    if from.slash_count > 0 and not self:allowsUnlimitedSlash(from) then
+    if from.slash_count >= self:slashLimit(from) and not self:allowsUnlimitedSlash(from) then
       self:log("%s 本回合已使用过【杀】，退还", from.name)
       self:_refund(from, card)
       return false
@@ -855,7 +933,8 @@ function Room:_useBasic(from, card, targets)
     end
     -- 【神速】/【天义】等生成的【杀】无视距离
     local far = Generals.marker(from, "slash_no_distance", false)
-    if not (card.no_distance_limit or far) and self:distance(from, target) > from:attackRange() then
+    local reach = self:attackRangeOf(from) + self:distanceLimitBonus(from, card)
+    if not (card.no_distance_limit or far) and self:distance(from, target) > reach then
       self:log("目标不在攻击范围内（距离 %d > 范围 %d），退还",
         self:distance(from, target), from:attackRange())
       self:_refund(from, card)
@@ -917,12 +996,23 @@ function Room:_validateUse(from, card, targets)
   local def = Cards.get(card.name)
   if not def then return true end
 
+  -- 禁止技（兼容层 ProhibitSkill / 原版 isProhibited）：任一角色的该技能
+  -- 都可禁止这次指定
+  for _, t in ipairs(targets or {}) do
+    if t and self:isProhibited(from, t, card) then
+      self:log("对 %s 的使用被禁止技拦下", t.name)
+      return false
+    end
+  end
+
   -- 【奇才】：使用锦囊牌无视距离限制
   local ignore_range = Generals.marker(from, "no_trick_range", false)
   if def.distance and not (ignore_range and def.ctype == Card.Type.Trick) then
     local t = targets[1]
     -- 逐牌名叠加距离加成：【断粮】使用【兵粮寸断】时距离 +1
+    -- 兼容层 TargetModSkill 的 distance_limit_func 也可放宽距离限制
     local limit = def.distance + Generals.marker(from, "extra_dist_" .. card.name, 0)
+      + self:distanceLimitBonus(from, card)
     if t and self:distance(from, t) > limit then
       self:log("目标超出【%s】的距离限制（%d > %d），退还",
         card:zhName(), self:distance(from, t), limit)
