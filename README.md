@@ -67,7 +67,30 @@ assets/       资源：image/  audio/  skins/  font/（自带，无需原项目�
 | A1 | 标准包全量 + 60 将技能 | ✅ |
 | B | sgs.* 兼容层 + diy/ 扩展加载器 | ✅（国战机制与 bot 提示表按决策不做） |
 | C | 完整 UI（皮肤/布局/音频/动效） | ✅（待实机验证观感） |
-| D | LuaSocket 网络服务端 + 多人 | ⬜ 未开始 |
+| D | LuaSocket 网络服务端 + 多人 | 🚧 进行中（房间/座位/同步已通，UI 联调未做） |
+
+## 联机（阶段 D，进行中）
+
+```bash
+./tools/serve.sh 9527      # 启动服务端（默认 9527）
+./tools/love.app/Contents/MacOS/love . --net   # 跑网络层测试（内存通道，不占端口）
+```
+
+架构：服务端持有权威 `Room`；连上来的客户端占座（人类），空座由 BOT 顶替。
+`Driver` 遇到人类请求会返回 `"human"`，Host 就把请求发给对应座位并等待应答。
+
+```
+src/net/protocol.lua   协议：一行一个 JSON；消息体只放可序列化数据
+src/net/host.lua       房间 / 座位 / 同步 的权威层（不碰 socket，只认通道）
+src/net/channel.lua    通道抽象：内存（测试） / TCP（真实）
+src/net/server.lua     LuaSocket TCP 适配
+src/net/client.lua     客户端：收消息、应答请求
+```
+
+测试全部走**内存通道**——不占端口、不依赖时序，因此完全确定。
+真实 TCP 已用 `nc` 验证：连入后能收到 `welcome`（含座位分配）与 `seats` 广播。
+
+尚未做：UI 联调（用真实客户端替掉本地人类玩家）、断线重连、观战、聊天。
 
 ## 已知限制
 

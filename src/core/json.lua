@@ -152,4 +152,66 @@ end
 -- 供测试/调试：只剥注释不解析
 Json.stripComments = stripComments
 
+-- ===== 编码 =====
+-- 网络协议需要把表序列化成 JSON。只支持本项目会用到的类型：
+-- 表（数组/对象）、字符串、数字、布尔。nil 在数组里写成 null。
+local ESC = { ['"'] = '\\"', ["\\"] = "\\\\", ["\n"] = "\\n", ["\t"] = "\\t", ["\r"] = "\\r" }
+
+local function isArray(t)
+  local n = 0
+  for k in pairs(t) do
+    if type(k) ~= "number" then return false end
+    n = n + 1
+  end
+  return n > 0
+end
+
+local function encodeValue(v, out)
+  local tv = type(v)
+  if v == nil then
+    out[#out + 1] = "null"
+  elseif tv == "boolean" then
+    out[#out + 1] = v and "true" or "false"
+  elseif tv == "number" then
+    out[#out + 1] = tostring(v)
+  elseif tv == "string" then
+    out[#out + 1] = '"' .. string.gsub(v, '[\\"\n\t\r]', ESC) .. '"'
+  elseif tv == "table" then
+    if isArray(v) then
+      out[#out + 1] = "["
+      for i = 1, #v do
+        if i > 1 then out[#out + 1] = "," end
+        encodeValue(v[i], out)
+      end
+      out[#out + 1] = "]"
+    else
+      out[#out + 1] = "{"
+      local first = true
+      -- 排序保证输出稳定（便于测试断言）
+      local keys = {}
+      for k in pairs(v) do
+        if type(k) == "string" or type(k) == "number" then table.insert(keys, k) end
+      end
+      table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+      for _, k in ipairs(keys) do
+        if not first then out[#out + 1] = "," end
+        first = false
+        encodeValue(tostring(k), out)
+        out[#out + 1] = ":"
+        encodeValue(v[k], out)
+      end
+      out[#out + 1] = "}"
+    end
+  else
+    -- 函数/userdata 等无法序列化，写成 null（避免协议层崩溃）
+    out[#out + 1] = "null"
+  end
+end
+
+function Json.encode(v)
+  local out = {}
+  encodeValue(v, out)
+  return table.concat(out)
+end
+
 return Json

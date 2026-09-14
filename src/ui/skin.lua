@@ -7,7 +7,7 @@
 --   3) 图片/音频只给**路径**，加载由调用方（UI 层）按需做——core 与 skin
 --      都不碰 love.graphics / love.audio。
 local class = require "src.class"
-local Json = require "src.ui.json"
+local Json = require "src.core.json"
 
 local Skin = class("Skin")
 

@@ -1321,7 +1321,7 @@ end
 print("\n--- 皮肤配置：JSON 解析 ---")
 
 do
-  local Json = require "src.ui.json"
+  local Json = require "src.core.json"
   -- 原版 skins/*.json 同时带 /* */ 头注释与 // 行注释
   -- 注意用 [==[ ]==]：JSON 里的 `[3]]` 含 `]]`，用 [[]] 会被提前闭合
   local txt = [==[
