@@ -58,7 +58,7 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
 | A0 | 骨架 + 杀/闪/桃迷你局 + headless 测试 + 最小 UI | ✅ 完成 |
-| A1 | 标准包全量（锦囊/装备/延时锦囊/判定）+ 触发管线 + 六阶段回合 | ✅ 基本完成（武将技能仅少量样本） |
+| A1 | 标准包全量（锦囊/装备/延时锦囊/判定）+ 触发管线 + 六阶段回合 + 身份局 | ✅ 基本完成（武将技能仅少量样本） |
 | B | sgs.* 兼容层 + diy/ 扩展加载器 | ⬜ 未开始 |
 | C | 完整 UI（皮肤 JSON、动画、牌桌布局）+ 音频 | ⬜ 未开始 |
 | D | LuaSocket 网络服务端 + 多人 | ⬜ 未开始 |
@@ -74,6 +74,9 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 | 距离 | `Room:distance()` | 环形座位差 + 攻/防马修正，最低 1 |
 | 判定 | `Room:_judgeCard()` | 乐不思蜀/兵粮寸断/闪电；闪电未命中传给下家 |
 | 标准牌堆 | `core/standard.lua` | 118 张，配比参考实体牌，LCG 确定性洗牌 |
+| 身份 | `Room:setupRoles()` | 2~8 人配置；主公 +1 体力上限；身份暗置、阵亡亮牌 |
+| 阵营胜负 | `Room:_checkIdentityWinner()` | 主公死→内奸独存则内奸胜否则反贼胜；反贼内奸全灭→主公方胜 |
+| 奖惩 | `Room:_rewardAndPunish()` | 击败反贼摸 3 张；主公误杀忠臣弃光 |
 
 ## 五、开发约定
 
@@ -89,9 +92,11 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 
 ```bash
 # 无头测试（不需要窗口）
-tools/love.app/Contents/MacOS/love . --test
-# 或已安装: love . --test
+./run-tests.sh          # 静态检查 + 单测 + UI 测试
+
+# 压力测试：1v1 / 4 人 / 5 人 / 8 人身份局各 25 局
+tools/love.app/Contents/MacOS/love . --soak
 
 # 图形界面
-tools/love.app/Contents/MacOS/love .
+./run-game.sh
 ```
