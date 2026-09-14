@@ -43,6 +43,11 @@ Standard.PRESET = "extended"   -- 切回混堆；默认 "standard"
 | 4 | 主1 忠1 反1 内1 | 最小可玩局 |
 
 另有 1v1 死斗（2 人）。服务端默认开 5 座。
+
+武将**随机分配且互不重复**（`Standard.pickGenerals`，Fisher-Yates 洗牌），
+同一种子可复现、不同种子阵容不同，且不出现白板/剑阁占位将。
+以前是按固定名单取模分配 —— 座位 1 永远张飞、座位 5 又绕回张飞，
+于是每局武将都一样、桌位之间还重复。
 对局类测试（压测/网络）统一用 **5 人局与 8 人局**；4 人仅保留配置表校验。
 
 ## 操作方式
@@ -83,7 +88,9 @@ export SGS_AI_MODEL="gpt-4o-mini"   # 可选
 
 > 为什么是 curl 而不是 `socket.http`：LÖVE 内置的 LuaSocket **没有 luasec**
 > （`ssl.https` 直接 require 失败），而 LLM 接口一律 HTTPS。系统 curl 支持 TLS，
-> `io.popen` 实测可用。
+> `io.popen` 实测可用；每次 fork 一个进程约几十毫秒，相比 LLM 的 1~3 秒可忽略。
+> 密钥与请求体都写进 **600 权限的临时文件**，用 `-H @文件` 传给 curl——
+> 直接拼进命令行的话，同机任何用户 `ps aux` 就能看到你的 key。
 
 ```
 src/core/ai/view.lua      观察层（信息隐藏）

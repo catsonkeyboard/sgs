@@ -222,6 +222,49 @@ do
   check(#bad_combo == 0, "三组带技能武将各 6 局全部跑通（失败: " .. table.concat(bad_combo, ",") .. "）")
 end
 
+print("\n--- 随机选将（防止每局都一样 / 座位重复）---")
+
+do
+  local function names(seed, n)
+    local e = Engine.create()
+    Standard.setup(e)
+    local ps = Standard.pickGenerals(e, Standard.makeRng(seed), n)
+    local t = {}
+    for _, g in ipairs(ps) do table.insert(t, g.name) end
+    return t
+  end
+
+  -- 1) 同一局内不得重复
+  for _, n in ipairs { 4, 5, 8 } do
+    local t = names(42, n)
+    local seen, dup = {}, 0
+    for _, nm in ipairs(t) do
+      if seen[nm] then dup = dup + 1 end
+      seen[nm] = true
+    end
+    check(dup == 0, string.format("%d 人局武将不应重复（重复 %d 个：%s）",
+      n, dup, table.concat(t, "/")))
+  end
+
+  -- 2) 不同种子应给出不同阵容（以前是固定名单取模，每次都一样）
+  local a, b, c = names(1001, 5), names(1002, 5), names(1003, 5)
+  local ja, jb = table.concat(a, "/"), table.concat(b, "/")
+  check(ja ~= jb, "不同种子应给出不同阵容（" .. ja .. " vs " .. jb .. "）")
+  check(table.concat(c, "/") ~= ja, "第三个种子也应是不同阵容")
+
+  -- 3) 同一种子必须可复现（否则压测/回放没有意义）
+  local r1, r2 = names(777, 5), names(777, 5)
+  check(table.concat(r1, "/") == table.concat(r2, "/"), "同一种子应可复现")
+
+  -- 4) 不得出现白板/剑阁占位将
+  local t = names(2024, 8)
+  local bad = 0
+  for _, nm in ipairs(t) do
+    if nm == "白板武将" or nm == "剑阁武将" then bad = bad + 1 end
+  end
+  check(bad == 0, "随机选将不应出现占位将（" .. table.concat(t, "/") .. "）")
+end
+
 print("\n--- 身份局 ---")
 
 -- 构造一个 n 人身份局（全部 BOT），可指定 seed（对局测试统一用 5 / 8 人）

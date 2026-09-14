@@ -162,4 +162,30 @@ function Standard.randomGeneral(engine, rng)
   return pool[idx]
 end
 
+-- 给 n 个座位分配**互不重复**的武将。
+-- 以前是按固定名单取模分配（座位1永远张飞、座位5又回到张飞），
+-- 于是每局武将都一样、座位之间还会重复。
+function Standard.pickGenerals(engine, rng, n)
+  local pool = {}
+  for name, g in pairs(engine.generals or {}) do
+    if not Standard.PLACEHOLDERS[name] then table.insert(pool, g) end
+  end
+  table.sort(pool, function(a, b) return a.name < b.name end) -- 保证可复现
+  if #pool == 0 then
+    local one = engine:getGeneral("白板武将")
+    local out = {}
+    for _ = 1, n do table.insert(out, one) end
+    return out
+  end
+  -- Fisher-Yates，取前 n 个
+  local f = rng or math.random
+  for i = #pool, 2, -1 do
+    local j = f(i)
+    pool[i], pool[j] = pool[j], pool[i]
+  end
+  local out = {}
+  for i = 1, n do table.insert(out, pool[((i - 1) % #pool) + 1]) end
+  return out
+end
+
 return Standard

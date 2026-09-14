@@ -304,6 +304,29 @@ Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
 > **为什么用 curl 而不是 socket.http**：LÖVE 内置的 LuaSocket 3.0 没有 luasec，
 > `ssl.https` 直接 require 失败，而 LLM 接口一律 HTTPS。系统 curl 支持 TLS，
 > `io.popen` 实测可用。代价是阻塞，所以真正跑在 `love.thread` 的 worker 里。
+>
+> **密钥绝不进命令行**：请求头与请求体都写进 600 权限的临时文件，用
+> `curl -H @文件` 读取。拼进命令行的话同机任何用户 `ps aux` 就能看见，
+> 还会进 history 与进程审计日志。
+
+<details>
+<summary>为什么不给 LÖVE 装 luasec（已排除）</summary>
+
+本机实测的四个障碍，任一个都够呛，何况一起出现：
+
+1. **LÖVE 的 require 是沙箱化的** —— 报错信息里明确写着
+   `no 'ssl/core' in LOVE game directories`，原生模块只能从游戏目录加载，
+   不能像普通 Lua 那样从 `/usr/local/lib/lua/5.1/` 取。
+2. **没有工具链** —— 无 luarocks，`/usr/local/lib/lua/5.1/` 与 luajit 头文件
+   都不存在，得自己拉 LuaJIT 源码取 `lua.h`。
+3. **链接方式特殊** —— LÖVE 把 LuaJIT 静态链接进去了，扩展模块不能链接
+   libluajit，macOS 上要 `-undefined dynamic_lookup`；且 LÖVE.app 有签名，
+   加载未签名 dylib 会被 library validation 拒绝。
+4. **分发成本** —— 就算本机编译通过，Windows/Linux/macOS 各要带一份二进制。
+
+替代思路「本地明文代理」（游戏 → `socket.http` 明文 → 127.0.0.1 代理 → HTTPS
+转发）实测可行，代价是多一个进程要管理；需要重试/缓存/多模型切换时值得上。
+</details>
 
 已知限制：
 - 尚未用真实模型跑过（链路靠 mock 验证，46 项全过）

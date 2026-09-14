@@ -59,14 +59,17 @@ function RoomScene:init(on_exit, mode, size, ai_mode)
   mode = mode or "identity"
   local size = (mode == "identity") and (size or 5) or 2 -- 身份局默认 5 人
 
-  -- 身份局按 size 建局（8/5/4 人）；武将池循环取，不写死固定四个
-  local POOL = { "刘备", "曹操", "孙权", "貂蝉", "吕布", "诸葛亮", "司马懿", "华佗" }
+  -- 身份局按 size 建局（8/5/4 人）
+  -- 武将**随机且不重复**：以前是固定名单取模，座位 1 永远张飞、
+  -- 座位 5 又绕回张飞，导致每局武将都一样、桌位之间还重复。
+  local seed = os.time() % 2147483647
+  local picks = Standard.pickGenerals(engine, Standard.makeRng(seed + 7), size)
 
   local players = {}
   if mode == "identity" then
     for i = 1, size do
       local is_human = (i == 1)
-      local g = engine:getGeneral(POOL[((i - 1) % #POOL) + 1]) or engine:getGeneral("白板武将")
+      local g = picks[i] or engine:getGeneral("白板武将")
       table.insert(players,
         Player.create(is_human and "你" or ("BOT·" .. g.name), g, i, is_human))
     end
@@ -80,7 +83,6 @@ function RoomScene:init(on_exit, mode, size, ai_mode)
   self.human = players[1]
   self.ai_player = players[2] -- 兼容旧引用
 
-  local seed = os.time() % 2147483647
   self.room = Room.create(engine, players)
   self.room.drawPile = Standard.buildDrawPile(seed)
   self.room.rng = Standard.makeRng(seed)
@@ -919,24 +921,18 @@ function RoomScene:draw()
     if c == nil then break end
     local x, y = self:handCardRect(idx)
     local lifted = ((self.selected[c] or self.picked == c) and 14 or 0)
-    love.graphics.setColor(0.96, 0.94, 0.88)
-    love.graphics.rectangle("fill", x, y - lifted, CARD_W, CARD_H, 6, 6)
+    -- 用 drawCard 画：有卡图就画真图（assets/image/card/*.png），
+    -- 没有才退化成白底+文字。以前这里是一段**独立的手写绘制**，
+    -- 只画白底矩形，所以手牌永远没有卡图（五谷丰登的展示牌反而有）。
+    drawCard(x, y - lifted, CARD_W, CARD_H, c, self.font, self.font_sm, self)
+    -- 选中/拖拽的高亮叠在卡图之上
     if self.picked == c then
       love.graphics.setColor(0.95, 0.8, 0.2)
       love.graphics.rectangle("line", x, y - lifted, CARD_W, CARD_H, 6, 6)
     elseif self.selected[c] then
       love.graphics.setColor(0.95, 0.75, 0.2)
       love.graphics.rectangle("line", x, y - lifted, CARD_W, CARD_H, 6, 6)
-    else
-      love.graphics.setColor(0, 0, 0)
-      love.graphics.rectangle("line", x, y - lifted, CARD_W, CARD_H, 6, 6)
     end
-    love.graphics.setColor(faceColor(c))
-    love.graphics.setFont(self.font_sm)
-    love.graphics.print(c:suitString() .. c.number, x + 6, y + 5 - lifted)
-    love.graphics.setColor(0, 0, 0)
-    love.graphics.setFont(self.font_mid)
-    love.graphics.printf(c:zhName(), x, y + 46 - lifted, CARD_W, "center")
   end
 
   -- 拖拽中的牌：跟鼠标画一张副本（放在手牌之后，保证在最上层）

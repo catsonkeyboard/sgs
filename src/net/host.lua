@@ -188,11 +188,14 @@ end
 function Host:startGame(seed)
   local engine = Engine.create()
   Standard.setup(engine)
+  -- 随机且不重复的武将（与本地牌桌同一套 Standard.pickGenerals）
+  local Standard2 = require "src.core.standard"
+  local picks = Standard2.pickGenerals(engine, Standard2.makeRng((seed or 1) + 7), self.count)
+
   local players = {}
   for i = 1, self.count do
     local s = self.seats[i]
-    local gname = self.general_names[((i - 1) % #self.general_names) + 1]
-    local g = engine:getGeneral(gname) or engine:getGeneral("白板武将")
+    local g = picks[i] or engine:getGeneral("白板武将")
     local is_human = s.channel ~= nil
     local p = Player.create(is_human and (s.name or ("玩家" .. i)) or ("BOT·" .. g.name),
       g, i, is_human)
