@@ -210,6 +210,17 @@ function RoomScene:_refreshButtons()
       -- 主动技征询：玩家自己决定发不发动
       push("发动【" .. tostring(req.skill) .. "】", function() self:_step(true) end)
       push("不发动", function() self:_step(false) end)
+    elseif req.type == "askForChoice" then
+      -- 【反间】猜花色等：没有选择界面时取第一项，不能把玩家晾在这
+      local first = req.choices and req.choices[1]
+      push(tostring(first or "确定"), function() self:_step(first) end)
+    elseif req.type == "askForGuanxing" then
+      -- 【观星】：没有拖拽重排界面时保持原序
+      push("保持原序", function() self:_step(nil) end)
+    else
+      -- 兜底：任何未预料到的请求都必须有一个「跳过」，
+      -- 否则玩家会看到提示却没有可点的按钮 —— 表现就是「界面卡死」。
+      push("跳过", function() self:_step(nil) end)
     end
   end
 

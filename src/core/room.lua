@@ -199,14 +199,28 @@ function Room:trigger(event, player, data)
   end)
   for _, item in ipairs(list) do
     local who = item.owner or player
-    -- 人类玩家的非锁定技要先征询：否则技能会像 BOT 一样自动发动，
-    -- 玩家根本没有「发不发动」的选择权。锁定技（Compulsory）照常自动结算。
-    if who and who.is_human and item.owner
-      and not self:isCompulsorySkill(item.skill)
-      and not self:askForSkillInvoke(who, item.skill) then
-      -- 玩家选择不发动，跳过该技能
-    elseif item.skill:onTrigger(event, self, who, data) then
-      return true
+    local s = item.skill
+    -- 顺序很重要：**先判条件，再征询玩家**。
+    -- 之前是先弹「是否发动」再进回调判条件，结果像【激将·出杀】【仁德·回血】
+    -- 这类辅助技在每个阶段/事件都弹一次窗、点完还什么都不发生，
+    -- 表现就是「进入游戏后界面卡在发动【激将】上」（实测 8 秒 879 帧全是它）。
+    if s.can_trigger and not s:can_trigger(self, who, data) then
+      -- 条件不满足：静默跳过，不打扰玩家
+    else
+      -- 人类玩家的非锁定技才征询；internal 的（别的技能的实现细节，如
+      -- 【仁德·回血】【激将·出杀】之外的各种「·重置 /·记录 /·清除」）不弹窗。
+      -- 约定：名字里带「·」的子技能默认 internal，可用 internal = false 显式打开。
+      local internal = s.internal
+      if internal == nil then
+        internal = type(s.name) == "string" and s.name:find("·") ~= nil
+      end
+      local askable = who and who.is_human and item.owner
+        and not internal and not self:isCompulsorySkill(s)
+      if askable and not self:askForSkillInvoke(who, s) then
+        -- 玩家选择不发动，跳过该技能
+      elseif s:onTrigger(event, self, who, data) then
+        return true
+      end
     end
   end
   return false

@@ -153,7 +153,7 @@ Generals.SHU = {
             room:heal(player, 1)
           end
           return false
-        end, { zh = "仁德" }),
+        end, { zh = "仁德", internal = true }),
       TriggerSkill.create("仁德·重置", TriggerEvent.EventPhaseEnd,
         function(_s, _room, player, data)
           if data and data.phase == "play" and data.player == player then
@@ -161,20 +161,15 @@ Generals.SHU = {
             player.rende_healed = false
           end
           return false
-        end, { zh = "仁德" }),
+        end, { zh = "仁德", internal = true }),
       -- 激将（主公技）：需要【杀】时，可令其他蜀势力角色提供。
       -- 响应类（南蛮/决斗）由 Room:askForCard 的求助钩子覆盖，
       -- 这里额外覆盖「出牌阶段主动出杀」——手里没杀时才麻烦队友。
       markerSkill("激将", { lord_supply = { slash = true } }, Freq.Lord),
+      -- can_trigger 决定「值不值得问」：不是主公 / 手里有杀 / 没有同势力队友 /
+      -- 出杀次数已用尽时一律不问，避免无意义的弹窗（见 Room:trigger 的注释）
       TriggerSkill.create("激将·出杀", TriggerEvent.EventPhaseStart,
         function(_s, room, player, data)
-          if not data or data.phase ~= "play" or data.player ~= player then return false end
-          if player.skip_play or player.role ~= "lord" then return false end
-          if player.slash_count >= room:slashLimit(player)
-            and not room:allowsUnlimitedSlash(player) then return false end
-          for _, c in ipairs(player.hand) do
-            if isSlashName(c.name) then return false end -- 自己有杀就不动用主公技
-          end
           local t = firstInRange(player, room, room:attackRangeOf(player))
           if not t then return false end
           local slash = room:lordSupply(player, "slash")
@@ -182,7 +177,26 @@ Generals.SHU = {
           room:log("%s 发动【激将】，对 %s 使用【杀】", player.name, t.name)
           room:useCard(player, slash, t)
           return false
-        end, { zh = "激将", frequency = Freq.Lord }),
+        end, {
+          zh = "激将", frequency = Freq.Lord, internal = false,
+          can_trigger = function(_s, room, player, data)
+            if not (data and data.phase == "play" and data.player == player) then
+              return false
+            end
+            if player.skip_play or player.role ~= "lord" then return false end
+            if player.slash_count >= room:slashLimit(player)
+              and not room:allowsUnlimitedSlash(player) then return false end
+            for _, c in ipairs(player.hand) do
+              if isSlashName(c.name) then return false end -- 自己有杀就不麻烦队友
+            end
+            for _, q in ipairs(room.players) do
+              if q ~= player and q.alive and q.kingdom == player.kingdom then
+                return true
+              end
+            end
+            return false
+          end,
+        }),
     },
   },
   {
@@ -434,7 +448,7 @@ local function resetFlag(name, opts)
     function(_s, _room, player, data)
       if data and data.player == player then player[opts.flag] = false end
       return false
-    end, { zh = opts.zh or name })
+    end, { zh = opts.zh or name, internal = true })
 end
 
 Generals.WEI = {

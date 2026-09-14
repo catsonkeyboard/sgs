@@ -1988,6 +1988,44 @@ do
   check(r2.players[1].hp == 3, "BOT 应直接发动【苦肉】（hp 4→"
     .. r2.players[1].hp .. "）")
 
+  -- 名字带「·」的子技能是别的技能的实现细节，不应打扰玩家。
+  -- 之前 Room:trigger 是「先弹窗再判条件」，导致【激将·出杀】【仁德·回血】
+  -- 这类辅助技在每个阶段都弹一次 —— 表现就是「进入游戏后界面卡死」。
+  local r4 = Room.create(engine, {
+    Player.create("P1", engine:getGeneral("刘备"), 1, true),
+    Player.create("P2", engine:getGeneral("白板武将"), 2, false),
+  })
+  r4.drawPile = Standard.buildDrawPile(1)
+  r4.identity_mode = true
+  r4.players[1].role = "lord"
+  local asked4 = nil
+  runInRoom(function()
+    r4:trigger("CardUsed", r4.players[1],
+      { from = r4.players[1], card = { name = "rende" } })
+  end, function(req)
+    if req.type == "askForSkillInvoke" then asked4 = req.skill end
+    return nil
+  end)
+  check(asked4 == nil, "内部子技能（仁德·回血）不应弹出征询（实得 "
+    .. tostring(asked4) .. "）")
+
+  -- 仍应征询的真实主动技：名字不带「·」
+  local r5 = Room.create(engine, {
+    Player.create("P1", engine:getGeneral("黄盖"), 1, true),
+    Player.create("P2", engine:getGeneral("白板武将"), 2, false),
+  })
+  r5.drawPile = Standard.buildDrawPile(1)
+  r5.players[1].hp = 4
+  local asked5 = nil
+  runInRoom(function()
+    r5:trigger("EventPhaseStart", r5.players[1],
+      { player = r5.players[1], phase = "play" })
+  end, function(req)
+    if req.type == "askForSkillInvoke" then asked5 = req.skill return false end
+    return nil
+  end)
+  check(asked5 ~= nil, "真实主动技（苦肉）仍应弹出征询")
+
   -- 锁定技不征询
   local r3 = Room.create(engine, {
     Player.create("P1", engine:getGeneral("吕布"), 1, true),
