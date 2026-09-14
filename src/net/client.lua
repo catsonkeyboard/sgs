@@ -90,6 +90,12 @@ function Client:flush(n)
   return got
 end
 
+-- 默认连接目标：可用环境变量覆盖，便于联调另一台机器
+function Client.defaultHost()
+  return os.getenv("SGS_NET_HOST") or "127.0.0.1",
+         tonumber(os.getenv("SGS_NET_PORT")) or 9527
+end
+
 -- 连到服务端（真实 TCP）。注意：连接能力放在 Channel 上，不要在 Client 上
 -- 定义名为 connect 的方法 —— 会与 socket 的 sock:connect 在静态检查里撞名。
 function Client.connectTo(name, host, port)

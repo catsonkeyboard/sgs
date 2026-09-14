@@ -1,17 +1,19 @@
 -- 入口：--test 无头跑测试；--soak 大批量压力测试；否则进入菜单 → 牌桌
-local is_test, autostart, is_soak, is_net, is_serve, is_join = false, false, false, false, false, false
+local is_test, autostart, is_soak, is_net, is_serve, is_join, is_client = false, false, false, false, false, false, false
 for _, a in ipairs(arg or {}) do
   if a == "--test" then is_test = true end
   if a == "--soak" then is_soak = true end
   if a == "--net" then is_net = true end
   if a == "--serve" then is_serve = true end
   if a == "--join" then is_join = true end
+  if a == "--client" then is_client = true end
   if a == "--autostart" then autostart = true end
 end
 
 local current_scene = nil
 
-local startGame, backToMenu
+local startGame, startNet, backToMenu
+local startNetScene
 
 startGame = function(mode, size)
   local RoomScene = require "src.ui.scene_room"
@@ -20,7 +22,25 @@ end
 
 backToMenu = function()
   local MenuScene = require "src.ui.scene_menu"
-  current_scene = MenuScene.create(startGame)
+  current_scene = MenuScene.create(startGame, startNet)
+end
+
+-- 联机：连上服务端后进入联机牌桌
+startNet = function()
+  local Client = require "src.net.client"
+  local NetScene = require "src.ui.scene_net"
+  local host, port = Client.defaultHost()
+  local c = Client.connectTo("我", host, port)
+  if not c then
+    print(string.format("[联机] 连接失败 %s:%s —— 先跑 ./tools/serve.sh", host, port))
+    return
+  end
+  startNetScene(c, "我")
+end
+
+startNetScene = function(client, name)
+  local NetScene = require "src.ui.scene_net"
+  current_scene = NetScene.create(backToMenu, client, name)
 end
 
 function love.load()
@@ -31,6 +51,26 @@ function love.load()
     end)
     if not ok then print("服务端异常: " .. tostring(err)) end
     love.event.quit()
+    return
+  end
+
+  -- --client [名字] [host] [port]：图形联机客户端（UI 联调）
+  if is_client then
+    local ok, err = pcall(function()
+      local name = (arg and arg[3]) or "我"
+      local host = (arg and arg[4]) or "127.0.0.1"
+      local port = tonumber((arg and arg[5]) or "9527") or 9527
+      local Client = require "src.net.client"
+      local NetScene = require "src.ui.scene_net"
+      local c = Client.connectTo(name, host, port)
+      if not c then
+        print("[联机] 连接失败: " .. host .. ":" .. port)
+        love.event.quit()
+        return
+      end
+      startNetScene(c, name)
+    end)
+    if not ok then print("联机客户端异常: " .. tostring(err)) end
     return
   end
 

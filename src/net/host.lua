@@ -291,7 +291,12 @@ function Host:tick()
     self.waiting = { seat = seat, id = id }
     local s = self.seats[seat]
     if s and s.channel then
-      s.channel:send(Protocol.makeRequest(id, req, self.seatOfPlayer))
+      local msg = Protocol.makeRequest(id, req, self.seatOfPlayer)
+      -- 客户端要渲染手牌才点得出牌，所以把本人手牌一并下发（只发给他自己）
+      if req.player and req.player.hand then
+        msg.hand = Protocol.slimCards(req.player.hand)
+      end
+      s.channel:send(msg)
     end
     return "waiting"
   end

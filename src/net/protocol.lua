@@ -74,6 +74,7 @@ function Protocol.makeRequest(id, req, seatOf)
   if req.cards then msg.cards = Protocol.slimCards(req.cards) end
   if req.prompt then msg.prompt = req.prompt end
   if req.type == "askForSkillInvoke" then msg.skill = req.skill end
+  -- msg.hand 由 Host 单独补（只发给本人）
   return msg
 end
 

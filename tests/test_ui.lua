@@ -156,6 +156,67 @@ check(scene.skin:skillSound("马术") == nil, "被动技【马术】原版就没
 check(scene.skin:sound("caocao") ~= nil, "阵亡台词应按武将拼音 key 解析（caocao）")
 
 
+print("\n--- 联机牌桌（UI 联调）---")
+do
+  -- 用内存通道把 Host 与联机界面接起来，验证「收到 req → 点牌 → 点人 → 应答」
+  local Channel = require "src.net.channel"
+  local Client = require "src.net.client"
+  local Host = require "src.net.host"
+  local NetScene = require "src.ui.scene_net"
+
+  local host = Host.create { count = 5 }
+  local srvCh, cliCh = Channel.pair()
+  local seat = host:attach("我", srvCh)
+  local cli = Client.create("我", cliCh)
+  local sc = NetScene.create(function() end, cli, "我")
+  check(sc ~= nil, "应能创建联机界面")
+  check(seat == 1, "应占 1 号座")
+
+  -- 服务端开局并推进到需要人类应答
+  host:startGame(2024)
+  local guard = 0
+  while not host.waiting and guard < 500 do
+    guard = guard + 1
+    host:tick()
+  end
+  check(host.waiting ~= nil, "人类座位应收到请求")
+  -- 模拟服务端下发 welcome（真实场景由 Server 发），界面据此认座位
+  srvCh:send { type = "welcome", seat = seat, count = 5, token = "tok" }
+  srvCh:send { type = "state", snapshot = host:snapshot() }
+  sc:poll()
+  check(sc.seat == seat, "界面应知道自己的座位（实得 " .. tostring(sc.seat) .. "）")
+  check(sc.snap ~= nil, "界面应拿到服务端快照")
+  -- 把服务端已产生的 req 送过去（真实场景走 socket）
+  local pending = srvCh:recv()
+  while pending do
+    if pending.type == "req" then cliCh:send(pending) end
+    pending = srvCh:recv()
+  end
+  sc:poll()
+
+  -- 应答：结束出牌
+  if sc.req then
+    local reqId = sc.req.id
+    sc:_respond(nil)
+    check(sc.req == nil, "应答后应清空待处理请求")
+    -- 服务端应能收到这条应答（前面可能还有 hello/ready，需逐条找）
+    local got, seenTypes = nil, {}
+    repeat
+      got = srvCh:recv()
+      if got then table.insert(seenTypes, got.type) end
+    until got == nil or got.type == "resp"
+    check(got ~= nil and got.type == "resp" and got.id == reqId,
+      "服务端应收到应答（实得 " .. tostring(got and got.type)
+      .. "，期间收到过: " .. table.concat(seenTypes, ",") .. "）")
+  else
+    print("SKIP  本轮未拿到请求，跳过应答用例")
+  end
+
+  -- 绘制不应报错
+  local okDraw = pcall(function() sc:draw() end)
+  check(okDraw, "联机界面 draw() 应无异常")
+end
+
 print("\n--- 技能视觉效果 ---")
 do
   local Effects = require "src.ui.effects"

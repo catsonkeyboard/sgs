@@ -3,8 +3,9 @@ local class = require "src.class"
 
 local MenuScene = class("MenuScene")
 
-function MenuScene:init(on_start)
+function MenuScene:init(on_start, on_net)
   self.on_start = on_start
+  self.on_net = on_net
   self.font_big = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 56)
   self.font = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 18)
   self.font_sm = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 13)
@@ -21,6 +22,8 @@ function MenuScene:init(on_start)
       size = 4, desc = "主1 忠1 反1 内1" },
     { x = 300, y = 450, w = 250, h = 56, text = "1v1 死斗", mode = "duel", size = 2,
       desc = "标准牌堆，两人对决" },
+    { x = 580, y = 450, w = 250, h = 56, text = "联机对战", net = true,
+      desc = "连本地服务端 9527（先跑 ./tools/serve.sh）" },
   }
 end
 
@@ -57,7 +60,11 @@ function MenuScene:mousepressed(x, y, button)
   if button ~= 1 then return end
   for _, b in ipairs(self.buttons) do
     if x >= b.x and x <= b.x + b.w and y >= b.y and y <= b.y + b.h then
-      self.on_start(b.mode, b.size)
+      if b.net then
+        if self.on_net then self.on_net() end
+      else
+        self.on_start(b.mode, b.size)
+      end
       return
     end
   end
