@@ -1000,9 +1000,13 @@ end
 
 do -- 蔡文姬·断肠：死亡时令凶手失去所有技能
   local r, ps = makeRoomWith({ "蔡文姬", "张飞" }, 63)
-  check(#ps[2].general.skills > 0, "张飞应有技能")
+  -- 注意：general 表是模块级共享的，清空后必须还原，
+  -- 否则后面所有用到张飞的用例（以及 25 将总表断言）都会被污染。
+  local saved = ps[2].general.skills
+  check(#saved > 0, "张飞应有技能")
   r:trigger("Death", ps[1], { player = ps[1], killer = ps[2] })
   check(#ps[2].general.skills == 0, "【断肠】应令凶手失去所有技能")
+  ps[2].general.skills = saved
 end
 
 do -- 孔融·名士：来源手牌数不少于你时伤害 -1
@@ -2253,6 +2257,156 @@ do -- 【完杀】：贾诩回合内他人无法救援
   end)
   check(not ps[1].alive, "【完杀】生效时他人无法用【桃】救援")
   check(#ps[2].hand == 1, "【完杀】下救援者的【桃】不应被消耗")
+end
+
+print("\n--- 技能语义修正（文档对标）---")
+
+do -- 鬼才：可对**他人**的判定改判（给敌人送判定）
+  local r, ps = makeRoomWith({ "司马懿", "白板武将" }, 61)
+  r.identity_mode = true
+  ps[1].role, ps[2].role = "loyalist", "rebel"
+  local spade = give(ps[1], "slash", Card.Suit.Spade, 5) -- 黑桃：乐不思蜀会生效
+  local indulgence = Card.create(1, "indulgence", Card.Suit.Spade, 6, Card.Type.Trick)
+  local heart = Card.create(2, "dodge", Card.Suit.Heart, 2, Card.Type.Basic)
+  local data = { player = ps[2], card = indulgence, judge_card = heart, reason = "indulgence" }
+  r:trigger("AskForRetrial", ps[2], data)
+  check(data.judge_card == spade,
+    "【鬼才】应能把敌人的判定改成生效（实得 " .. tostring(data.judge_card.name) .. "）")
+end
+
+do -- 仁德：本阶段给出 2 张即回 1 血，且每阶段只回一次
+  local r, ps = makeRoomWith({ "刘备", "白板武将" }, 62)
+  ps[1].hp = 1
+  local function give_rende()
+    r:trigger("CardUsed", ps[1], { from = ps[1], card = { name = "rende" } })
+  end
+  give_rende(); give_rende()
+  check(ps[1].hp == 2, "【仁德】本阶段给出 2 张应回复 1 点（hp " .. ps[1].hp .. "）")
+  give_rende(); give_rende()
+  check(ps[1].hp == 2, "【仁德】每阶段只回复一次（hp " .. ps[1].hp .. "）")
+  r:trigger("EventPhaseEnd", ps[1], { player = ps[1], phase = "play" })
+  give_rende(); give_rende()
+  check(ps[1].hp == 3, "【仁德】下个出牌阶段可再次回复（hp " .. ps[1].hp .. "）")
+end
+
+do -- 苦肉：出牌阶段可多次发动
+  local r, ps = makeRoomWith({ "黄盖", "白板武将" }, 63)
+  runInRoom(function()
+    r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+    r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  end)
+  check(ps[1].hp == 2, "【苦肉】同一出牌阶段可多次发动（hp " .. ps[1].hp .. "）")
+end
+
+do -- 结姻：自己满血也能发动（只要求目标是已受伤男性）
+  local r, ps = makeRoomWith({ "孙尚香", "白板武将" }, 64)
+  ps[2].hp = 1
+  give(ps[1], "slash", Card.Suit.Spade, 5)
+  give(ps[1], "slash", Card.Suit.Spade, 6)
+  runInRoom(function()
+    r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  end)
+  check(ps[2].hp == 2, "【结姻】自己满血时也应能发动（目标 hp " .. ps[2].hp .. "）")
+end
+
+do -- 反间：目标主动选择花色，猜错受伤
+  local r, ps = makeRoomWith({ "周瑜", "白板武将" }, 65)
+  give(ps[1], "slash", Card.Suit.Spade, 8) -- 实际是黑桃
+  local asked = nil
+  local hp = ps[2].hp
+  runInRoom(function()
+    r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  end, function(req)
+    if req.type == "askForChoice" then asked = req return "红桃" end
+    return nil
+  end)
+  check(asked ~= nil, "【反间】应询问目标猜测花色")
+  check(ps[2].hp == hp - 1, "猜错花色应受到 1 点伤害（hp " .. hp .. "→" .. ps[2].hp .. "）")
+end
+
+do -- 离间产生的决斗不可被【无懈可击】响应
+  local r, ps = makeRoomWith({ "白板武将", "白板武将" }, 66)
+  give(ps[2], "nullification", Card.Suit.Spade, 11, Card.Type.Trick)
+  local duel = Card.create(1, "duel", Card.Suit.Spade, 1, Card.Type.Trick)
+  duel.no_nullify = true
+  runInRoom(function() r:useCard(ps[1], duel, ps[2]) end)
+  check(#ps[2].hand == 1, "标记 no_nullify 的锦囊不应触发【无懈可击】响应")
+end
+
+do -- 【酒】：出牌阶段不回血，只给下一张杀 +1；濒死才回血
+  local r, ps = makeRoomWith({ "白板武将", "白板武将" }, 67)
+  ps[1].hp = 1
+  local wine = give(ps[1], "analeptic", Card.Suit.Spade, 9)
+  runInRoom(function() r:useCard(ps[1], wine, ps[1]) end)
+  check(ps[1].hp == 1, "出牌阶段使用【酒】不应回血（hp " .. ps[1].hp .. "）")
+  check(ps[1].drunk == true, "出牌阶段使用【酒】应置 drunk（下一张杀 +1）")
+end
+
+do -- 平局：牌堆与弃牌堆都空时摸牌
+  local r, ps = makeRoomWith({ "白板武将", "白板武将" }, 68)
+  r.drawPile, r.discardPile = {}, {}
+  r:drawCards(ps[1], 1)
+  check(r.game_over, "牌堆+弃牌堆不足时应结束对局")
+  check(r.winner == nil, "这种情况应判平局（无胜者）")
+end
+
+print("\n--- 标准版 25 将总表（防止与文档脱节）---")
+
+do
+  -- 数据来自《基础版武将与卡牌全表》第 1-5 节
+  local DOC = {
+    { "曹操", "wei", 4, { "奸雄", "护驾" } },
+    { "司马懿", "wei", 3, { "反馈", "鬼才" } },
+    { "夏侯惇", "wei", 4, { "刚烈" } },
+    { "张辽", "wei", 4, { "突袭" } },
+    { "许褚", "wei", 4, { "裸衣" } },
+    { "郭嘉", "wei", 3, { "天妒", "遗计" } },
+    { "甄姬", "wei", 3, { "倾国", "洛神" } },
+    { "刘备", "shu", 4, { "仁德", "激将" } },
+    { "关羽", "shu", 4, { "武圣" } },
+    { "张飞", "shu", 4, { "咆哮" } },
+    { "诸葛亮", "shu", 3, { "观星", "空城" } },
+    { "赵云", "shu", 4, { "龙胆" } },
+    { "马超", "shu", 4, { "马术", "铁骑" } },
+    { "黄月英", "shu", 3, { "集智", "奇才" } },
+    { "孙权", "wu", 4, { "制衡", "救援" } },
+    { "甘宁", "wu", 4, { "奇袭" } },
+    { "吕蒙", "wu", 4, { "克己" } },
+    { "黄盖", "wu", 4, { "苦肉" } },
+    { "周瑜", "wu", 3, { "英姿", "反间" } },
+    { "大乔", "wu", 3, { "国色", "流离" } },
+    { "陆逊", "wu", 3, { "谦逊", "连营" } },
+    { "孙尚香", "wu", 3, { "结姻", "枭姬" } },
+    { "华佗", "qun", 3, { "急救", "青囊" } },
+    { "吕布", "qun", 4, { "无双" } },
+    { "貂蝉", "qun", 3, { "离间", "闭月" } },
+  }
+  local byName = {}
+  for _, g in ipairs(Generals.all()) do byName[g.name] = g end
+  local bad = {}
+  for _, d in ipairs(DOC) do
+    local g = byName[d[1]]
+    if not g then
+      table.insert(bad, d[1] .. " 缺失")
+    else
+      if g.kingdom ~= d[2] then table.insert(bad, d[1] .. " 势力") end
+      if g.max_hp ~= d[3] then
+        table.insert(bad, string.format("%s 体力%d≠%d", d[1], g.max_hp, d[3]))
+      end
+      local have = {}
+      for _, s in ipairs(g.skills or {}) do
+        local n = s.name or s.zh or "?"
+        have[n] = true
+        local base = n:match("^(.-)[·]")
+        if base then have[base] = true end
+      end
+      for _, want in ipairs(d[4]) do
+        if not have[want] then table.insert(bad, d[1] .. " 缺【" .. want .. "】") end
+      end
+    end
+  end
+  check(#bad == 0, "标准版 25 将的势力/体力/技能应与文档一致（差异: "
+    .. table.concat(bad, "；") .. "）")
 end
 
 print("\n--- 标准版牌堆（108 张固定花色点数）---")

@@ -493,7 +493,14 @@ end
 function Room:drawCards(p, n)
   for _ = 1, n do
     if #self.drawPile == 0 then
-      if #self.discardPile == 0 then return end
+      if #self.discardPile == 0 then
+        -- 牌堆 + 弃牌堆都满足不了这次摸牌：文档规则判**平局**
+        self:log("牌堆与弃牌堆均已无牌，无法满足摸牌 —— 平局")
+        self.game_over = true
+        self.winner = nil
+        self.win_role = nil
+        return
+      end
       self:log("洗牌：弃牌堆 %d 张回炉", #self.discardPile)
       self:shuffle(self.discardPile)
       for _, c in ipairs(self.discardPile) do table.insert(self.drawPile, c) end
@@ -548,6 +555,26 @@ function Room:notifyHandEmpty(p)
     self:trigger("CardsMoveOneTime", p,
       { player = p, from_place = "hand", last_handcard = true })
   end
+end
+
+-- 让 p 从 choices 里选一项（如【反间】猜花色）；无响应时返回 nil。
+-- 兼容原版签名：choices 为 "a+b+c" 字符串时（diy 扩展惯用），
+-- 无应答就退回第一个选项，避免脚本卡在询问上。
+function Room:askForChoice(p, choices, prompt)
+  local list = choices
+  if type(choices) == "string" then
+    list = {}
+    for w in string.gmatch(choices, "[^+]+") do table.insert(list, w) end
+  end
+  local res = nil
+  if coroutine.running() ~= nil then
+    res = coroutine.yield({
+      type = "askForChoice", player = p, choices = list, prompt = prompt,
+    })
+  end
+  if res ~= nil then return res end
+  if type(choices) == "string" then return list[1] end
+  return nil
 end
 
 -- 从弃牌堆取回一张牌（【奸雄】等技能用）
@@ -952,8 +979,9 @@ function Room:_useCardInner(from, card, target)
   -- 指定目标后触发：【铁骑】【烈弓】等在此决定此牌可否被闪避
   self:trigger("TargetChosen", from, use)
 
-  -- 锦囊（含延时锦囊）可被【无懈可击】抵消
-  if def and def.nullifiable and self:askForNullification(use) then
+  -- 锦囊（含延时锦囊）可被【无懈可击】抵消；【离间】产生的决斗除外
+  if def and def.nullifiable and not card.no_nullify
+    and self:askForNullification(use) then
     self:_toDiscard(card)
     return true
   end
@@ -1078,7 +1106,9 @@ function Room:_useBasic(from, card, targets)
     return true
 
   elseif name == "analeptic" then
-    if from.hp < from.max_hp then
+    -- 文档：出牌阶段使用【酒】是让下一张【杀】伤害 +1；
+    -- 只有**濒死时**（体力 ≤ 0）才能用【酒】回复 1 点体力。
+    if from.hp <= 0 then
       self:_toDiscard(card)
       self:log("%s 濒死时使用【酒】回复体力", from.name)
       self:heal(from, 1)

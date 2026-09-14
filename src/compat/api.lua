@@ -263,10 +263,8 @@ end, true)
 -- 注意：不覆盖 askForNullification —— 引擎内部按 (use) 调用它，
 -- 而原版签名不同，覆盖会让【无懈可击】彻底失效。
 
-define(Room, "askForChoice", function(_self, _p, _skill, choices)
-  if type(choices) ~= "string" then return nil end
-  return string.match(choices, "([^+]+)") -- 取第一个选项，避免脚本卡在询问上
-end)
+-- askForChoice：core 已给出真实实现（Room:askForChoice，支持选项表与原版
+-- "a+b+c" 字符串两种签名），这里不再放桩，否则会被 define() 的撞名守卫拦下。
 define(Room, "askForSuit", function(self)
   local suits = { Card.Suit.Spade, Card.Suit.Heart, Card.Suit.Club, Card.Suit.Diamond }
   return suits[self:random(4)]

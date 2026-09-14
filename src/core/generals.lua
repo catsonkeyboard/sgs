@@ -137,7 +137,8 @@ Generals.SHU = {
   {
     name = "刘备", key = "liubei", max_hp = 4, kingdom = "shu",
     skills = {
-      -- 仁德：出牌阶段可将一张手牌交给其他角色，累计给出 3 张后回复 1 点体力
+      -- 仁德：出牌阶段把任意张手牌交给其他角色；本阶段内给出的牌首次达到
+      -- 两张或更多时回复 1 点体力（文档规则：每阶段一次，不是累计三张）
       singleViewAs("仁德", "rende", function() return true end),
       TriggerSkill.create("仁德·回血", TriggerEvent.CardUsed,
         function(_s, room, player, data)
@@ -145,10 +146,19 @@ Generals.SHU = {
           local card = data.card
           if not card or card.name ~= "rende" then return false end
           player.rende_count = (player.rende_count or 0) + 1
-          if player.rende_count >= 3 then
-            player.rende_count = 0
-            room:log("%s 发动【仁德】累计给出 3 张牌，回复 1 点体力", player.name)
+          if player.rende_count >= 2 and not player.rende_healed then
+            player.rende_healed = true
+            room:log("%s 发动【仁德】本阶段给出 %d 张牌，回复 1 点体力",
+              player.name, player.rende_count)
             room:heal(player, 1)
+          end
+          return false
+        end, { zh = "仁德" }),
+      TriggerSkill.create("仁德·重置", TriggerEvent.EventPhaseEnd,
+        function(_s, _room, player, data)
+          if data and data.phase == "play" and data.player == player then
+            player.rende_count = 0
+            player.rende_healed = false
           end
           return false
         end, { zh = "仁德" }),
@@ -466,20 +476,31 @@ Generals.WEI = {
           room:takeOneCard(player, src)
           return false
         end, { zh = "反馈" }),
-      -- 鬼才：判定牌生效前，可用一张手牌替换判定牌
+      -- 鬼才：判定牌生效前，可用一张手牌替换判定牌。
+      -- 文档：既能救己方的【乐不思蜀】，也能给对手「送」判定，
+      -- 因此不限于自己的判定——自己的判定改成不生效，敌人的判定改成生效。
       TriggerSkill.create("鬼才", TriggerEvent.AskForRetrial,
         function(_s, room, player, data)
           if not data or #player.hand == 0 then return false end
           local hit = JUDGE_HIT[data.reason]
-          -- 只在「自己的判定会命中（对自己不利）」时改判
-          local want_miss = (data.player == player) and hit
-            and hit(room, player, data.judge_card)
-          if not want_miss then return false end
+          if not hit then return false end
+          local want
+          if data.player == player then
+            want = false -- 自己的判定：改到不生效
+          else
+            local hostile = false
+            for _, q in ipairs(foes(player, room)) do
+              if q == data.player then hostile = true break end
+            end
+            if not hostile then return false end
+            want = true -- 敌人的判定：改到生效
+          end
           for _, c in ipairs(player.hand) do
-            if not hit(room, player, c) then
+            if hit(room, data.player, c) == want then
               player:takeCard(c)
               data.judge_card = c
-              room:log("%s 发动【鬼才】，以 %s 替换判定牌", player.name, c:displayName())
+              room:log("%s 发动【鬼才】，以 %s 替换 %s 的判定牌",
+                player.name, c:displayName(), data.player.name)
               return true
             end
           end
@@ -1017,14 +1038,13 @@ Generals.WU = {
   {
     name = "黄盖", key = "huanggai", max_hp = 4, kingdom = "wu",
     skills = {
-      -- 苦肉：出牌阶段，失去 1 点体力，摸两张牌
+      -- 苦肉：出牌阶段，失去 1 点体力，摸两张牌（每阶段可多次发动）。
+      -- 次数不做硬限制；BOT 保留「体力低于 3 时不再自残」的保守策略。
       TriggerSkill.create("苦肉", TriggerEvent.EventPhaseStart,
         function(_s, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
-          if player.skip_play or player.kurou_used then return false end
-          -- BOT 策略：体力低于 2 时不再自残
+          if player.skip_play then return false end
           if player.hp < 3 then return false end
-          player.kurou_used = true
           room:log("%s 发动【苦肉】，失去 1 点体力并摸两张牌", player.name)
           room:loseHp(player, 1)
           if not player.alive then return false end
@@ -1057,11 +1077,20 @@ Generals.WU = {
           local idx = room:random(#player.hand)
           local card = player.hand[idx]
           player:takeCard(card)
-          table.insert(t.hand, card)
+          -- 文档：目标先猜花色，再展示这张牌；无论结果如何都获得此牌
           local SUITS = { Card.Suit.Spade, Card.Suit.Heart, Card.Suit.Club, Card.Suit.Diamond }
-          local guess = SUITS[room:random(4)]
-          room:log("%s 发动【反间】，%s 获得一张手牌并猜测花色", player.name, t.name)
-          if guess ~= card.suit then
+          local SUIT_ZH = { "黑桃", "红桃", "梅花", "方块" }
+          local guess = room:askForChoice(t, SUIT_ZH,
+            string.format("【反间】：猜测 %s 将要给你的一张手牌的花色", player.name))
+          local gi = type(guess) == "number" and guess or nil
+          if not gi then
+            for i, s in ipairs(SUIT_ZH) do if s == guess then gi = i break end end
+          end
+          if not gi then gi = room:random(4) end -- BOT / 无交互时随机
+          table.insert(t.hand, card)
+          room:log("%s 发动【反间】，%s 猜「%s」并获得一张手牌（实为 %s）",
+            player.name, t.name, SUIT_ZH[gi] or "随机", card:suitString())
+          if SUITS[gi] ~= card.suit then
             room:log("%s 猜错花色，受到 1 点伤害", t.name)
             room:damage(player, t, 1)
           else
@@ -1130,7 +1159,8 @@ Generals.WU = {
         function(_s, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.jieyin_used then return false end
-          if #player.hand < 2 or player.hp >= player.max_hp then return false end
+          if #player.hand < 2 then return false end
+          -- 文档/原版只要求目标是「已受伤的其他男性角色」，不要求自己也受伤
           local t = nil
           for _, q in ipairs(room.players) do
             if q ~= player and q.alive and not q.female and q.hp < q.max_hp then
@@ -1547,6 +1577,7 @@ Generals.QUN = {
           local a, b = males[1], males[2]
           room:log("%s 发动【离间】，令 %s 对 %s 使用【决斗】", player.name, a.name, b.name)
           local duel = phantomCard("duel")
+          duel.no_nullify = true -- 此【决斗】不能被【无懈可击】响应
           room:useCard(a, duel, b)
           return false
         end, { zh = "离间" }),
