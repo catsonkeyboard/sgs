@@ -352,6 +352,14 @@ Cards.define("qinggang_sword", {
   zh = "青釭剑", ctype = T.Equip, equip = "weapon", range = 2,
   desc = "无视目标防具",
 })
+Cards.define("double_sword", {
+  zh = "雌雄双股剑", ctype = T.Equip, equip = "weapon", range = 2,
+  desc = "【杀】指定异性角色后，其须先弃 1 张手牌，否则你摸 1 张牌",
+})
+Cards.define("blade", {
+  zh = "青龙偃月刀", ctype = T.Equip, equip = "weapon", range = 3,
+  desc = "目标出【闪】后，可对其再使用 1 张【杀】",
+})
 Cards.define("ice_sword", {
   zh = "寒冰剑", ctype = T.Equip, equip = "weapon", range = 2,
   desc = "【杀】造成伤害时，改为弃置目标两张牌",
@@ -359,6 +367,10 @@ Cards.define("ice_sword", {
 Cards.define("spear", {
   zh = "丈八蛇矛", ctype = T.Equip, equip = "weapon", range = 3,
   desc = "可将两张手牌当【杀】使用或打出",
+})
+Cards.define("halberd", {
+  zh = "方天画戟", ctype = T.Equip, equip = "weapon", range = 4,
+  desc = "【杀】结算后若你没有手牌，可额外指定至多 2 名角色",
 })
 Cards.define("kylin_bow", {
   zh = "麒麟弓", ctype = T.Equip, equip = "weapon", range = 5,
@@ -394,6 +406,28 @@ Cards.define("defensive_horse", {
   zh = "防御马", ctype = T.Equip, equip = "defensive_horse", range = 0,
   desc = "其他角色与你的距离 +1",
 })
+
+-- ===== 装备自带的转化技 =====
+-- 【丈八蛇矛】：任意两张手牌当【杀】使用或打出。
+-- 效果是"装备带来的"，不属于任何武将，因此挂在 Cards 上，
+-- 由 Room:skillsOf(p) 在装备时动态附加（见 room.lua）。
+local sk = require "src.core.skill"
+Cards.spearSkill = (function()
+  local s = sk.ViewAsSkill.create("丈八蛇矛",
+    { zh = "丈八蛇矛", result_name = "slash", n = 2 })
+  function s:filter_pair(a, b) return a ~= b end
+  function s:view_as(cards)
+    if #cards ~= 2 then return nil end
+    if not self:filter_pair(cards[1], cards[2]) then return nil end
+    local def = Cards.get("slash")
+    local c = Card.create(-1, "slash", cards[1].suit, cards[1].number,
+      def and def.ctype or Card.Type.Basic)
+    c.virtual = true
+    c.subcards = { cards[1], cards[2] }
+    return c
+  end
+  return s
+end)()
 
 -- ==================== 技能牌 ====================
 -- 由转化技（ViewAsSkill）产生的虚拟牌，不参与牌堆构造，仅用于结算分派。

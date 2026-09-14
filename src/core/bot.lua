@@ -90,6 +90,7 @@ local PLAY_PRIORITY = {
   savage_assault = 7, archery_attack = 7, amazing_grace = 5,
   god_salvation = 8,
   crossbow = 9, qinggang_sword = 9, ice_sword = 9, spear = 9, kylin_bow = 9, axe = 9,
+  double_sword = 9, blade = 9, halberd = 9,
   eight_diagram = 9, renwang_shield = 9, silver_lion = 8, vine = 7,
   offensive_horse = 9, defensive_horse = 9,
   dismantlement = 7, snatch = 7, duel = 6, collateral = 5,
@@ -243,6 +244,16 @@ function Bot.make()
         if not target or target ~= p then return nil end
         if source == p then return nil end
         return findByName(p, "nullification")
+      end
+
+      -- 主公技求助（【护驾】/【激将】）：敌人不提供
+      if req.lord_request and isEnemy(p, req.lord_request, room) then return nil end
+
+      -- 救援他人濒死：只救自己人；【酒】只能对自己使用，这里只出【桃】
+      -- （转化出的【桃】走下面的 viewAsCandidates，如【急救】红色牌当桃救人）
+      if wanted == "peach" and req.dying and req.dying ~= p then
+        if isEnemy(p, req.dying, room) then return nil end
+        return findByName(p, "peach", usable)
       end
 
       local card = findByName(p, wanted, usable)

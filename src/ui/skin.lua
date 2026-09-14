@@ -112,8 +112,9 @@ end
 --   装备：      image/card/Crossbow.png（CamelCase）
 local CARD_CAMEL = {
   crossbow = "Crossbow", axe = "Axe", blade = "Blade",
-  ["double_sword"] = "DoubleSword", ["qinggang_sword"] = "QingGang",
+  ["double_sword"] = "DoubleSword", ["qinggang_sword"] = "QinggangSword",
   ["spear"] = "Spear", ["halberd"] = "Halberd", ["kylin_bow"] = "KylinBow",
+  ["ice_sword"] = "IceSword", ["dodge"] = "Jink",
   ["eight_diagram"] = "EightDiagram", ["silver_lion"] = "SilverLion",
   ["vine"] = "Vine", ["renwang_shield"] = "RenWangShield",
   ["chitu"] = "ChiTu", ["dayuan"] = "DaYuan", ["dilu"] = "DiLu",

@@ -152,10 +152,32 @@ Generals.SHU = {
           end
           return false
         end, { zh = "仁德" }),
+      -- 激将（主公技）：需要【杀】时，可令其他蜀势力角色提供。
+      -- 响应类（南蛮/决斗）由 Room:askForCard 的求助钩子覆盖，
+      -- 这里额外覆盖「出牌阶段主动出杀」——手里没杀时才麻烦队友。
+      markerSkill("激将", { lord_supply = { slash = true } }, Freq.Lord),
+      TriggerSkill.create("激将·出杀", TriggerEvent.EventPhaseStart,
+        function(_s, room, player, data)
+          if not data or data.phase ~= "play" or data.player ~= player then return false end
+          if player.skip_play or player.role ~= "lord" then return false end
+          if player.slash_count >= room:slashLimit(player)
+            and not room:allowsUnlimitedSlash(player) then return false end
+          for _, c in ipairs(player.hand) do
+            if isSlashName(c.name) then return false end -- 自己有杀就不动用主公技
+          end
+          local t = firstInRange(player, room, room:attackRangeOf(player))
+          if not t then return false end
+          local slash = room:lordSupply(player, "slash")
+          if not slash then return false end
+          room:log("%s 发动【激将】，对 %s 使用【杀】", player.name, t.name)
+          room:useCard(player, slash, t)
+          return false
+        end, { zh = "激将", frequency = Freq.Lord }),
     },
   },
   {
-    name = "关羽", key = "guanyu", max_hp = 5, kingdom = "shu",
+    -- 体力对齐实体标准版（4 点）；参照的 QSanguosha-Hegemon 源码里是 5 点
+    name = "关羽", key = "guanyu", max_hp = 4, kingdom = "shu",
     skills = { singleViewAs("武圣", "slash", isRed) },
   },
   {
@@ -402,6 +424,8 @@ Generals.WEI = {
           room:obtain(player, real)
           return false
         end, { zh = "奸雄" }),
+      -- 护驾（主公技）：需要【闪】时，可令其他魏势力角色提供
+      markerSkill("护驾", { lord_supply = { dodge = true } }, Freq.Lord),
     },
   },
   {
@@ -927,6 +951,18 @@ Generals.WU = {
           return false
         end, { zh = "制衡" }),
       resetFlag("制衡·重置", { flag = "zhiheng_used", zh = "制衡" }),
+      -- 救援（主公技·锁定）：其他吴势力角色在你濒死时对你使用【桃】，
+      -- 额外回复 1 点体力
+      TriggerSkill.create("救援", TriggerEvent.AskForPeaches,
+        function(_s, room, player, data)
+          if not data or data.player ~= player then return false end
+          if player.role ~= "lord" then return false end
+          if not data.from or data.from.kingdom ~= "wu" then return false end
+          data.n = (data.n or 1) + 1
+          room:log("%s 的【救援】生效：吴势力角色的【桃】额外回复 1 点体力",
+            player.name)
+          return false
+        end, { zh = "救援", frequency = Freq.Lord }),
     },
   },
   {
@@ -1459,7 +1495,8 @@ Generals.QUN = {
     },
   },
   {
-    name = "吕布", key = "lvbu", max_hp = 5, kingdom = "qun",
+    -- 同上：对齐实体标准版（4 点），Hegemon 源码为 5 点
+    name = "吕布", key = "lvbu", max_hp = 4, kingdom = "qun",
     skills = { markerSkill("无双", { wushuang = true }) },
   },
   {

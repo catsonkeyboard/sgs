@@ -159,6 +159,9 @@ crossbow kylin_bow eight_diagram silver_lion vine offensive_horse defensive_hors
 
 ## F. 建议修复优先级
 
+> 逐项的实施方案（改动点、验收用例、提交切分）见 **`PLAN-标准版补齐.md`**。
+> 本文只做"是什么问题 / 多严重"，实施细节一律以 PLAN 为准。
+
 **P0（规则正确性，影响对局成立）**
 
 1. 濒死救援：轮询所有存活角色询问【桃】

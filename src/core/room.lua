@@ -42,6 +42,11 @@ function Room:_checkStall()
   return false
 end
 
+-- 三种【杀】的统称（普通杀 / 火杀 / 雷杀）
+local function isSlashName(n)
+  return n == "slash" or n == "fire_slash" or n == "thunder_slash"
+end
+
 -- 阶段中文名（日志与跳过提示用）
 Room.PHASE_ZH = {
   start = "开始", judge = "判定", draw = "摸牌",
@@ -78,6 +83,8 @@ Room.ROLE_SETUP = {
   [6] = { lord = 1, loyalist = 1, rebel = 3, renegade = 1 },
   [7] = { lord = 1, loyalist = 2, rebel = 3, renegade = 1 },
   [8] = { lord = 1, loyalist = 2, rebel = 4, renegade = 1 },
+  [9] = { lord = 1, loyalist = 3, rebel = 4, renegade = 1 },
+  [10] = { lord = 1, loyalist = 3, rebel = 4, renegade = 2 },
 }
 -- 固定遍历顺序，保证同样 rng 下洗牌结果可复现
 Room.ROLE_ORDER = { "lord", "loyalist", "rebel", "renegade" }
@@ -103,7 +110,10 @@ function Room:setupRoles(rng)
     p.role = list[i]
     p.role_revealed = (p.role == "lord") -- 主公明身份，其余暗置
     if p.role == "lord" then
-      p.max_hp = p.max_hp + 1
+      -- 文档规则：5 人及以上主公体力上限 +1（4 人局不加）
+      if #self.players >= 5 then
+        p.max_hp = p.max_hp + 1
+      end
       p.hp = p.max_hp
     end
   end
@@ -244,7 +254,52 @@ function Room:askForCard(player, card_name, prompt, extra)
   if type(extra) == "table" then
     for k, v in pairs(extra) do req[k] = v end
   end
-  return coroutine.yield(req)
+  local res = coroutine.yield(req)
+  if res then return res end
+  -- 主公技【护驾】/【激将】：主公本人拿不出【闪】/【杀】时，
+  -- 可向其他同势力角色求助（文档：「视为由你使用或打出」）。
+  if card_name == "dodge" or card_name == "slash" then
+    return self:lordSupply(player, card_name)
+  end
+  return nil
+end
+
+local KINGDOM_ZH = { shu = "蜀", wei = "魏", wu = "吴", qun = "群雄" }
+
+-- 主公技求助：按座位顺序询问其他同势力角色是否提供一张指定牌。
+-- 提供的实体牌先转入主公手牌，调用方再按常规流程从主公手里取走
+-- （这样卡牌守恒与「视为由你使用」的语义都成立）。
+-- 只接受实体牌：转化出的虚拟牌无法安全转移所有权。
+function Room:lordSupply(p, card_name)
+  if not self.identity_mode or not p or not p.alive or p.role ~= "lord" then
+    return nil
+  end
+  local skill = nil
+  for _, s in ipairs(self:skillsOf(p)) do
+    if s.lord_supply and s.lord_supply[card_name] then skill = s break end
+  end
+  if not skill then return nil end
+
+  local zh = (card_name == "dodge") and "闪" or "杀"
+  self:log("%s 发动【%s】，向其他%s势力角色求助一张【%s】",
+    p.name, skill.name, KINGDOM_ZH[p.kingdom] or p.kingdom, zh)
+
+  local n = #self.players
+  local base = self:seatOf(p)
+  if base == 0 then return nil end
+  for i = 1, n - 1 do
+    local q = self.players[((base - 1 + i) % n) + 1]
+    if q ~= p and q.alive and q.kingdom == p.kingdom then
+      local c = self:askForCard(q, card_name,
+        string.format("是否为 %s 提供一张【%s】？", p.name, zh), { lord_request = p })
+      if c and not c.virtual and q:takeCard(c) then
+        table.insert(p.hand, c)
+        self:log("%s 向 %s 提供一张【%s】", q.name, p.name, zh)
+        return c
+      end
+    end
+  end
+  return nil
 end
 
 -- 弃牌阶段：弃 n 张；响应 Card 列表
@@ -482,9 +537,7 @@ end
 -- 找出能把某张手牌「当作」want_name 使用的转化技，返回 {skill, card} 列表
 function Room:viewAsCandidates(p, want_name)
   local out = {}
-  local skills = {}
-  for _, s in ipairs((p.general and p.general.skills) or {}) do table.insert(skills, s) end
-  for _, s in ipairs(p.extra_skills or {}) do table.insert(skills, s) end
+  local skills = self:skillsOf(p) -- 含装备带来的转化技（【丈八蛇矛】）
   for _, s in ipairs(skills) do
     -- 【急救】：只能在自己回合外发动
     if s.only_outside_turn and p.phase ~= "not_active" then
@@ -626,10 +679,11 @@ end
 function Room:_phase_start(_p)
 end
 
--- 判定阶段：结算判定区里的延时锦囊
+-- 判定阶段：结算判定区里的延时锦囊。
+-- 文档规则：多张时**从最后放入的那张开始判定**（后进先判），故取队尾。
 function Room:_phase_judge(p)
   while #p.judges > 0 do
-    local card = p.judges[1]
+    local card = p.judges[#p.judges]
     self:_judgeCard(p, card)
   end
 end
@@ -712,7 +766,9 @@ function Room:effSuit(p, card)
   return card.suit
 end
 
--- 玩家身上生效的全部技能（武将技 + 临时获得的）
+-- 玩家身上生效的全部技能（武将技 + 临时获得的 + 装备带来的）。
+-- 装备自带的转化技（【丈八蛇矛】：两张手牌当【杀】）在这里附加，
+-- 这样 viewAsCandidates / bot 的转化候选不需要各写一遍装备判断。
 function Room:skillsOf(p)
   local out = {}
   if not p then return out end
@@ -720,6 +776,9 @@ function Room:skillsOf(p)
     table.insert(out, s)
   end
   for _, s in ipairs(p.extra_skills or {}) do table.insert(out, s) end
+  if p:hasEquip("spear") and Cards.spearSkill then
+    table.insert(out, Cards.spearSkill)
+  end
   return out
 end
 
@@ -955,6 +1014,21 @@ function Room:_useBasic(from, card, targets)
         end
       end
     end
+
+    -- 【方天画戟】：【杀】结算后若没有手牌，可额外指定至多 2 名角色
+    if from:hasEquip("halberd") and #from.hand == 0 then
+      local reach = self:attackRangeOf(from)
+      local extra = 0
+      for _, q in ipairs(self.players) do
+        if extra >= 2 then break end
+        if q ~= from and q ~= target and q.alive
+          and self:distance(from, q) <= reach then
+          extra = extra + 1
+          self:log("%s 的【方天画戟】生效，【杀】额外指定 %s", from.name, q.name)
+          self:_resolveSlash(from, q, card)
+        end
+      end
+    end
     return true
 
   elseif name == "peach" then
@@ -1050,6 +1124,16 @@ function Room:_validateUse(from, card, targets)
     end
   end
 
+  -- 判定区：同名延时锦囊只能有一张（文档 FAQ）
+  if def and def.delayed then
+    for _, t in ipairs(targets) do
+      if t and t:hasDelayed(card.name) then
+        self:log("%s 的判定区已有【%s】，不能再放置", t.name, card:zhName())
+        return false
+      end
+    end
+  end
+
   -- 【空城】（锁定技）：没有手牌时不能成为【杀】/【决斗】的目标
   for _, t in ipairs(targets) do
     if t and Generals.marker(t, "no_target_empty", false) and #t.hand == 0 then
@@ -1119,6 +1203,21 @@ function Room:_resolveSlash(from, to, card)
     end
   end
 
+  -- 【雌雄双股剑】：【杀】指定异性角色后，其须先弃 1 张手牌，否则你摸 1 张牌
+  if from:hasEquip("double_sword") and to.female ~= from.female then
+    if #to.hand > 0 then
+      self:askForDiscardFrom(from, to, 1)
+      self:log("%s 的【雌雄双股剑】令 %s 弃置一张手牌", from.name, to.name)
+    else
+      local c = table.remove(self.drawPile)
+      if c then
+        table.insert(from.hand, c)
+        self:log("%s 的【雌雄双股剑】生效：%s 无牌可弃，%s 摸一张牌",
+          from.name, to.name, from.name)
+      end
+    end
+  end
+
   -- 【铁骑】/【烈弓】：此【杀】不可被【闪】响应
   if card.cannot_dodge then
     self:log("此【杀】不可被【闪】响应")
@@ -1165,12 +1264,57 @@ function Room:_resolveSlash(from, to, card)
     end
   end
 
+  -- 【青龙偃月刀】：目标出【闪】后，可对其再使用 1 张【杀】
+  -- 递归深度上限 2，避免双方反复触发导致对局卡死。
+  if dodged and from:hasEquip("blade") and to.alive
+    and (self.blade_depth or 0) < 2 then
+    local slash2 = self:askForCard(from, "slash",
+      string.format("【青龙偃月刀】：可再对 %s 使用一张【杀】", to.name))
+    if slash2 and isSlashName(slash2.name) and self:_takeCardOrSubcards(from, slash2) then
+      self.blade_depth = (self.blade_depth or 0) + 1
+      self:log("%s 发动【青龙偃月刀】，再对 %s 使用一张【杀】", from.name, to.name)
+      self:_toDiscard(slash2)
+      self:_resolveSlash(from, to, slash2)
+      self.blade_depth = (self.blade_depth or 0) - 1
+      return
+    end
+  end
+
+  -- 【贯石斧】：【杀】被【闪】抵消时，可弃置两张牌令其依然造成伤害
+  if dodged and from:hasEquip("axe") and #from.hand >= 2 then
+    local dumped = self:askForDiscard(from, 2) or {}
+    local dropped = 0
+    for _, c in ipairs(dumped) do
+      if from:takeCard(c) then
+        table.insert(self.discardPile, c)
+        dropped = dropped + 1
+      end
+    end
+    if dropped >= 2 then
+      self:log("%s 发动【贯石斧】，弃置两张牌令此【杀】依然造成伤害", from.name)
+      dodged = false
+    end
+  end
+
   if dodged then
     self:trigger("SlashMissed", to, { from = from, to = to })
     return
   end
 
   self:_slashHit(from, to, card, nature, ignore_armor)
+end
+
+-- 从手牌取走一张牌（虚拟牌则取走它的实体来源牌）
+function Room:_takeCardOrSubcards(p, card)
+  if card.virtual then
+    local subs = card.subcards or {}
+    if #subs == 0 then return card.phantom == true end
+    for _, sc in ipairs(subs) do
+      if not p:takeCard(sc) then return false end
+    end
+    return true
+  end
+  return p:takeCard(card) ~= nil
 end
 
 -- 【杀】命中后的伤害与后续效果
@@ -1419,26 +1563,61 @@ function Room:_dying(p, killer)
   end
 
   self:log("%s 濒死，请求【桃】", p.name)
+  -- 文档规则：濒死者本人优先，之后按逆时针依次询问其余角色是否出【桃】救援。
   while p.hp <= 0 do
-    local peach = self:askForCard(p, "peach", "你已濒死，请使用【桃】/【酒】（不出则阵亡）")
-    if peach and p:takeCard(peach) then
-      table.insert(self.discardPile, peach)
-      self:log("%s 使用【桃】", p.name)
-      self:heal(p, 1)
-    else
-      local wines = p:findCardsByName("analeptic")
-      if #wines > 0 then
-        local wine = p:takeCard(wines[1])
-        table.insert(self.discardPile, wine)
-        self:log("%s 使用【酒】回复体力", p.name)
-        self:heal(p, 1)
-      else
-        self:_kill(p, killer)
-        return
-      end
+    local saved = self:_dyingSelfRescue(p)
+    if not saved then saved = self:_dyingAskOthers(p) end
+    if not saved then
+      self:_kill(p, killer)
+      return
     end
   end
   self:trigger("QuitDying", p, { player = p })
+end
+
+-- 濒死者本人自救（【桃】或【酒】）；返回 true 表示体力有回复
+function Room:_dyingSelfRescue(p)
+  local peach = self:askForCard(p, "peach", "你已濒死，请使用【桃】/【酒】（不出则阵亡）")
+  if peach and p:takeCard(peach) then
+    table.insert(self.discardPile, peach)
+    self:log("%s 使用【桃】", p.name)
+    self:heal(p, 1)
+    return true
+  end
+  local wines = p:findCardsByName("analeptic")
+  if #wines > 0 then
+    local wine = p:takeCard(wines[1])
+    table.insert(self.discardPile, wine)
+    self:log("%s 使用【酒】回复体力", p.name)
+    self:heal(p, 1)
+    return true
+  end
+  return false
+end
+
+-- 其余角色救援：从濒死者开始按逆时针依次询问，救回即止（不会多弃桃）。
+-- 返回 true 表示已被救回（体力回到 1 点以上）。
+function Room:_dyingAskOthers(p)
+  local n = #self.players
+  local base = self:seatOf(p)
+  if base == 0 then return p.hp > 0 end
+  for i = 1, n - 1 do
+    local q = self.players[((base - 1 + i) % n) + 1]
+    if q ~= p and q.alive then
+      local peach = self:askForCard(q, "peach",
+        string.format("%s 濒死，是否使用【桃】救援？", p.name), { dying = p })
+      if peach and q:takeCard(peach) then
+        table.insert(self.discardPile, peach)
+        -- 【救援】（主公技）等可在此把回复量改大
+        local data = { player = p, from = q, n = 1 }
+        self:trigger("AskForPeaches", p, data)
+        self:log("%s 使用【桃】救援 %s", q.name, p.name)
+        self:heal(p, data.n or 1)
+        if p.hp > 0 then return true end
+      end
+    end
+  end
+  return p.hp > 0
 end
 
 function Room:_kill(p, killer)

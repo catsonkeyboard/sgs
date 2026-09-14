@@ -112,6 +112,7 @@ local Frequency = {
   Compulsory = "Compulsory",   -- 锁定技
   Limited = "Limited",         -- 限定技
   Wake = "Wake",               -- 觉醒技
+  Lord = "Lord",               -- 主公技：只有担任主公时才能发动
 }
 
 local Skill = class("Skill")

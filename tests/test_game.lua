@@ -1577,15 +1577,73 @@ do
       c5.lord or 0, c5.loyalist or 0, c5.rebel or 0, c5.renegade or 0))
   local c4 = roles(4)
   check(c4.lord == 1 and c4.loyalist == 1 and c4.rebel == 1 and c4.renegade == 1, "4 人配置应正确")
-  -- 主公明身份且 +1 体力
+  -- 主公明身份且 +1 体力（5 人及以上）
   check(r8:getLord() ~= nil and r8:getLord().role_revealed, "主公应明置身份")
-  check(r8:getLord().max_hp == r8:getLord().general.max_hp + 1, "主公应 +1 体力上限")
+  check(r8:getLord().max_hp == r8:getLord().general.max_hp + 1, "8 人局主公应 +1 体力上限")
   -- 其余暗置
   local hidden = true
   for _, p in ipairs(r8.players) do
     if p.role ~= "lord" and p.role_revealed then hidden = false end
   end
   check(hidden, "非主公身份应暗置")
+
+  -- 文档：4 人局主公**不**加体力上限
+  local _, r4 = roles(4)
+  check(r4:getLord().max_hp == r4:getLord().general.max_hp,
+    "4 人局主公不应 +1 体力上限（实得 " .. r4:getLord().max_hp .. "）")
+
+  -- 文档：9 / 10 人局也要有身份配置
+  local c9 = roles(9)
+  check(c9.lord == 1 and c9.loyalist == 3 and c9.rebel == 4 and c9.renegade == 1,
+    string.format("9 人应为 主1 忠3 反4 内1（实得 主%d 忠%d 反%d 内%d）",
+      c9.lord or 0, c9.loyalist or 0, c9.rebel or 0, c9.renegade or 0))
+  local c10 = roles(10)
+  check(c10.lord == 1 and c10.loyalist == 3 and c10.rebel == 4 and c10.renegade == 2,
+    string.format("10 人应为 主1 忠3 反4 内2（实得 主%d 忠%d 反%d 内%d）",
+      c10.lord or 0, c10.loyalist or 0, c10.rebel or 0, c10.renegade or 0))
+end
+
+print("\n--- 标准版数值（文档对标）---")
+
+do
+  local G = require "src.core.generals"
+  local byName = {}
+  for _, g in ipairs(G.all()) do byName[g.name] = g end
+  check(byName["关羽"].max_hp == 4, "关羽标准版应为 4 体力（实得 "
+    .. byName["关羽"].max_hp .. "）")
+  check(byName["吕布"].max_hp == 4, "吕布标准版应为 4 体力（实得 "
+    .. byName["吕布"].max_hp .. "）")
+end
+
+print("\n--- 判定区规则 ---")
+
+do
+  local r, ps = makeRoomWith({ "白板武将", "白板武将" }, 41)
+  local a = Card.create(1, "indulgence", Card.Suit.Spade, 6, Card.Type.Trick)
+  local b = Card.create(2, "indulgence", Card.Suit.Club, 6, Card.Type.Trick)
+  ps[1]:addJudge(a)
+  ps[1]:addJudge(b)
+  local order = {}
+  -- 后进先判：先判 b，再判 a
+  r._judgeCard = function(self, p, card)
+    table.insert(order, card)
+    p:removeJudge(card)
+    table.insert(self.discardPile, card)
+    return nil
+  end
+  r:_phase_judge(ps[1])
+  check(order[1] == b and order[2] == a,
+    "多张延时锦囊应从最后放入的那张开始判定")
+end
+
+do
+  local r, ps = makeRoomWith({ "白板武将", "白板武将" }, 42)
+  local first = Card.create(1, "indulgence", Card.Suit.Spade, 6, Card.Type.Trick)
+  ps[2]:addJudge(first)
+  local second = Card.create(2, "indulgence", Card.Suit.Club, 6, Card.Type.Trick)
+  local ok = r:_validateUse(ps[1], second, { ps[2] })
+  check(not ok, "同一角色判定区不能放第二张同名延时锦囊【乐不思蜀】")
+  check(#ps[2].judges == 1, "被拒绝后判定区仍只有一张")
 end
 
 print("\n--- 座位布局 ---")
@@ -1926,6 +1984,235 @@ do
     return nil
   end)
   check(asked3 == nil, "锁定技不应弹出征询（无双是 Compulsory）")
+end
+
+print("\n--- 主公技（护驾 / 激将 / 救援）---")
+
+local function lordRoom(keys, seed)
+  local r, ps = makeRoomWith(keys, seed)
+  r.identity_mode = true
+  ps[1].role = "lord"
+  return r, ps
+end
+
+local function skillNamed(p, name)
+  for _, s in ipairs((p.general and p.general.skills) or {}) do
+    if s.name == name then return s end
+  end
+  return nil
+end
+
+do -- 曹操【护驾】：需要闪时由魏势力角色提供
+  local r, ps = lordRoom({ "曹操", "夏侯惇" }, 51)
+  local s = skillNamed(ps[1], "护驾")
+  check(s and s.lord_supply and s.lord_supply.dodge, "曹操应拥有主公技【护驾】")
+  local dodge = give(ps[2], "dodge", Card.Suit.Heart, 2)
+  local slash = give(ps[2], "slash", Card.Suit.Spade, 8)
+  local hp = ps[1].hp
+  runInRoom(function() r:useCard(ps[2], slash, ps[1]) end, function(req)
+    if req.type == "askForCard" and req.card_name == "dodge" then
+      if req.player == ps[1] then return nil end -- 曹操自己没有闪
+      return dodge
+    end
+    return nil
+  end)
+  check(ps[1].hp == hp, "【护驾】应由魏势力角色提供【闪】，主公不掉血（hp "
+    .. hp .. "→" .. ps[1].hp .. "）")
+end
+
+do -- 刘备【激将】：需要杀时由蜀势力角色提供
+  local r, ps = lordRoom({ "刘备", "关羽" }, 52)
+  local s = skillNamed(ps[1], "激将")
+  check(s and s.lord_supply and s.lord_supply.slash, "刘备应拥有主公技【激将】")
+  local slash = give(ps[2], "slash", Card.Suit.Spade, 8)
+  local got = nil
+  runInRoom(function() got = r:lordSupply(ps[1], "slash") end, function(req)
+    if req.type == "askForCard" and req.card_name == "slash"
+      and req.player == ps[2] then
+      return slash
+    end
+    return nil
+  end)
+  check(got == slash, "【激将】应取得蜀势力角色提供的【杀】")
+  check(ps[1].hand[#ps[1].hand] == slash, "提供的【杀】应先转入主公手牌")
+end
+
+do -- 孙权【救援】：吴势力角色的桃额外回 1 点
+  local r, ps = lordRoom({ "孙权", "周瑜" }, 53)
+  local peach = give(ps[2], "peach", Card.Suit.Heart, 3)
+  ps[1].hp = 0
+  runInRoom(function() r:_dying(ps[1], nil) end, function(req)
+    if req.type == "askForCard" and req.card_name == "peach" then
+      if req.player == ps[1] then return nil end
+      return peach
+    end
+    return nil
+  end)
+  check(ps[1].alive and ps[1].hp == 2,
+    "【救援】下吴势力的【桃】应回复 2 点（hp " .. ps[1].hp .. "）")
+end
+
+do -- 主公技只在担任主公时可用
+  local r, ps = makeRoomWith({ "曹操", "夏侯惇" }, 54)
+  r.identity_mode = true
+  ps[1].role = "rebel" -- 曹操不是主公
+  give(ps[2], "dodge", Card.Suit.Heart, 2)
+  local got = nil
+  runInRoom(function() got = r:lordSupply(ps[1], "dodge") end)
+  check(got == nil, "非主公身份时【护驾】不应生效")
+end
+
+print("\n--- 标准版武器（雌雄/青龙/方天/丈八/贯石）---")
+
+local function equipCard(p, name)
+  local def = Cards.get(name)
+  local c = Card.create(2000 + #p.hand, name, Card.Suit.Spade, 5,
+    def and def.ctype or Card.Type.Equip)
+  p.equips[def.equip or "weapon"] = c
+  return c
+end
+
+do -- 雌雄双股剑：异性目标弃 1 张，无牌则使用者摸 1 张
+  local r, ps = makeRoomWith({ "白板武将", "白板武将" }, 31)
+  ps[2].female = true
+  equipCard(ps[1], "double_sword")
+  give(ps[2], "slash", Card.Suit.Spade, 5)
+  local n2 = #ps[2].hand
+  runInRoom(function()
+    r:useCard(ps[1], give(ps[1], "slash", Card.Suit.Spade, 6), ps[2])
+  end, function(req)
+    if req.type == "askForDiscardFrom" then return req.target.hand[1] end
+    return nil
+  end)
+  check(#ps[2].hand == n2 - 1, "【雌雄双股剑】应令异性目标弃置一张手牌（"
+    .. #ps[2].hand .. " vs " .. n2 - 1 .. "）")
+end
+
+do -- 青龙偃月刀：目标出闪后可再出一张杀
+  local r, ps = makeRoomWith({ "白板武将", "白板武将" }, 32)
+  equipCard(ps[1], "blade")
+  give(ps[2], "dodge", Card.Suit.Heart, 2) -- 目标有闪
+  give(ps[1], "slash", Card.Suit.Spade, 7) -- 追击用
+  local hp = ps[2].hp
+  runInRoom(function()
+    r:useCard(ps[1], give(ps[1], "slash", Card.Suit.Spade, 8), ps[2])
+  end, function(req)
+    if req.type == "askForCard" then
+      if req.card_name == "dodge" then return req.player.hand[1] end
+      if req.card_name == "slash" then
+        for _, c in ipairs(req.player.hand) do
+          if c.name == "slash" then return c end
+        end
+      end
+    end
+    return nil
+  end)
+  check(ps[2].hp == hp - 1, "【青龙偃月刀】追击的杀应造成伤害（hp "
+    .. hp .. "→" .. ps[2].hp .. "）")
+end
+
+do -- 贯石斧：弃两张牌强制命中
+  local r, ps = makeRoomWith({ "白板武将", "白板武将" }, 33)
+  equipCard(ps[1], "axe")
+  give(ps[2], "dodge", Card.Suit.Heart, 2)
+  give(ps[1], "peach", Card.Suit.Heart, 3)
+  give(ps[1], "peach", Card.Suit.Heart, 4)
+  local hp = ps[2].hp
+  runInRoom(function()
+    r:useCard(ps[1], give(ps[1], "slash", Card.Suit.Spade, 8), ps[2])
+  end, function(req)
+    if req.type == "askForCard" and req.card_name == "dodge" then
+      return req.player.hand[1]
+    end
+    if req.type == "askForDiscard" then
+      local out = {}
+      for i = 1, math.min(req.n, #req.player.hand) do out[i] = req.player.hand[i] end
+      return out
+    end
+    return nil
+  end)
+  check(ps[2].hp == hp - 1, "【贯石斧】弃两张牌后杀应依然命中（hp "
+    .. hp .. "→" .. ps[2].hp .. "）")
+  check(#ps[1].hand == 0, "【贯石斧】应消耗两张手牌（剩 " .. #ps[1].hand .. "）")
+end
+
+do -- 丈八蛇矛：两张手牌当杀
+  local r, ps = makeRoomWith({ "白板武将", "白板武将" }, 34)
+  equipCard(ps[1], "spear")
+  give(ps[1], "peach", Card.Suit.Heart, 3)
+  give(ps[1], "peach", Card.Suit.Heart, 4)
+  local cands = r:viewAsCandidates(ps[1], "slash")
+  check(#cands > 0 and cands[1].card2 ~= nil,
+    "装备【丈八蛇矛】时应能选出两张手牌当【杀】")
+  local made = cands[1].skill:view_as({ cands[1].card, cands[1].card2 })
+  check(made and made.name == "slash", "【丈八蛇矛】应转化出一张【杀】")
+end
+
+do -- 方天画戟：杀后无手牌可额外指定至多 2 人
+  local r, ps = makeRoomWith({ "白板武将", "白板武将", "白板武将", "白板武将" }, 35)
+  equipCard(ps[1], "halberd")
+  local hp2, hp3 = ps[2].hp, ps[3].hp
+  runInRoom(function()
+    r:useCard(ps[1], give(ps[1], "slash", Card.Suit.Spade, 8), ps[2])
+  end)
+  check(#ps[1].hand == 0, "【方天画戟】发动前提：杀后没有手牌")
+  check(ps[2].hp < hp2 and ps[3].hp < hp3,
+    "【方天画戟】应额外指定另两名角色（" .. ps[2].hp .. "/" .. ps[3].hp .. "）")
+end
+
+print("\n--- 濒死救援（文档规则：本人优先 + 逆时针询问全场）---")
+
+do -- 本人无桃、他人有桃 → 被救回
+  local r, ps = makeRoomWith({ "白板武将", "白板武将" }, 21)
+  local peach = give(ps[2], "peach", Card.Suit.Heart, 3)
+  ps[1].hp = 0
+  runInRoom(function() r:_dying(ps[1], nil) end, function(req)
+    if req.type == "askForCard" and req.card_name == "peach" and req.player == ps[2] then
+      return peach
+    end
+    return nil
+  end)
+  check(ps[1].alive, "濒死者本人无桃时，他人应能出【桃】救回")
+  check(ps[1].hp == 1, "救回后体力应为 1（实得 " .. ps[1].hp .. "）")
+  check(hasCard(r.discardPile, peach), "救援用的【桃】应进入弃牌堆")
+end
+
+do -- 全场无桃 → 阵亡
+  local r, ps = makeRoomWith({ "白板武将", "白板武将" }, 22)
+  ps[1].hp = 0
+  runInRoom(function() r:_dying(ps[1], nil) end)
+  check(not ps[1].alive, "无人出【桃】时应阵亡")
+end
+
+do -- 需要两张桃时，恰好消耗两张，不多弃
+  local r, ps = makeRoomWith({ "白板武将", "白板武将", "白板武将" }, 23)
+  give(ps[2], "peach", Card.Suit.Heart, 3)
+  give(ps[3], "peach", Card.Suit.Heart, 4)
+  ps[1].hp = -1
+  runInRoom(function() r:_dying(ps[1], nil) end, function(req)
+    if req.type == "askForCard" and req.card_name == "peach" and req.player ~= ps[1] then
+      return req.player.hand[1]
+    end
+    return nil
+  end)
+  check(ps[1].alive and ps[1].hp == 1, "两张【桃】应把 -1 体力的角色救回 1 点（实得 "
+    .. ps[1].hp .. "）")
+  check(#ps[2].hand == 0 and #ps[3].hand == 0, "两名救援者各消耗一张【桃】")
+end
+
+do -- 【完杀】：贾诩回合内他人无法救援
+  local r, ps = makeRoomWith({ "白板武将", "贾诩" }, 24)
+  give(ps[2], "peach", Card.Suit.Heart, 3)
+  ps[1].hp = 0
+  r.current_seat = 2 -- 贾诩的回合
+  runInRoom(function() r:_dying(ps[1], nil) end, function(req)
+    if req.type == "askForCard" and req.card_name == "peach" and req.player == ps[2] then
+      return ps[2].hand[1]
+    end
+    return nil
+  end)
+  check(not ps[1].alive, "【完杀】生效时他人无法用【桃】救援")
+  check(#ps[2].hand == 1, "【完杀】下救援者的【桃】不应被消耗")
 end
 
 print("\n--- 卡牌定义完整性 ---")

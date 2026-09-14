@@ -38,9 +38,10 @@ local DECK_SPEC = {
   { "fire_attack", 3 }, { "iron_chain", 4 }, { "nullification", 3 },
   -- 延时锦囊
   { "indulgence", 3 }, { "supply_shortage", 2 }, { "lightning", 1 },
-  -- 武器
+  -- 武器（标准版 9 件：连弩 2 + 其余各 1）
   { "crossbow", 2 }, { "qinggang_sword", 1 }, { "ice_sword", 1 },
-  { "spear", 1 }, { "kylin_bow", 1 }, { "axe", 1 },
+  { "double_sword", 1 }, { "blade", 1 }, { "spear", 1 },
+  { "axe", 1 }, { "halberd", 1 }, { "kylin_bow", 1 },
   -- 防具
   { "eight_diagram", 2 }, { "renwang_shield", 1 }, { "silver_lion", 1 },
   { "vine", 1 },
