@@ -44,7 +44,7 @@ function RoomScene:init(on_exit, mode, size)
     require("src.compat.loader").loadDirectory(engine, "diy")
   end)
   mode = mode or "identity"
-  local size = (mode == "identity") and (size or 8) or 2 -- 身份局默认 8 人（标准局）
+  local size = (mode == "identity") and (size or 5) or 2 -- 身份局默认 5 人
 
   -- 身份局按 size 建局（8/5/4 人）；武将池循环取，不写死固定四个
   local POOL = { "刘备", "曹操", "孙权", "貂蝉", "吕布", "诸葛亮", "司马懿", "华佗" }

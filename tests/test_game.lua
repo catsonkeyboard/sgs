@@ -224,7 +224,7 @@ end
 
 print("\n--- 身份局 ---")
 
--- 构造一个 n 人身份局（全部 BOT），可指定 seed
+-- 构造一个 n 人身份局（全部 BOT），可指定 seed（对局测试统一用 5 / 8 人）
 local function makeIdentityGame(n, seed)
   local engine = Engine.create()
   Standard.setup(engine)
@@ -252,7 +252,7 @@ for _, n in ipairs { 4, 5, 6, 7, 8 } do
 end
 
 do
-  local r = makeIdentityGame(4, 11)
+  local r = makeIdentityGame(5, 11)
   local lord = r:getLord()
   check(lord.max_hp == 5, "主公体力上限 +1（" .. lord.max_hp .. "）")
   check(lord.role_revealed, "主公身份应公开")
@@ -265,7 +265,7 @@ end
 
 -- 胜负判定：反贼与内奸全灭 → 主公方胜
 do
-  local r = makeIdentityGame(4, 5)
+  local r = makeIdentityGame(5, 5)
   local lord = r:getLord()
   for _, p in ipairs(r.players) do
     if p.role == "rebel" or p.role == "renegade" then
@@ -279,7 +279,7 @@ end
 
 -- 胜负判定：主公阵亡且存活者非内奸 → 反贼胜
 do
-  local r = makeIdentityGame(4, 6)
+  local r = makeIdentityGame(5, 6)
   local lord = r:getLord()
   lord.alive = false
   r:_checkWinner()
@@ -288,7 +288,7 @@ end
 
 -- 胜负判定：主公阵亡且仅剩内奸 → 内奸胜
 do
-  local r = makeIdentityGame(4, 7)
+  local r = makeIdentityGame(5, 7)
   local lord, renegade = r:getLord(), nil
   for _, p in ipairs(r.players) do
     if p.role == "renegade" then renegade = p end
@@ -303,7 +303,7 @@ end
 
 -- 奖惩：击败反贼摸 3 张
 do
-  local r = makeIdentityGame(4, 8)
+  local r = makeIdentityGame(5, 8)
   local lord = r:getLord()
   local rebel = nil
   for _, p in ipairs(r.players) do if p.role == "rebel" then rebel = p end end
@@ -315,7 +315,7 @@ end
 
 -- 奖惩：主公误杀忠臣 → 弃光
 do
-  local r = makeIdentityGame(4, 9)
+  local r = makeIdentityGame(5, 9)
   local lord = r:getLord()
   local loyal = nil
   for _, p in ipairs(r.players) do if p.role == "loyalist" then loyal = p end end
@@ -330,7 +330,7 @@ do
   local ok_count, bad = 0, {}
   for seed = 1, 6 do
     local ok = pcall(function()
-      local r = makeIdentityGame(4, seed * 17 + 3)
+      local r = makeIdentityGame(5, seed * 17 + 3)
       r:start()
       local d = Driver.create(r, Bot.make())
       d:advance()
@@ -341,7 +341,7 @@ do
     end)
     if ok then ok_count = ok_count + 1 else table.insert(bad, seed) end
   end
-  check(ok_count == 6, "4 人身份局 6 个种子全部跑通（失败: " .. table.concat(bad, ",") .. "）")
+  check(ok_count == 6, "5 人身份局 6 个种子全部跑通（失败: " .. table.concat(bad, ",") .. "）")
 end
 
 print("\n--- 蜀国武将技能 ---")
@@ -1522,6 +1522,26 @@ do
   check(ExpPattern.match(".|.|.|judge", c, "judge"), "区域段 judge 应匹配 judge")
   -- 未知区域名以前会静默放行，现在应不匹配
   check(not ExpPattern.match(".|.|.|乱写", c, "hand"), "未知区域名不应被静默放行")
+end
+
+print("\n--- 房间默认规模 ---")
+
+do
+  -- 约定：**默认 5 人局**，8 人为官方标准局（推荐）。
+  -- 这几条断言防止以后有人随手把默认值改回 4 或 8。
+  local Host = require "src.net.host"
+  check(Host.create {}.count == 5, "Host 默认应为 5 人局（实得 "
+    .. tostring(Host.create {}.count) .. "）")
+  check(Host.create { count = 8 }.count == 8, "显式指定 8 人应生效")
+  -- 身份配置表本身应覆盖 4..8
+  local Room = require "src.core.room"
+  for n = 4, 8 do
+    check(Room.ROLE_SETUP[n] ~= nil, n .. " 人局应有身份配置")
+  end
+  check(Room.ROLE_SETUP[8].loyalist == 2 and Room.ROLE_SETUP[8].rebel == 4,
+    "8 人局应为 忠2 反4（官方标准）")
+  check(Room.ROLE_SETUP[5].loyalist == 1 and Room.ROLE_SETUP[5].rebel == 2,
+    "5 人局应为 忠1 反2")
 end
 
 print("\n--- 身份局人数配置 ---")

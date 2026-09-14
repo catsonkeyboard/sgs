@@ -23,7 +23,7 @@ local Host = class("Host")
 
 function Host:init(opts)
   opts = opts or {}
-  self.count = opts.count or 8 -- 默认 8 人（官方标准局）
+  self.count = opts.count or 5 -- 默认 5 人局（8 人为官方标准局，见 README）
   self.seat_count = self.count
   self.seats = {}
   for i = 1, self.count do

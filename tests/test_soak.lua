@@ -130,10 +130,10 @@ local function soak(label, builder)
 end
 
 soak("1v1 标准局", makeDuel)
-soak("4 人身份局", function(seed) return makeIdentity(seed, 4) end)
+-- 只测 5 人局与 8 人局：5 人为默认规模，8 人为官方标准局
 soak("5 人身份局", function(seed) return makeIdentity(seed, 5) end)
 soak("8 人身份局", function(seed) return makeIdentity(seed, 8) end)
-soak("4 人随机武将身份局", function(seed) return makeRandomIdentity(seed, 4) end)
+soak("5 人随机武将身份局", function(seed) return makeRandomIdentity(seed, 5) end)
 soak("8 人随机武将身份局", function(seed) return makeRandomIdentity(seed, 8) end)
 
 print("\n-- 逐将覆盖：每名武将各跑 3 局 --")

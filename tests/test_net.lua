@@ -48,7 +48,7 @@ end
 print("\n--- 房间与座位 ---")
 
 do
-  local host = Host.create { count = 4 }
+  local host = Host.create { count = 5 }
   local a1, a2 = Channel.pair()
   local b1, b2 = Channel.pair()
   local seat1 = host:attach("甲", a1)
@@ -57,26 +57,26 @@ do
   local third = host:attach("丙", Channel.pair())
   check(third == 3, "第三个应坐 3 号位")
   local info = host:seatInfo()
-  check(#info == 4, "座位表应有 4 项")
-  check(info[1].occupied and info[4].occupied == false, "占用状态应正确")
+  check(#info == 5, "座位表应有 5 项（5 人局）")
+  check(info[1].occupied and info[5].occupied == false, "占用状态应正确")
 
   host:detach(2)
   check(host:seatInfo()[2].occupied == false, "detach 后该座应空出")
   local again = host:attach("丁", b1)
   check(again == 2, "空座应被复用（实得 " .. tostring(again) .. "）")
 
-  -- 坐满后再来人应被拒
-  local c = Channel.pair()
-  host:attach("戊", c)
-  local full, err = host:attach("己", Channel.pair())
+  -- 坐满后再来人应被拒（5 人房：已占 1,2,3，再坐 4、5 后满）
+  host:attach("戊", Channel.pair())
+  host:attach("己", Channel.pair())
+  local full, err = host:attach("庚", Channel.pair())
   check(full == nil, "满房应拒绝加入（" .. tostring(err) .. "）")
 end
 
 print("\n--- 同步：跑完一局 ---")
 
 do
-  local host = Host.create { count = 4 }
-  -- 1 号位真人客户端（用脚本应答：一律放弃），其余 BOT
+  local host = Host.create { count = 5 }
+  -- 5 人局：1 号位真人客户端（脚本应答：一律放弃），其余 BOT
   local s1, c1 = Channel.pair()
   local cli = Client.create("甲", c1)
   host:attach("甲", s1)
@@ -106,11 +106,11 @@ do
 
   -- 快照
   local snap = host:snapshot()
-  check(snap ~= nil and #snap.players == 4, "快照应含 4 名玩家")
+  check(snap ~= nil and #snap.players == 5, "快照应含 5 名玩家（5 人局）")
   check(snap.over == true, "快照应标记结束")
 
   -- 断线不应卡死：把人类座位摘掉后仍能推进到结束
-  local host2 = Host.create { count = 4 }
+  local host2 = Host.create { count = 8 }
   local s2, c2 = Channel.pair()
   local cli2 = Client.create("乙", c2)
   host2:attach("乙", s2)

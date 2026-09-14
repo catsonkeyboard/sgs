@@ -8,13 +8,15 @@ function MenuScene:init(on_start)
   self.font_big = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 56)
   self.font = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 18)
   self.font_sm = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 13)
-  -- 身份局按规模分档：8 人是官方标准配置（主1 忠2 反4 内1），
-  -- 5 人是常见休闲局，4 人是最小可玩局。
+  -- 身份局按规模分档：
+  --   **5 人是默认**（主1 忠1 反2 内1，节奏适中，一局不拖沓）
+  --   8 人是官方标准局（主1 忠2 反4 内1），身份博弈最完整，推荐人多时玩
+  --   4 人是最小可玩局
   self.buttons = {
-    { x = 180, y = 360, w = 220, h = 62, text = "身份局（8 人）", mode = "identity",
-      size = 8, desc = "主1 忠2 反4 内1 · 标准局" },
-    { x = 420, y = 360, w = 220, h = 62, text = "身份局（5 人）", mode = "identity",
-      size = 5, desc = "主1 忠1 反2 内1" },
+    { x = 180, y = 360, w = 220, h = 62, text = "身份局（5 人）", mode = "identity",
+      size = 5, desc = "默认 · 主1 忠1 反2 内1" },
+    { x = 420, y = 360, w = 220, h = 62, text = "身份局（8 人）", mode = "identity",
+      size = 8, desc = "推荐 · 主1 忠2 反4 内1" },
     { x = 660, y = 360, w = 220, h = 62, text = "身份局（4 人）", mode = "identity",
       size = 4, desc = "主1 忠1 反1 内1" },
     { x = 300, y = 450, w = 250, h = 56, text = "1v1 死斗", mode = "duel", size = 2,
