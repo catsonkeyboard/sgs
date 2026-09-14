@@ -323,6 +323,7 @@ function Room:askForDiscardFrom(source, target, n)
   if card and target:takeCard(card) then
     self:log("%s 弃置 %s 的一张牌", target.name, card:zhName())
     table.insert(self.discardPile, card)
+    self:notifyHandEmpty(target)
   end
 end
 
@@ -520,6 +521,35 @@ function Room:throwCard(a, b)
   if card then table.insert(self.discardPile, card) end
 end
 
+-- 【观星】/【心战】一类：让玩家重排牌堆顶若干张牌。
+-- 返回玩家给出的新顺序（牌数不变）；无交互（BOT / headless）时保持原序。
+-- up 是先亮出的那批（放回牌堆顶），down 是放到牌堆底的那批。
+function Room:askForGuanxing(p, up, down)
+  local req = {
+    type = "askForGuanxing", player = p,
+    cards = up, cards_bottom = down,
+  }
+  -- 只在协程内 yield。单测里常直接 r:trigger("EventPhaseStart"...)，
+  -- 那是在主线程调用的，yield 会报 "attempt to yield across C-call boundary"。
+  local res = nil
+  if coroutine.running() ~= nil then
+    res = coroutine.yield(req)
+  end
+  if type(res) ~= "table" then return up, down end
+  return res.up or up, res.down or down
+end
+
+-- 手牌被打空时的统一收口：【连营】【死谏】这类「失去最后一张手牌」技能挂
+-- 在 CardsMoveOneTime + last_handcard 上。只在弃牌阶段触发的话，
+-- 出牌 / 被顺 / 被拆 / 响应出闪这些场景都覆盖不到，因此在所有
+-- 「牌离开手牌」的收口处统一调用本函数。
+function Room:notifyHandEmpty(p)
+  if p and p.alive and #p.hand == 0 then
+    self:trigger("CardsMoveOneTime", p,
+      { player = p, from_place = "hand", last_handcard = true })
+  end
+end
+
 -- 从弃牌堆取回一张牌（【奸雄】等技能用）
 function Room:takeFromDiscard(card)
   for i, c in ipairs(self.discardPile) do
@@ -714,6 +744,7 @@ function Room:_phase_play(p)
     local use = self:askForUseCard(p)
     if not use then break end
     local consumed = self:useCard(p, use.card, use.target or use.to)
+    self:notifyHandEmpty(p) -- 出牌打到空手：【连营】
     if not consumed then break end -- 引擎判定非法响应，终止出牌防止死循环
   end
 end
@@ -733,11 +764,8 @@ function Room:_phase_discard(p)
     end
   end
   if n > 0 then self:log("%s 弃置 %d 张牌", p.name, n) end
-  -- 失去最后一张手牌：【死谏】的挂载点
-  if #p.hand == 0 then
-    self:trigger("CardsMoveOneTime", p,
-      { player = p, from_place = "hand", last_handcard = true })
-  end
+  -- 失去最后一张手牌：【连营】【死谏】的挂载点
+  self:notifyHandEmpty(p)
 end
 
 function Room:_phase_finish(_p)
@@ -856,8 +884,15 @@ end
 
 -- ===== 卡牌使用 =====
 
--- target 可为单个 Player 或列表；返回 true=已消耗
+-- target 可为单个 Player 或列表；返回 true=已消耗。
+-- 外层负责「手牌打空」的收口（【连营】），内层不关心。
 function Room:useCard(from, card, target)
+  local ok = self:_useCardInner(from, card, target)
+  if ok and from then self:notifyHandEmpty(from) end
+  return ok
+end
+
+function Room:_useCardInner(from, card, target)
   local targets = target
   if target and target.is_human ~= nil then targets = { target } end
   targets = targets or {}
@@ -1233,6 +1268,7 @@ function Room:_resolveSlash(from, to, card)
     table.insert(self.discardPile, dodge)
     self:log("%s 打出【闪】", to.name)
     self:trigger("CardResponded", to, { player = to, card = dodge })
+    self:notifyHandEmpty(to)
   end
 
   -- 【无双】（锁定技）：吕布的【杀】需两张【闪】才能抵消
@@ -1465,7 +1501,10 @@ function Room:obtain(p, card)
     if c == card then table.remove(self.discardPile, i) break end
   end
   for _, q in ipairs(self.players) do
-    if q ~= p and q:takeCard(card) then break end
+    if q ~= p and q:takeCard(card) then
+      self:notifyHandEmpty(q)
+      break
+    end
   end
   if p:hasEquip(card.name) == card then p:unequipCard(card) end
   table.insert(p.hand, card)

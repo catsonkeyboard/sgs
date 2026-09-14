@@ -356,11 +356,10 @@ define(Room, "askForUseSlashTo", function(_self, p, targets, _reason)
   return { card = slash, from = p, to = { to } }
 end)
 
--- 【观星】类：让脚本重排牌堆顶。本引擎没有该交互界面，
--- 返回原序（而不是空表——空表会让按索引取牌的脚本崩掉）
-define(Room, "askForGuanxing", function(_self, _p, cards, _type)
-  return cards or {}
-end)
+-- 【观星】：core 已给出真实实现（Room:askForGuanxing，会 yield 出交互请求），
+-- 这里不再放桩——否则会被 define() 的撞名守卫拦下（第 3 次踩）。
+-- DIY 脚本按原版签名 room:askForGuanxing(p, cards) 调用时，
+-- cards 落到 up 参数上，无应答即原序返回，行为与旧的桩一致。
 
 -- 交换/调整手牌：按用途退化为「挑出 n 张」
 define(Room, "askForExchange", function(self, p, _reason, n, _m)

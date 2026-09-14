@@ -187,6 +187,27 @@ Generals.SHU = {
   {
     name = "诸葛亮", key = "zhugeliang", max_hp = 3, kingdom = "shu",
     skills = {
+      -- 观星：准备阶段观看牌堆顶 X 张（X = 存活角色数且至多为 5），
+      -- 任意分配回牌堆顶与牌堆底。无交互时保持原序（BOT / headless）。
+      TriggerSkill.create("观星", TriggerEvent.EventPhaseStart,
+        function(_s, room, player, data)
+          if not data or data.phase ~= "start" or data.player ~= player then
+            return false
+          end
+          local x = math.min(#room:alivePlayers(), 5)
+          local cards = {}
+          for _ = 1, x do
+            if #room.drawPile == 0 then break end
+            table.insert(cards, table.remove(room.drawPile))
+          end
+          if #cards == 0 then return false end
+          room:log("%s 发动【观星】，观看牌堆顶 %d 张牌", player.name, #cards)
+          local up, down = room:askForGuanxing(player, cards, {})
+          -- drawPile 用 table.remove 从尾部取牌，即「尾部 = 牌堆顶」
+          for i = #(down or {}), 1, -1 do table.insert(room.drawPile, 1, down[i]) end
+          for i = #(up or {}), 1, -1 do table.insert(room.drawPile, up[i]) end
+          return false
+        end, { zh = "观星" }),
       -- 空城（锁定技）：没有手牌时不可成为【杀】或【决斗】的目标
       markerSkill("空城", { no_target_empty = true }),
     },
@@ -1088,8 +1109,17 @@ Generals.WU = {
     skills = {
       -- 谦逊（锁定技）：不能成为【顺手牵羊】/【乐不思蜀】的目标
       markerSkill("谦逊", { no_target_tricks = { snatch = true, indulgence = true } }),
-      -- 度势：红色手牌当【以逸待劳】（摸两张后弃两张）
-      singleViewAs("度势", "await_exhausted", isRed),
+      -- 连营：失去最后一张手牌时，可以摸一张牌
+      -- （标准版陆逊为【谦逊】+【连营】；此前的【度势】是国战版技能）
+      TriggerSkill.create("连营", TriggerEvent.CardsMoveOneTime,
+        function(_s, room, player, data)
+          if not data or data.player ~= player then return false end
+          if data.from_place ~= "hand" or not data.last_handcard then return false end
+          if #player.hand > 0 then return false end
+          room:log("%s 发动【连营】，摸一张牌", player.name)
+          room:drawCards(player, 1)
+          return false
+        end, { zh = "连营" }),
     },
   },
   {

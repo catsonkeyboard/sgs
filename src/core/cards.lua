@@ -90,6 +90,7 @@ Cards.define("duel", {
       if slash and defender:takeCard(slash) then
         room:log("%s 打出【杀】", defender.name)
         room:throwCard(defender, slash)
+        room:notifyHandEmpty(defender)
         attacker, defender = defender, attacker
       else
         room:log("%s 无法打出【杀】，受到 1 点伤害", defender.name)
@@ -124,6 +125,7 @@ Cards.define("snatch", {
     to:takeCard(card)
     table.insert(from.hand, card)
     room:log("%s 顺走 %s 的一张手牌", from.name, to.name)
+    room:notifyHandEmpty(to)
   end,
 })
 
@@ -158,6 +160,7 @@ Cards.define("savage_assault", {
           local slash = room:askForCard(p, "slash", "南蛮入侵：打出【杀】，否则受到 1 点伤害")
           if slash and p:takeCard(slash) then
             room:throwCard(p, slash)
+            room:notifyHandEmpty(p)
           else
             room:damage(from, p, 1)
           end
@@ -180,6 +183,7 @@ Cards.define("archery_attack", {
           local dodge = room:askForCard(p, "dodge", "万箭齐发：打出【闪】，否则受到 1 点伤害")
           if dodge and p:takeCard(dodge) then
             room:throwCard(p, dodge)
+            room:notifyHandEmpty(p)
           else
             room:damage(from, p, 1)
           end

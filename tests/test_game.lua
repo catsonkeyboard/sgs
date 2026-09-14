@@ -751,14 +751,28 @@ do -- 大乔·国色 / 流离
   check(use.to[1] ~= ps[1], "【流离】转移后大乔不应再是目标")
 end
 
-do -- 陆逊·谦逊 / 度势
+do -- 陆逊·谦逊 / 连营（标准版：谦逊 + 连营，取代国战版的度势）
   local r, ps = makeRoomWith({ "陆逊", "白板武将" }, 37)
   local snatch = give(ps[2], "snatch", Card.Suit.Spade, 3, Card.Type.Trick)
   check(not r:_validateUse(ps[2], snatch, { ps[1] }), "【谦逊】不能成为【顺手牵羊】的目标")
   check(r:_validateUse(ps[2], snatch, { ps[2] }) ~= nil, "【谦逊】不影响对其他角色使用")
-  local red = give(ps[1], "peach", Card.Suit.Heart, 5)
-  check((r:viewAsCard(ps[1], "await_exhausted", red) or {}).name == "await_exhausted",
-    "【度势】红色牌应能当【以逸待劳】")
+  -- 失去最后一张手牌 → 摸一张
+  give(ps[1], "slash", Card.Suit.Spade, 5)
+  ps[1].hand = {}
+  local before = #ps[1].hand
+  r:notifyHandEmpty(ps[1])
+  check(#ps[1].hand == before + 1, "【连营】失去最后一张手牌时应摸一张牌（"
+    .. before .. "→" .. #ps[1].hand .. "）")
+end
+
+do -- 【连营】的收口：出牌打到空手也应触发
+  local r, ps = makeRoomWith({ "陆逊", "白板武将", "白板武将" }, 39)
+  local target = ps[2]
+  runInRoom(function()
+    r:useCard(ps[1], give(ps[1], "slash", Card.Suit.Spade, 8), target)
+  end)
+  check(#ps[1].hand == 1, "出牌打到空手时【连营】应补一张（剩 "
+    .. #ps[1].hand .. "）")
 end
 
 do -- 孙尚香·枭姬：失去装备后摸两张
@@ -1984,6 +1998,32 @@ do
     return nil
   end)
   check(asked3 == nil, "锁定技不应弹出征询（无双是 Compulsory）")
+end
+
+print("\n--- 观星 ---")
+
+do
+  local r, ps = makeRoomWith({ "诸葛亮", "白板武将" }, 55)
+  local c1 = Card.create(1, "slash", Card.Suit.Spade, 5, Card.Type.Basic)
+  local c2 = Card.create(2, "dodge", Card.Suit.Heart, 2, Card.Type.Basic)
+  local c3 = Card.create(3, "peach", Card.Suit.Heart, 3, Card.Type.Basic)
+  r.drawPile = { c3, c2, c1 } -- 尾部 = 牌堆顶
+  local asked = nil
+  runInRoom(function()
+    r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "start" })
+  end, function(req)
+    if req.type == "askForGuanxing" then
+      asked = req
+      return { up = { req.cards[2], req.cards[1] }, down = {} }
+    end
+    return nil
+  end)
+  check(asked ~= nil, "【观星】应弹出重排牌堆顶的询问")
+  check(asked and #asked.cards == 2, "【观星】张数 = 存活人数且至多 5（实得 "
+    .. tostring(asked and #asked.cards) .. "）")
+  check(#r.drawPile == 3, "【观星】后牌堆总数不变（实得 " .. #r.drawPile .. "）")
+  check(r.drawPile[#r.drawPile] == c2 and r.drawPile[#r.drawPile - 1] == c1,
+    "【观星】应按给定顺序放回牌堆顶")
 end
 
 print("\n--- 主公技（护驾 / 激将 / 救援）---")
