@@ -1,3 +1,9 @@
-tools/
+# LÖVE 便携版是二进制且体积大，不入库
+tools/love.app/
+tools/*.zip
+
+# 注意：tools/ 下的**脚本**必须入库。
+# 以前这里写的是 tools/（整目录忽略），导致 lint_methods.py 从未被跟踪，
+# clone 之后 ./run-tests.sh 会因为找不到它而失败。
 *.zip
 .DS_Store
