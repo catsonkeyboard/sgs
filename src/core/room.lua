@@ -613,6 +613,43 @@ end
 
 -- ===== 判定 =====
 
+-- 过滤技（FilterSkill）的统一花色入口。
+-- 原版里【红颜】这类过滤技会改写牌的花色，影响所有花色判定；
+-- 本引擎此前只把它当成标记，只对技能自身生效，判定区/雷击等处都不认。
+--
+-- 约定：技能提供 filter_view_filter(card) -> bool 与 filter_view(card) -> 花色或牌。
+-- 任何「看花色」的地方都应走这里，而不是直接读 card.suit。
+function Room:effSuit(p, card)
+  if not card then return nil end
+  if not p then return card.suit end
+  for _, s in ipairs(self:skillsOf(p)) do
+    -- 注意用点号调用：过滤函数是「只接 card」的普通函数，
+    -- 用冒号会把技能自身当成第一个参数传进去
+    if s.filter_view_filter and s.filter_view_filter(card) then
+      local made = s.filter_view and s.filter_view(card)
+      if type(made) == "number" then return made end       -- 直接给花色
+      if type(made) == "table" and made.suit then return made.suit end -- 给了张牌
+    end
+  end
+  return card.suit
+end
+
+-- 玩家身上生效的全部技能（武将技 + 临时获得的）
+function Room:skillsOf(p)
+  local out = {}
+  if not p then return out end
+  for _, s in ipairs((p.general and p.general.skills) or {}) do
+    table.insert(out, s)
+  end
+  for _, s in ipairs(p.extra_skills or {}) do table.insert(out, s) end
+  return out
+end
+
+-- 判定牌的「有效花色」：走过滤技，让【红颜】这类技能真正影响判定结果
+function Room:judgeSuit(p, judge_card)
+  return self:effSuit(p, judge_card)
+end
+
 function Room:_judgeCard(p, card)
   p:removeJudge(card)
   local judge_card = nil

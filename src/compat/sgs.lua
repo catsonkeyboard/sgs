@@ -373,7 +373,19 @@ function sgs.CreateProhibitSkill(spec)
 end
 
 function sgs.CreateFilterSkill(spec)
-  return markerSpec(spec, { filter_view = spec.view_as, filter_view_filter = spec.view_filter })
+  -- 原版 FilterSkill 的 view_as 返回一张改过的牌；本引擎的 effSuit 需要的是
+  -- 「花色」，因此做一层适配：view_as 返回的若是牌就取其花色。
+  local function suitOf(card)
+    local ok, made = pcall(spec.view_as, card)
+    if not ok then return nil end
+    if type(made) == "number" then return made end
+    if type(made) == "table" and made.suit then return made.suit end
+    return nil
+  end
+  return markerSpec(spec, {
+    filter_view = suitOf,
+    filter_view_filter = spec.view_filter,
+  })
 end
 
 -- ===== 技能牌 =====

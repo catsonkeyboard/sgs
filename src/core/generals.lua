@@ -63,11 +63,15 @@ local PHASE_ZH = {
 
 -- 延时锦囊的命中条件（【鬼才】改判时需要独立于 def.judge 的纯函数，
 -- 因为 def.judge 会打印判定日志，不能被预演调用）
+-- 签名统一为 (room, p, c)：判定要走 p 的过滤技有效花色，
+-- 否则【红颜】这类改写花色的技能不会影响判定结果。
 local JUDGE_HIT = {
-  indulgence = function(c) return c.suit ~= Card.Suit.Heart end,
-  supply_shortage = function(c) return c.suit ~= Card.Suit.Club end,
-  lightning = function(c) return c.suit == Card.Suit.Spade and c.number >= 2 and c.number <= 9 end,
-  ganglie = function(c) return c.suit ~= Card.Suit.Heart end,
+  indulgence = function(room, p, c) return room:effSuit(p, c) ~= Card.Suit.Heart end,
+  supply_shortage = function(room, p, c) return room:effSuit(p, c) ~= Card.Suit.Club end,
+  lightning = function(room, p, c)
+    return room:effSuit(p, c) == Card.Suit.Spade and c.number >= 2 and c.number <= 9
+  end,
+  ganglie = function(room, p, c) return room:effSuit(p, c) ~= Card.Suit.Heart end,
 }
 
 -- 自动选敌：身份局按阵营排序，非身份局就是「除自己外的存活者」
@@ -311,7 +315,7 @@ Generals.SHU = {
           for _ = 1, x do
             local c = drawForJudge(room)
             if not c then break end
-            if c.suit == Card.Suit.Heart then
+            if room:effSuit(player, c) == Card.Suit.Heart then
               table.insert(hearts, c)
             else
               table.insert(others, c)
@@ -424,10 +428,10 @@ Generals.WEI = {
           local hit = JUDGE_HIT[data.reason]
           -- 只在「自己的判定会命中（对自己不利）」时改判
           local want_miss = (data.player == player) and hit
-            and hit(data.judge_card)
+            and hit(room, player, data.judge_card)
           if not want_miss then return false end
           for _, c in ipairs(player.hand) do
-            if not hit(c) then
+            if not hit(room, player, c) then
               player:takeCard(c)
               data.judge_card = c
               room:log("%s 发动【鬼才】，以 %s 替换判定牌", player.name, c:displayName())
@@ -449,7 +453,7 @@ Generals.WEI = {
           if src == player or not src.alive then return false end
           local j = drawForJudge(room)
           if not j then return false end
-          local hits = JUDGE_HIT.ganglie(j)
+          local hits = JUDGE_HIT.ganglie(room, player, j)
           room:log("%s 发动【刚烈】，判定 %s %s", player.name, j:displayName(),
             hits and "非红桃，生效" or "红桃，无效")
           table.insert(room.discardPile, j)
@@ -554,7 +558,8 @@ Generals.WEI = {
           for _ = 1, 12 do
             local c = drawForJudge(room)
             if not c then break end
-            if not c:isRed() then
+            if room:effSuit(player, c) ~= Card.Suit.Heart
+              and room:effSuit(player, c) ~= Card.Suit.Diamond then
               table.insert(player.hand, c)
               got = got + 1
               room:log("%s 的【洛神】判定 %s 黑色，收入手中", player.name, c:displayName())
@@ -877,13 +882,23 @@ local function revokeMarker(p, name)
   end
 end
 
--- 【天香】可用的牌：红桃；【红颜】下黑桃也视为红桃
-local function isTianxiangCard(p, c)
-  if c.suit == Card.Suit.Heart then return true end
-  if c.suit == Card.Suit.Spade and Generals.marker(p, "spade_as_heart", false) then
-    return true
+-- 红颜（锁定技）：黑桃牌视为红桃牌
+-- 实现为真正的过滤技：提供 filter_view_filter / filter_view，
+-- 由 Room:effSuit 统一消费，因此【天香】与所有判定都会认这个花色。
+local function makeHongyan()
+  local s = TriggerSkill.create("红颜", {}, nil, {
+    zh = "红颜", frequency = Freq.Compulsory,
+  })
+  s.filter_view_filter = function(card)
+    return card.suit == Card.Suit.Spade
   end
-  return false
+  s.filter_view = function(_card) return Card.Suit.Heart end
+  return s
+end
+
+-- 【天香】可用的牌：红桃（【红颜】下黑桃也视为红桃，故走 room:effSuit）
+local function isTianxiangCard(room, p, c)
+  return room:effSuit(p, c) == Card.Suit.Heart
 end
 
 Generals.WU = {
@@ -1106,16 +1121,14 @@ Generals.WU = {
     name = "小乔", key = "xiaoqiao", max_hp = 3, kingdom = "wu", female = true,
     skills = {
       -- 红颜（锁定技）：黑桃牌视为红桃牌
-      -- 注：原版是 FilterSkill，会改写所有花色查询；这里先支持【天香】的判定，
-      -- 完整「影响全局花色判定」要等 Phase B 的过滤技框架。
-      markerSkill("红颜", { spade_as_heart = true }),
+      makeHongyan(),
       -- 天香：受到伤害时弃一张红桃手牌，将此伤害转移给另一名角色，其再摸 X 张牌
       TriggerSkill.create("天香", TriggerEvent.DamageInflicted,
         function(_s, room, player, data)
           if not data or data.to ~= player then return false end
           local idx = nil
           for i, c in ipairs(player.hand) do
-            if isTianxiangCard(player, c) then idx = i break end
+            if isTianxiangCard(room, player, c) then idx = i break end
           end
           if not idx then return false end
           local t = nil
@@ -1387,7 +1400,8 @@ end
 
 -- 判定一张牌的花色结果（【悲歌】分四种花色）
 local function beigeEffect(room, caiwenji, victim, from, card)
-  local suit = card.suit
+  -- 判定属于受害者，走受害者的过滤技（如【红颜】）
+  local suit = room:effSuit(victim, card)
   if suit == Card.Suit.Heart then
     room:log("【悲歌】判定红桃，%s 回复 1 点体力", victim.name)
     room:heal(victim, 1)
@@ -1500,7 +1514,8 @@ Generals.QUN = {
           if not c then return false end
           table.insert(player.hand, c)
           -- 1 = 该用黑色牌当决斗，2 = 该用红色牌
-          player.shuangxiong = c:isRed() and 2 or 1
+          local suit = room:effSuit(player, c)
+          player.shuangxiong = (suit == Card.Suit.Heart or suit == Card.Suit.Diamond) and 2 or 1
           room:log("%s 发动【双雄】，判定 %s，本回合可将%s色手牌当【决斗】",
             player.name, c:displayName(), player.shuangxiong == 1 and "黑" or "红")
           return true -- 截断：跳过正常摸牌
@@ -1605,7 +1620,8 @@ Generals.QUN = {
           if not j then return false end
           table.insert(room.discardPile, j)
           room:log("%s 发动【雷击】，%s 判定 %s", player.name, t.name, j:displayName())
-          if j.suit == Card.Suit.Spade then
+          -- 走有效花色：目标的【红颜】能改写判定结果
+          if room:effSuit(t, j) == Card.Suit.Spade then
             room:log("判定为黑桃，%s 受到 2 点雷伤害", t.name)
             room:damage(player, t, 2, "thunder")
           end
@@ -1622,7 +1638,8 @@ Generals.QUN = {
           if not black then return false end
           -- AI 策略：只在对自己有利时改判（参照【鬼才】的判定表）
           local hit = JUDGE_HIT[data.reason]
-          if hit and data.player == player and not hit(data.judge_card) then return false end
+          if hit and data.player == player
+            and not hit(room, player, data.judge_card) then return false end
           player:takeCard(black)
           data.judge_card = black
           -- 旧判定牌由引擎交给张角（引擎此时才把它放入弃牌堆，避免重复登记）

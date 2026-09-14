@@ -80,6 +80,18 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 **动画说明**：原版 `defaultSkin.animation.json` 在这个皮肤里**是空的**（只有 `}`），
 没有可复用的动效定义，因此 `effects.lua` 是自己实现的最小方案。
 
+**过滤技（FilterSkill）**：统一入口 `Room:effSuit(p, card)`。
+技能提供 `filter_view_filter(card) -> bool` 与 `filter_view(card) -> 花色`，
+所有「看花色」的地方都走它，而不是直接读 `card.suit`：
+延时锦囊判定（`cards.lua` 的 `judge`）、`JUDGE_HIT.*`、`雷击`、`刚烈`、
+`再起`、`洛神`、`双雄`、`悲歌`、`天香`。
+
+> 注意：**用点号调用** `s.filter_view_filter(card)`。过滤函数是「只接 card」
+> 的普通函数，用冒号会把技能自身当第一个参数传进去（已踩过一次）。
+
+兼容层的 `sgs.CreateFilterSkill` 做了适配：原版 `view_as` 返回一张改过的牌，
+这里从中取出花色再交给 `effSuit`，因此 DIY 扩展的过滤技同样生效。
+
 **主动技征询**：`Room:trigger` 里对人类玩家的非锁定技先走
 `Room:askForSkillInvoke`（yield 出 `askForSkillInvoke` 请求），玩家点
 「发动【技能】」或「不发动」；AI 一律直接发动；锁定技（Compulsory/Wake）
@@ -187,12 +199,7 @@ Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
 
 按建议的优先级排，动手前先看这里：
 
-1. **FilterSkill 全局生效**（难度：中高）
-   现状：只挂了标记（`spade_as_heart`），没接到花色查询路径上，
-   因此【红颜】这类技能只能影响它自己的判定，对【闪电】【乐不思蜀】等
-   全局花色判定无效。
-   做法：把所有 `card.suit` 的查询收敛到统一入口（如 `Room:effSuit(p, card)`），
-   再让过滤技挂到该入口。改动面不小，建议等 UI 定型后做。
+1. ~~**FilterSkill 全局生效**~~ ✅ 已完成（见下方「过滤技」小节）
 
 2. **国战机制：明置/暗置武将、阵法技**（难度：高）
    【祸水】【倾城】完全建立在此之上，邹氏目前只有名册占位没有技能。

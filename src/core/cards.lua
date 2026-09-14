@@ -303,7 +303,7 @@ Cards.define("nullification", {
 Cards.define("indulgence", {
   zh = "乐不思蜀", target = "enemy", delayed = true, nullifiable = true,
   judge = function(room, player, card)
-    local hit = card.suit ~= Card.Suit.Heart
+    local hit = room:judgeSuit(player, card) ~= Card.Suit.Heart
     room:log("%s 的【乐不思蜀】判定：%s %s", player.name, card:suitString(),
       hit and "非红桃，跳过出牌阶段" or "红桃，无效")
     return hit
@@ -316,7 +316,7 @@ Cards.define("indulgence", {
 Cards.define("supply_shortage", {
   zh = "兵粮寸断", target = "enemy", delayed = true, distance = 1, nullifiable = true,
   judge = function(room, player, card)
-    local hit = card.suit ~= Card.Suit.Club
+    local hit = room:judgeSuit(player, card) ~= Card.Suit.Club
     room:log("%s 的【兵粮寸断】判定：%s %s", player.name, card:suitString(),
       hit and "非梅花，跳过摸牌阶段" or "梅花，无效")
     return hit
@@ -329,7 +329,8 @@ Cards.define("supply_shortage", {
 Cards.define("lightning", {
   zh = "闪电", target = "self", delayed = true, nullifiable = true,
   judge = function(room, player, card)
-    local hit = card.suit == Card.Suit.Spade and card.number >= 2 and card.number <= 9
+    local hit = room:judgeSuit(player, card) == Card.Suit.Spade
+      and card.number >= 2 and card.number <= 9
     room:log("%s 的【闪电】判定：%s%d %s", player.name, card:suitString(), card.number,
       hit and "黑桃 2-9，命中！" or "未命中，传给下家")
     return hit

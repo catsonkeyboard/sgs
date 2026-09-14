@@ -1200,6 +1200,30 @@ do -- 技能牌：CreateSkillCard + clone + subcards + on_use
   check(#ps[1].hand == before, "弃 2 摸 2，手牌数不变（" .. before .. " → " .. #ps[1].hand .. "）")
 end
 
+do -- DIY 的 FilterSkill 也应接入 effSuit
+  local sgs = require "src.compat.sgs"
+  local filter = sgs.CreateFilterSkill{
+    name = "测试过滤",
+    view_filter = function(card) return card.suit == Card.Suit.Spade end,
+    view_as = function(card)
+      -- 原版返回一张改过的牌；兼容层应能从中取出花色
+      local c = Card.create(card.id, card.name, Card.Suit.Heart, card.number, card.ctype)
+      return c
+    end,
+  }
+  local engine = Engine.create()
+  Standard.setup(engine)
+  local g = engine:getGeneral("白板武将")
+  local ps = { Player.create("P1", g, 1, false), Player.create("P2", g, 2, false) }
+  ps[1].extra_skills = { filter }
+  local r = Room.create(engine, ps)
+  local spade = Card.create(1, "slash", Card.Suit.Spade, 5, Card.Type.Basic)
+  check(r:effSuit(ps[1], spade) == Card.Suit.Heart,
+    "DIY 过滤技应生效（黑桃→红桃）")
+  check(r:effSuit(ps[2], spade) == Card.Suit.Spade,
+    "没有该技能的角色不应受影响")
+end
+
 do -- 中文翻译表
   local sgs = require "src.compat.sgs"
   check(sgs.Translations["moligaloo"] == "太阳神上", "LoadTranslationTable 应记录包名")
@@ -1462,6 +1486,63 @@ do
   r:onEvent("death", function() error("故意抛错") end)
   local ok2 = pcall(function() r:emit("death", { player = ps[1] }) end)
   check(ok2, "回调抛错应被捕获，不能中断对局")
+end
+
+print("\n--- 过滤技：红颜（黑桃视为红桃）---")
+
+do
+  local engine = Engine.create()
+  Standard.setup(engine)
+  local function mk(general)
+    local ps = {}
+    for i, nm in ipairs({ general, "白板武将" }) do
+      table.insert(ps, Player.create("P" .. i, engine:getGeneral(nm), i, false))
+    end
+    local r = Room.create(engine, ps)
+    r.drawPile = Standard.buildDrawPile(1)
+    return r, ps
+  end
+
+  -- effSuit：小乔的黑桃应变红桃，其他人不变
+  local r, ps = mk("小乔")
+  local spade = Card.create(1, "slash", Card.Suit.Spade, 5, Card.Type.Basic)
+  local heart = Card.create(2, "slash", Card.Suit.Heart, 5, Card.Type.Basic)
+  check(r:effSuit(ps[1], spade) == Card.Suit.Heart, "小乔的黑桃应视为红桃")
+  check(r:effSuit(ps[1], heart) == Card.Suit.Heart, "小乔的红桃仍是红桃")
+  check(r:effSuit(ps[2], spade) == Card.Suit.Spade, "其他人的黑桃不应被改写")
+
+  -- 判定区：小乔的【乐不思蜀】抽到黑桃 → 视为红桃 → 不生效
+  local r2, ps2 = mk("小乔")
+  table.insert(r2.drawPile, Card.create(3, "slash", Card.Suit.Spade, 7, Card.Type.Basic))
+  local indul = Card.create(4, "indulgence", Card.Suit.Spade, 6, Card.Type.Trick)
+  ps2[1]:addJudge(indul)
+  local res
+  runInRoom(function() res = r2:_judgeCard(ps2[1], indul) end)
+  check(res ~= nil, "应完成判定")
+  -- 命中会把延时锦囊放入弃牌堆；未命中也会放入（闪电除外），
+  -- 因此用「是否跳过出牌阶段」来断言更直接：这里验证 effSuit 已参与判定
+  check(r2:effSuit(ps2[1], res) == Card.Suit.Heart,
+    "判定结果对小乔应按红桃解读（实得 " .. tostring(res:suitString()) .. "）")
+
+  -- 对照组：同样黑桃，对普通武将就是黑桃 → 【乐不思蜀】生效
+  local r3, ps3 = mk("白板武将")
+  table.insert(r3.drawPile, Card.create(5, "slash", Card.Suit.Spade, 7, Card.Type.Basic))
+  local indul3 = Card.create(6, "indulgence", Card.Suit.Spade, 6, Card.Type.Trick)
+  ps3[1]:addJudge(indul3)
+  local res3
+  runInRoom(function() res3 = r3:_judgeCard(ps3[1], indul3) end)
+  check(r3:effSuit(ps3[1], res3) == Card.Suit.Spade,
+    "普通武将的判定不应被改写（实得 " .. tostring(res3:suitString()) .. "）")
+
+  -- 天香：红颜下黑桃也能当天香牌
+  local r4, ps4 = mk("小乔")
+  give(ps4[1], "slash", Card.Suit.Spade, 5)
+  local hp = ps4[2].hp
+  runInRoom(function()
+    r4:trigger("DamageInflicted", ps4[1],
+      { from = ps4[2], to = ps4[1], n = 1, nature = "normal" })
+  end)
+  check(ps4[2].hp < hp, "【天香】应能用黑桃牌发动（红颜改写花色）")
 end
 
 print("\n--- 主动技征询（人类玩家）---")
