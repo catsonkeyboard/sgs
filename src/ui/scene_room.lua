@@ -31,6 +31,9 @@ function RoomScene:init(on_exit, mode)
   -- 皮肤配置（原版 skins/*.json）与音频。缺资源时全部安全降级，不影响对局。
   self.skin = Skin.create()
   self.cardImages = {}
+  self.generalImages = {}
+  self.kingdomImages = {}
+  self.magatama = self:loadMagatamas()
   self.audio = Audio.create(self.skin)
   local engine = Engine.create()
   Standard.setup(engine)
@@ -295,7 +298,23 @@ end
 
 -- ===== 渲染 =====
 
-local function drawHp(x, y, hp, max_hp)
+-- 体力：有原版勾玉素材就用勾玉（满 3 / 空 0），否则退回圆点
+local function drawHp(x, y, hp, max_hp, scene)
+  local full, empty = nil, nil
+  if scene and scene.skin and scene.magatama then
+    full = scene.magatama.full
+    empty = scene.magatama.empty
+  end
+  if full and empty then
+    local s = 13
+    local scale = s / full:getHeight()
+    for i = 1, max_hp do
+      local img = (i <= hp) and full or empty
+      love.graphics.setColor(1, 1, 1)
+      love.graphics.draw(img, x + (i - 1) * (s + 2), y - s, 0, scale, scale)
+    end
+    return
+  end
   for i = 1, max_hp do
     if i <= hp then love.graphics.setColor(0.85, 0.15, 0.1)
     else love.graphics.setColor(0.25, 0.25, 0.25) end
@@ -360,6 +379,62 @@ local ROLE_COLOR = {
   renegade = { 0.55, 0.55, 0.6 },
 }
 
+-- 勾玉（体力图标）：加载失败就返回 nil，drawHp 会退回圆点画法
+function RoomScene:loadMagatamas()
+  if not (self.skin and love.graphics) then return nil end
+  local function load(kind)
+    local rel = self.skin:magatamaImage(kind)
+    if not rel then return nil end
+    local path = self.skin:path(rel)
+    if not path then return nil end
+    local ok, img = pcall(love.graphics.newImage, path)
+    return ok and img or nil
+  end
+  local full, empty = load(3), load(0)
+  if full and empty then return { full = full, empty = empty } end
+  return nil
+end
+
+-- 势力图标：image/kingdom/icon/<kingdom>.png
+function RoomScene:kingdomIcon(p)
+  if not (self.skin and p and p.kingdom) then return nil end
+  local cache = self.kingdomImages
+  if not cache then return nil end
+  local k = p.kingdom
+  if cache[k] ~= nil then return cache[k] or nil end
+  local img = nil
+  local rel = self.skin:kingdomImage(k)
+  if rel and love.graphics then
+    local path = self.skin:path(rel)
+    if path then
+      local ok, loaded = pcall(love.graphics.newImage, path)
+      if ok then img = loaded end
+    end
+  end
+  cache[k] = img or false
+  return img
+end
+
+-- 武将头像：按 general.key（拼音）在原版 image/generals/avatar 下找
+function RoomScene:generalAvatar(p)
+  if not (self.skin and p and p.general) then return nil end
+  local cache = self.generalImages
+  if not cache then return nil end
+  local key = p.general.key or p.general.name
+  if cache[key] ~= nil then return cache[key] or nil end
+  local img = nil
+  local rel = self.skin:generalImage(key)
+  if rel and love.graphics then
+    local path = self.skin:path(rel)
+    if path then
+      local ok, loaded = pcall(love.graphics.newImage, path)
+      if ok then img = loaded end
+    end
+  end
+  cache[key] = img or false
+  return img
+end
+
 function RoomScene:drawPlayerPanel(p, x, y, highlighted)
   love.graphics.setColor(highlighted and 0.18 or 0.12,
     highlighted and 0.30 or 0.16, highlighted and 0.18 or 0.12)
@@ -367,6 +442,24 @@ function RoomScene:drawPlayerPanel(p, x, y, highlighted)
   if highlighted then
     love.graphics.setColor(0.95, 0.8, 0.25)
     love.graphics.rectangle("line", x, y, PANEL_W, PANEL_H, 8, 8)
+  end
+
+  -- 势力图标（有资源就画，没有就不画，不占版面）
+  local kimg = self:kingdomIcon(p)
+  if kimg then
+    local s = 16
+    love.graphics.setColor(1, 1, 1)
+    love.graphics.draw(kimg, x + PANEL_W - 60, y + 26, 0, s / kimg:getWidth(), s / kimg:getHeight())
+  end
+
+  -- 武将头像（有原版资源时画真图，否则退回纯文字）
+  local avatar = self:generalAvatar(p)
+  if avatar then
+    local aw, ah = 44, 44
+    love.graphics.setColor(1, 1, 1)
+    love.graphics.draw(avatar, x + 8, y + 24, 0, aw / avatar:getWidth(), ah / avatar:getHeight())
+    love.graphics.setColor(0.6, 0.5, 0.3)
+    love.graphics.rectangle("line", x + 8, y + 24, aw, ah, 4, 4)
   end
 
   love.graphics.setFont(self.font_sm)
@@ -387,7 +480,7 @@ function RoomScene:drawPlayerPanel(p, x, y, highlighted)
     love.graphics.printf("?", x + PANEL_W - 46, y + 8, 40, "center")
   end
 
-  drawHp(x + 12, y + 38, p.hp, p.max_hp)
+  drawHp(x + 12, y + 38, p.hp, p.max_hp, self)
 
   love.graphics.setFont(self.font_sm)
   love.graphics.setColor(p.alive and 0.7 or 0.4, 0.75, 0.7)

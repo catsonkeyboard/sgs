@@ -1374,6 +1374,15 @@ do
     check(s:cardImage("crossbow") ~= nil, "【诸葛连弩】应能解析出图片路径（CamelCase）")
     check(s:cardImage("不存在的牌") == nil, "未知卡牌应返回 nil")
     print("  已接入原版资源：" .. tostring(s.root))
+
+    -- 武将头像按 general.key（拼音）解析
+    check(s:generalImage("caocao") ~= nil, "【曹操】头像应能解析（key=caocao）")
+    check(s:generalImage("lvbu") ~= nil, "【吕布】头像应能解析（key=lvbu）")
+    check(s:generalImage("不存在的武将") == nil, "未知武将应返回 nil")
+    -- 勾玉与势力
+    check(s:magatamaImage(3) ~= nil, "满勾玉应能解析")
+    check(s:magatamaImage(0) ~= nil, "空勾玉应能解析")
+    check(s:kingdomImage("wei") ~= nil, "势力图标【魏】应能解析")
   end
 end
 

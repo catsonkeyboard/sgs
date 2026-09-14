@@ -62,11 +62,18 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 | B | sgs.* 兼容层 + diy/ 扩展加载器 | 🚧 进行中（骨架可用，API 面待扩） |
 | C | 完整 UI（皮肤 JSON、动画、牌桌布局）+ 音频 | 🚧 进行中（配置层与卡图/音频已通，布局待做） |
 
+已接入的真实素材（全部按路径引用，缺则退回自绘）：
+- 卡牌图 `image/card/`（基本牌 snake_case、装备 CamelCase）
+- 武将头像 `image/generals/avatar/<key>.png`（按 general.key 拼音）
+- 体力勾玉 `image/system/magatamas/{0,3}.png`
+- 势力图标 `image/kingdom/icon/<kingdom>.png`
+- 音效 `audio/**`（按 audio.json 键名）
+
 **阶段 C 后续：**
 1. 座位布局用 layout.json 的间距参数推导（现在仍是内置锚点）
-2. 武将头像（image/generals/）、血条/勾玉、装备与判定区图标
-3. 动画（animation.json）：出牌/受伤/判定的动效
-4. 背景与界面框体（photoMainFrame / dashboard* 等）
+2. 背景与界面框体（photoMainFrame / dashboard* 等）
+3. 装备与判定区图标
+4. 动画（animation.json）：出牌/受伤/判定的动效
 5. 音频实际播放验证（需要图形环境，headless 测不到）
 | D | LuaSocket 网络服务端 + 多人 | ⬜ 未开始 |
 

@@ -145,6 +145,43 @@ function Skin:cardImage(cardName)
   return nil
 end
 
+-- 武将头像：原版按拼音命名（image/generals/avatar/caocao.png），
+-- 正好对应本引擎 general.key。依次尝试 avatar / card / big 三种尺寸。
+local GENERAL_DIRS = {
+  "image/generals/avatar/%s.png",
+  "image/generals/card/%s.jpg",
+  "image/generals/big/%s.png",
+}
+
+function Skin:generalImage(key)
+  if not (self.root and key) then return nil end
+  for _, fmt in ipairs(GENERAL_DIRS) do
+    local rel = string.format(fmt, key)
+    if readFile(self.root .. "/" .. rel) then return rel end
+  end
+  return nil
+end
+
+-- 勾玉（体力）：image/system/magatamas/{0,1,2,3}.png，0 空 3 满
+function Skin:magatamaImage(kind)
+  if not self.root then return nil end
+  local rel = "image/system/magatamas/" .. tostring(kind) .. ".png"
+  if readFile(self.root .. "/" .. rel) then return rel end
+  return nil
+end
+
+-- 势力图标：原版放在 image/kingdom/icon/ 下（不是 image/kingdom/ 根）
+function Skin:kingdomImage(kingdom)
+  if not (self.root and kingdom) then return nil end
+  for _, rel in ipairs({
+    "image/kingdom/icon/" .. kingdom .. ".png",
+    "image/kingdom/corner/" .. kingdom .. ".png",
+  }) do
+    if readFile(self.root .. "/" .. rel) then return rel end
+  end
+  return nil
+end
+
 -- 音频：某事件的音效可能有多个，随机取一个
 function Skin:sound(key)
   local v = self.audioMap[key]
