@@ -84,6 +84,14 @@ local PLAY_PRIORITY = {
   peach = 4, analeptic = 3,
 }
 
+-- 出牌阶段会尝试用转化技「变」出来的牌名（按性价比排序，先试收益高的）。
+-- 只有出现在这里的牌名才会被 AI 主动转化使用；纯响应（闪/无懈可击）走
+-- askForCard 分支里的 viewAsCandidates，不需要登记。
+local CONVERT_TARGETS = {
+  "dismantlement", "indulgence", "supply_shortage", "await_exhausted",
+  "slash", "fire_attack", "snatch",
+}
+
 function AI.makeAI()
   return function(req, room)
     local p = req.player
@@ -96,23 +104,41 @@ function AI.makeAI()
         if peach then return { card = peach, target = p } end
       end
 
-      local best, best_score, best_target = nil, -1, nil
+      -- 候选池：手牌本身在前，转化技产出的虚拟牌在后（同分时优先出真牌）
+      local pool = {}
       for _, c in ipairs(p.hand) do
-        local score = PLAY_PRIORITY[c.name]
+        table.insert(pool, { card = c, cname = c.name })
+      end
+      -- 转化技主动出牌：【奇袭】黑牌当过河拆桥、【国色】方块当乐不思蜀、
+      -- 【武圣】红牌当杀 等。没有这段的话这些技能在 AI 手里等于废的。
+      for _, want in ipairs(CONVERT_TARGETS) do
+        local cands = room:viewAsCandidates(p, want)
+        if #cands > 0 then
+          local made = cands[1].skill:view_as({ cands[1].card })
+          if made then
+            table.insert(pool, { card = made, cname = want, skill = cands[1].skill })
+          end
+        end
+      end
+
+      local best, best_score, best_target = nil, -1, nil
+      for _, item in ipairs(pool) do
+        local c, cname = item.card, item.cname
+        local score = PLAY_PRIORITY[cname]
         if score then
-          local def = Cards.get(c.name)
+          local def = Cards.get(cname)
           local ok, target = true, nil
 
           if def and def.ctype == Card.Type.Equip then
             target = p
-          elseif def and Cards.isDelayed(c.name) then
-            if c.name == "lightning" then
+          elseif def and Cards.isDelayed(cname) then
+            if cname == "lightning" then
               target = p
               ok = p:hasDelayed("lightning") == nil
             else
               local foe = nil
               for _, q in ipairs(opponentsOf(p, room)) do
-                if q:hasDelayed(c.name) == nil
+                if q:hasDelayed(cname) == nil
                   and not (def.distance and room:distance(p, q) > def.distance) then
                   foe = q
                   break
@@ -140,7 +166,7 @@ function AI.makeAI()
           elseif def and def.target == "all" then
             -- 群体收益：桃园结义不能资敌
             target = p
-            if c.name == "god_salvation" then
+            if cname == "god_salvation" then
               local wounded_foes = 0
               for _, q in ipairs(room:alivePlayers()) do
                 if q.hp < q.max_hp and isEnemy(p, q, room) then
@@ -151,14 +177,14 @@ function AI.makeAI()
             else
               ok = true
             end
-          elseif c.name == "slash" or c.name == "fire_slash" or c.name == "thunder_slash" then
+          elseif cname == "slash" or cname == "fire_slash" or cname == "thunder_slash" then
             if p.slash_count > 0 and not room:allowsUnlimitedSlash(p) then
               ok = false
             else
               target = targetInRange(p, room)
               ok = target ~= nil
             end
-          elseif c.name == "nullification" or c.name == "dodge" then
+          elseif cname == "nullification" or cname == "dodge" then
             ok = false -- 不能主动使用
           else
             target = p

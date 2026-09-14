@@ -661,6 +661,210 @@ do -- 乐进·骁果：其他角色结束阶段，逼其弃装备或受伤
   check(ps[2].hp == hp - 1, "【骁果】对方无装备时应造成 1 点伤害")
 end
 
+print("\n--- 吴国武将技能 ---")
+
+local function hasSkillNamed(p, name)
+  for _, s in ipairs(p.extra_skills or {}) do
+    if s.name == name then return true end
+  end
+  return false
+end
+
+do -- 孙权·制衡：弃置废牌换等量新牌
+  local r, ps = makeRoomWith({ "孙权", "白板武将" }, 31)
+  give(ps[1], "dodge", Card.Suit.Spade, 2)
+  give(ps[1], "dodge", Card.Suit.Club, 3)
+  give(ps[1], "dodge", Card.Suit.Spade, 4)
+  local before, dumped = #ps[1].hand, #r.discardPile
+  r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  check(#r.discardPile == dumped + 2, "【制衡】应弃置 2 张废牌")
+  check(#ps[1].hand == before, "【制衡】弃 2 摸 2，手牌数不变（" .. before .. " → " .. #ps[1].hand .. "）")
+  check(ps[1].zhiheng_used, "【制衡】每回合限一次")
+end
+
+do -- 甘宁·奇袭：黑色手牌当【过河拆桥】
+  local r, ps = makeRoomWith({ "甘宁", "白板武将" }, 32)
+  local black = give(ps[1], "slash", Card.Suit.Spade, 5)
+  local red = give(ps[1], "peach", Card.Suit.Heart, 5)
+  check((r:viewAsCard(ps[1], "dismantlement", black) or {}).name == "dismantlement",
+    "【奇袭】黑色牌应能当【过河拆桥】")
+  check(r:viewAsCard(ps[1], "dismantlement", red) == nil, "【奇袭】红色牌不应能转化")
+end
+
+do -- 吕蒙·克己：出牌阶段未出杀则跳过弃牌阶段
+  local r, ps = makeRoomWith({ "吕蒙", "白板武将" }, 33)
+  give(ps[1], "slash", Card.Suit.Spade, 5)
+  give(ps[1], "slash", Card.Suit.Spade, 6)
+  give(ps[1], "dodge", Card.Suit.Heart, 2)
+  give(ps[1], "dodge", Card.Suit.Heart, 3)
+  give(ps[1], "dodge", Card.Suit.Heart, 4)
+  check(r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "discard" }),
+    "【克己】未出杀时应跳过弃牌阶段")
+  ps[1].keji_slash = true
+  check(not r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "discard" }),
+    "【克己】出过杀后不应跳过弃牌阶段")
+end
+
+do -- 黄盖·苦肉：失去 1 点体力摸两张
+  local r, ps = makeRoomWith({ "黄盖", "白板武将" }, 34)
+  local n = #ps[1].hand
+  r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  check(ps[1].hp == ps[1].max_hp - 1, "【苦肉】应失去 1 点体力")
+  check(#ps[1].hand == n + 2, "【苦肉】应摸两张牌")
+end
+
+do -- 周瑜·英姿 / 反间
+  local r, ps = makeRoomWith({ "周瑜", "白板武将" }, 35)
+  local data = { player = ps[1], n = 2 }
+  r:trigger("DrawNCards", ps[1], data)
+  check(data.n == 3, "【英姿】摸牌阶段应多摸一张")
+  give(ps[1], "slash", Card.Suit.Spade, 5)
+  local n2 = #ps[2].hand
+  runInRoom(function()
+    r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  end)
+  check(#ps[2].hand == n2 + 1, "【反间】目标应获得周瑜的一张手牌")
+end
+
+do -- 大乔·国色 / 流离
+  local r, ps = makeRoomWith({ "大乔", "白板武将", "白板武将" }, 36)
+  local diamond = give(ps[1], "slash", Card.Suit.Diamond, 5)
+  check((r:viewAsCard(ps[1], "indulgence", diamond) or {}).name == "indulgence",
+    "【国色】方块牌应能当【乐不思蜀】")
+  give(ps[1], "dodge", Card.Suit.Heart, 2)
+  local slash = give(ps[2], "slash", Card.Suit.Spade, 5)
+  local use = { from = ps[2], card = slash, to = { ps[1] } }
+  r:trigger("TargetConfirming", ps[1], use)
+  check(use.to[1] == ps[3] or use.to[1] == ps[2],
+    "【流离】应把【杀】转移给另一名角色（实际目标 " .. use.to[1].name .. "）")
+  check(use.to[1] ~= ps[1], "【流离】转移后大乔不应再是目标")
+end
+
+do -- 陆逊·谦逊 / 度势
+  local r, ps = makeRoomWith({ "陆逊", "白板武将" }, 37)
+  local snatch = give(ps[2], "snatch", Card.Suit.Spade, 3, Card.Type.Trick)
+  check(not r:_validateUse(ps[2], snatch, { ps[1] }), "【谦逊】不能成为【顺手牵羊】的目标")
+  check(r:_validateUse(ps[2], snatch, { ps[2] }) ~= nil, "【谦逊】不影响对其他角色使用")
+  local red = give(ps[1], "peach", Card.Suit.Heart, 5)
+  check((r:viewAsCard(ps[1], "await_exhausted", red) or {}).name == "await_exhausted",
+    "【度势】红色牌应能当【以逸待劳】")
+end
+
+do -- 孙尚香·枭姬：失去装备后摸两张
+  local r, ps = makeRoomWith({ "孙尚香", "白板武将" }, 38)
+  local n = #ps[1].hand
+  r:trigger("CardsMoveOneTime", ps[1], { player = ps[1], from_place = "equip" })
+  check(#ps[1].hand == n + 2, "【枭姬】失去装备后应摸两张牌")
+end
+
+do -- 孙坚·英魂：受伤时令队友摸 X 张后弃 1 张
+  local r, ps = makeRoomWith({ "孙坚", "白板武将", "白板武将" }, 39)
+  r.identity_mode = true
+  ps[1].role, ps[2].role, ps[3].role = "lord", "rebel", "loyalist"
+  ps[1].hp = 2 -- 已损失 2 点体力
+  local n = #ps[3].hand
+  runInRoom(function()
+    r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "start" })
+  end)
+  check(#ps[3].hand >= n + 1, "【英魂】应令队友摸牌（" .. n .. " → " .. #ps[3].hand .. "）")
+end
+
+do -- 小乔·天香：弃红桃手牌把伤害转移给他人
+  local r, ps = makeRoomWith({ "小乔", "白板武将" }, 40)
+  give(ps[1], "peach", Card.Suit.Heart, 5)
+  local hp = ps[2].hp
+  local cancelled
+  runInRoom(function()
+    cancelled = r:trigger("DamageInflicted", ps[1],
+      { from = ps[2], to = ps[1], n = 1, nature = "normal" })
+  end)
+  check(cancelled, "【天香】应截断对自己的伤害结算")
+  check(ps[2].hp == hp - 1, "【天香】应把伤害转移给目标")
+end
+
+do -- 太史慈·天义：拼点胜负挂上回合内标记
+  local r, ps = makeRoomWith({ "太史慈", "白板武将" }, 41)
+  give(ps[1], "slash", Card.Suit.Spade, 12)
+  give(ps[2], "slash", Card.Suit.Spade, 3)
+  r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  check(hasSkillNamed(ps[1], "天义·胜"), "【天义】拼点获胜应挂上增益标记")
+  check(r:allowsUnlimitedSlash(ps[1]), "【天义】获胜后出杀应不限次数")
+end
+
+do -- 周泰·不屈：翻出点数不重复的「创」牌可免死
+  local r, ps = makeRoomWith({ "周泰", "白板武将" }, 42)
+  table.insert(r.drawPile, Card.create(1, "slash", Card.Suit.Spade, 7, Card.Type.Basic))
+  ps[1].hp = 0
+  local saved = r:trigger("Dying", ps[1], { player = ps[1] })
+  check(saved, "【不屈】点数不重复时应截断濒死")
+  check(ps[1].hp == 1, "【不屈】免死后应回复至 1 点体力")
+end
+
+do -- 鲁肃·好施：多摸两张，手牌过多时散财
+  local r, ps = makeRoomWith({ "鲁肃", "白板武将" }, 43)
+  local data = { player = ps[1], n = 2 }
+  r:trigger("DrawNCards", ps[1], data)
+  check(data.n == 4, "【好施】摸牌阶段应多摸两张")
+  for i = 1, 6 do give(ps[1], "dodge", Card.Suit.Spade, i) end
+  local before, n2 = #ps[1].hand, #ps[2].hand
+  r:trigger("AfterDrawNCards", ps[1], { player = ps[1] })
+  check(#ps[1].hand < before, "【好施】手牌超过 5 张时应散出一半")
+  check(#ps[2].hand > n2, "【好施】手牌最少的角色应收到牌")
+end
+
+do -- 鲁肃·缔盟：弃 X 张牌交换两名手牌数相差 X 的角色之手牌
+  local r, ps = makeRoomWith({ "鲁肃", "白板武将", "白板武将", "白板武将" }, 44)
+  r.identity_mode = true
+  ps[1].role, ps[2].role = "lord", "rebel"
+  ps[3].role, ps[4].role = "loyalist", "rebel"
+  give(ps[3], "dodge", Card.Suit.Spade, 2)                       -- 队友 1 张
+  give(ps[4], "dodge", Card.Suit.Spade, 3)
+  give(ps[4], "dodge", Card.Suit.Spade, 4)
+  give(ps[4], "dodge", Card.Suit.Spade, 5)                       -- 敌人 3 张
+  give(ps[1], "slash", Card.Suit.Spade, 6)
+  give(ps[1], "slash", Card.Suit.Spade, 7)
+  local n3, n4 = #ps[3].hand, #ps[4].hand
+  r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  check(#ps[3].hand == n4 and #ps[4].hand == n3,
+    "【缔盟】应交换两名角色的手牌（" .. n3 .. "/" .. n4 .. " → "
+      .. #ps[3].hand .. "/" .. #ps[4].hand .. "）")
+end
+
+do -- 二张·直谏 / 固政
+  local r, ps = makeRoomWith({ "二张", "白板武将", "白板武将" }, 45)
+  r.identity_mode = true
+  ps[1].role, ps[2].role, ps[3].role = "lord", "rebel", "loyalist"
+  give(ps[1], "crossbow", Card.Suit.Spade, 2, Card.Type.Equip)
+  local n = #ps[1].hand
+  r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  check(ps[3].equips.weapon ~= nil, "【直谏】应把装备牌置于队友装备区")
+  check(#ps[1].hand == n, "【直谏】消耗一张装备牌后应摸一张补回")
+
+  local r2, q = makeRoomWith({ "二张", "白板武将" }, 46)
+  -- 两张牌只进弃牌堆（模拟弃牌阶段刚弃掉），不进手牌
+  local d1 = Card.create(101, "dodge", Card.Suit.Spade, 2, Card.Type.Basic)
+  local d2 = Card.create(102, "dodge", Card.Suit.Spade, 3, Card.Type.Basic)
+  table.insert(r2.discardPile, d1)
+  table.insert(r2.discardPile, d2)
+  r2.last_discard_player = q[2]
+  r2.last_discarded = { d1, d2 }
+  r2:trigger("EventPhaseEnd", q[1], { player = q[2], phase = "discard" })
+  check(#q[2].hand == 1, "【固政】应归还弃牌者一张牌")
+  check(#q[1].hand == 1, "【固政】应将其余弃牌收入自己手牌")
+end
+
+do -- 丁奉·短兵 / 奋迅
+  local r, ps = makeRoomWith({ "丁奉", "白板武将", "白板武将", "白板武将" }, 47)
+  check(Generals.marker(ps[1], "slash_extra_target", false), "丁奉【短兵】应允许【杀】多指定目标")
+  give(ps[1], "dodge", Card.Suit.Spade, 2)
+  local far = r:distance(ps[1], ps[3])
+  r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  local t = nil
+  for q, _ in pairs(ps[1].fixed_distance or {}) do t = q end
+  check(t ~= nil, "【奋迅】应指定一名角色")
+  check(t and r:distance(ps[1], t) == 1, "【奋迅】与该角色距离应固定为 1（原最远 " .. far .. "）")
+end
+
 print("\n--- 卡牌定义完整性 ---")
 
 local missing = {}

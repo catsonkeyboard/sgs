@@ -88,6 +88,20 @@ Cards.define("duel", {
   end,
 })
 
+-- 【以逸待劳】：只由【度势】转化产生，不进牌堆
+-- 效果：摸两张牌，然后弃置两张牌（净手牌不变，用于调整手牌质量）
+Cards.define("await_exhausted", {
+  zh = "以逸待劳", target = "self", nullifiable = true,
+  effect = function(room, use)
+    room:log("%s 使用【以逸待劳】，摸两张牌后弃两张牌", use.from.name)
+    room:drawCards(use.from, 2)
+    local dropped = room:askForDiscard(use.from, 2) or {}
+    for _, c in ipairs(dropped) do
+      if use.from:takeCard(c) then table.insert(room.discardPile, c) end
+    end
+  end,
+})
+
 Cards.define("snatch", {
   zh = "顺手牵羊", target = "enemy", distance = 1, nullifiable = true,
   effect = function(room, use)

@@ -84,7 +84,7 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 | --- | --- | --- |
 | 蜀 | 15 | ✅ 刘备/关羽/张飞/诸葛亮/赵云/马超/黄月英/黄忠/魏延/庞统/卧龙/刘禅/孟获/祝融/甘夫人 |
 | 魏 | 15 | ✅ 曹操/司马懿/夏侯惇/张辽/许褚/郭嘉/甄姬/夏侯渊/张郃/徐晃/曹仁/典韦/荀彧/曹丕/乐进 |
-| 吴 | 0 | ⬜ 待补（对齐 `standard-wu-generals.cpp`） |
+| 吴 | 15 | ✅ 孙权/甘宁/吕蒙/黄盖/周瑜/大乔/陆逊/孙尚香/孙坚/小乔/太史慈/周泰/鲁肃/二张/丁奉 |
 | 群 | 0 | ⬜ 待补（对齐 `standard-qun-generals.cpp`） |
 
 技能三类写法：
@@ -94,7 +94,13 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 
 引擎侧查询的标记：`unlimited_slash` / `distance_mod` / `no_trick_range` /
 `no_target_empty` / `auto_armor` / `savage_immune` / `xiangle` /
+`no_target_tricks`（表，如【谦逊】禁止 snatch/indulgence）/
+`slash_no_distance` / `no_slash` / `slash_extra_target`（【短兵】）/
+`spade_as_heart`（【红颜】，目前只影响【天香】）/
 `extra_dist_<牌名>`（逐牌名叠加距离，如【断粮】的 `extra_dist_supply_shortage`）。
+
+回合内的临时增益/减益用 `grantMarker / revokeMarker` 往
+`player.extra_skills` 注入标记技（【天义】拼点胜负），TurnStart 时撤销。
 
 阶段跳过、翻面、拼点、收牌等通用原语见 `Room:skipPhase / turnOver / pindian /
 obtain / takeOneCard / loseHp`。
@@ -108,6 +114,19 @@ obtain / takeOneCard / loseHp`。
    `ctype`、效果分派由此统一，不要在 room.lua 里写 name 分支。
 4. **新增武将技能**：`TriggerSkill:create(name, events, on_trigger, opts)`，
    注意 `TriggerSkill.create` 是点号定义，冒号调用会让实参整体右移一位。
+5. **以「他人」为主语广播的事件必须先校验主体**。`Room:trigger` 把技能**拥有者**
+   作为 `player` 传入，而 `data.player` / `data.from` / `data.to` 才是事件主体。
+   因此 `DrawNCards`、`Dying`、`Death`、`EventPhaseStart`、`FinishJudge` 这类事件
+   上，技能必须写 `if data.player ~= player then return false end`，
+   否则会在**别人的**摸牌/濒死/回合里触发自己的技能（【再起】【涅槃】踩过）。
+   `Damaged` 用 `data.to`、`DamageCaused` 用 `data.from` 判断。
+6. **会询问玩家（`askForXxx`）的技能，单测里必须放进协程跑**，否则主线程 `yield`
+   直接报错。测试里统一用 `runInRoom(fn)` 包裹（见 `tests/test_game.lua`）。
+7. **AI 主动使用转化技要登记 `CONVERT_TARGETS`**（`core/ai.lua`）。
+   转化技默认只在「响应」（askForCard）时被考虑，出牌阶段不会主动转化，
+   于是【武圣】【奇袭】【国色】【度势】这类技能在 AI 手里是废的。
+8. **判队友不能只认「同身份」**：主公与忠臣同阵营但身份不同，
+   `allies()` 必须取 `foes()` 的补集，否则【英魂】【缔盟】【直谏】找不到队友。
 
 ## 四、运行方式
 

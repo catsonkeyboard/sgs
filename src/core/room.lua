@@ -263,6 +263,8 @@ end
 -- 座位距离，取环形最小值，再修正 ±马
 function Room:distance(a, b)
   if not a or not b or a == b then return 0 end
+  -- 【奋迅】：本回合与指定角色的距离固定为 1
+  if a.fixed_distance and a.fixed_distance[b] then return a.fixed_distance[b] end
   local n = #self.players
   local d = math.abs(a.seat - b.seat)
   d = math.min(d, n - d)
@@ -485,9 +487,12 @@ function Room:_phase_discard(p)
   if excess <= 0 then return end
   local discarded = self:askForDiscard(p, excess)
   local n = 0
+  -- 记录本次弃牌，供【固政】在弃牌阶段结束时取用
+  self.last_discard_player, self.last_discarded = p, {}
   for _, c in ipairs(discarded or {}) do
     if p:takeCard(c) then
       table.insert(self.discardPile, c)
+      table.insert(self.last_discarded, c)
       n = n + 1
     end
   end
@@ -610,6 +615,8 @@ function Room:useCard(from, card, target)
   end
 
   self:trigger("CardUsed", from, use)
+  -- 目标确认中：【流离】在此把【杀】转移给攻击范围内的另一名角色
+  self:trigger("TargetConfirming", use.to[1], use)
   -- 指定目标后触发：【铁骑】【烈弓】等在此决定此牌可否被闪避
   self:trigger("TargetChosen", from, use)
 
@@ -640,7 +647,8 @@ function Room:useCard(from, card, target)
     return true
   end
 
-  return self:_useBasic(from, card, targets)
+  -- 用 use.to 而非局部变量 targets：目标可能在 TargetConfirming 被【流离】改过
+  return self:_useBasic(from, card, use.to)
 end
 
 -- 退还：虚拟牌要把实体牌还给使用者
@@ -679,8 +687,15 @@ function Room:_useBasic(from, card, targets)
       self:_refund(from, card)
       return false
     end
-    -- 【神速】等技能生成的【杀】无视距离
-    if not card.no_distance_limit and self:distance(from, target) > from:attackRange() then
+    -- 【天义】拼点失利：本回合不能使用【杀】
+    if Generals.marker(from, "no_slash", false) then
+      self:log("%s 本回合不能使用【杀】，退还", from.name)
+      self:_refund(from, card)
+      return false
+    end
+    -- 【神速】/【天义】等生成的【杀】无视距离
+    local far = Generals.marker(from, "slash_no_distance", false)
+    if not (card.no_distance_limit or far) and self:distance(from, target) > from:attackRange() then
       self:log("目标不在攻击范围内（距离 %d > 范围 %d），退还",
         self:distance(from, target), from:attackRange())
       self:_refund(from, card)
@@ -690,6 +705,17 @@ function Room:_useBasic(from, card, targets)
     from.slash_count = from.slash_count + 1
     self:_toDiscard(card)
     self:_resolveSlash(from, target, card)
+
+    -- 【短兵】（锁定技）：此【杀】可额外指定一名距离 1 以内的角色
+    if Generals.marker(from, "slash_extra_target", false) then
+      for _, q in ipairs(self.players) do
+        if q ~= from and q ~= target and q.alive and self:distance(from, q) <= 1 then
+          self:log("%s 的【短兵】生效，【杀】额外指定 %s", from.name, q.name)
+          self:_resolveSlash(from, q, card)
+          break
+        end
+      end
+    end
     return true
 
   elseif name == "peach" then
@@ -750,6 +776,15 @@ function Room:_validateUse(from, card, targets)
     return false
   end
 
+  -- 【谦逊】（锁定技）：不能成为指定锦囊（【顺手牵羊】【乐不思蜀】）的目标
+  for _, t in ipairs(targets) do
+    local banned = t and Generals.marker(t, "no_target_tricks", nil)
+    if banned and def.ctype == Card.Type.Trick and banned[card.name] then
+      self:log("%s 的【谦逊】生效，不能成为【%s】的目标", t.name, card:zhName())
+      return false
+    end
+  end
+
   -- 【空城】（锁定技）：没有手牌时不能成为【杀】/【决斗】的目标
   for _, t in ipairs(targets) do
     if t and Generals.marker(t, "no_target_empty", false) and #t.hand == 0 then
@@ -769,6 +804,7 @@ function Room:_equipCard(from, card)
   local slot = def and def.equip or "weapon"
   local old = from:equipCard(card, slot)
   if old then
+    self:_onEquipLost(from, old)
     table.insert(self.discardPile, old)
     local olddef = Cards.get(old.name)
     if olddef and old.name == "silver_lion" then
@@ -888,6 +924,7 @@ function Room:_slashHit(from, to, card, nature, ignore_armor)
       local horse = to.equips[slot]
       if horse then
         to.equips[slot] = nil
+        self:_onEquipLost(to, horse)
         table.insert(self.discardPile, horse)
         self:log("%s 的【麒麟弓】击落 %s 的【%s】", from.name, to.name, horse:zhName())
         break
@@ -1007,6 +1044,11 @@ function Room:obtain(p, card)
   return true
 end
 
+-- 失去装备区的一张牌（【枭姬】的挂载点）
+function Room:_onEquipLost(p, card)
+  self:trigger("CardsMoveOneTime", p, { player = p, card = card, from_place = "equip" })
+end
+
 -- 拼点：双方各出一张手牌比点数，点数大者胜（平局算发起方负）；两张牌均弃置
 function Room:pindian(a, b)
   if #a.hand == 0 or #b.hand == 0 then return false end
@@ -1042,7 +1084,11 @@ function Room:takeOneCard(from, victim)
 end
 
 function Room:_dying(p, killer)
-  self:trigger("Dying", p, { player = p })
+  -- 技能可截断濒死结算：【涅槃】放弃求桃直接回满，【不屈】翻出「创」牌免死
+  if self:trigger("Dying", p, { player = p }) then
+    self:trigger("QuitDying", p, { player = p })
+    return
+  end
   self:log("%s 濒死，请求【桃】", p.name)
   while p.hp <= 0 do
     local peach = self:askForCard(p, "peach", "你已濒死，请使用【桃】/【酒】（不出则阵亡）")

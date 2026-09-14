@@ -811,11 +811,525 @@ Generals.WEI = {
   },
 }
 
+-- ==================== 吴 ====================
+-- 对齐原版 src/package/standard-wu-generals.cpp（WU 001-016）
+
+-- 手牌里「主动打不出去」的废牌，【制衡】换牌的主要对象
+local JUNK = { dodge = true, nullification = true }
+
+-- 队友（foes 的补集）。注意不能只认「同身份」：主公与忠臣是同阵营但身份不同，
+-- 按 q.role == p.role 判断会把忠臣排除掉。
+local function allies(p, room)
+  local out = {}
+  if not room.identity_mode or not p.role then return out end
+  local hostile_set = {}
+  for _, q in ipairs(foes(p, room)) do hostile_set[q] = true end
+  for _, q in ipairs(room.players) do
+    -- foes 在没有敌人时会退化成「所有其他人」，此时不能全当队友
+    if q ~= p and q.alive and not hostile_set[q] and q.role then
+      table.insert(out, q)
+    end
+  end
+  return out
+end
+
+-- 临时给玩家挂一个标记技（【天义】拼点胜负产生的回合内效果）
+local function grantMarker(p, name, fields)
+  for _, s in ipairs(p.extra_skills) do
+    if s.name == name then return end
+  end
+  table.insert(p.extra_skills, markerSkill(name, fields))
+end
+
+local function revokeMarker(p, name)
+  for i, s in ipairs(p.extra_skills) do
+    if s.name == name then table.remove(p.extra_skills, i) return end
+  end
+end
+
+-- 【天香】可用的牌：红桃；【红颜】下黑桃也视为红桃
+local function isTianxiangCard(p, c)
+  if c.suit == Card.Suit.Heart then return true end
+  if c.suit == Card.Suit.Spade and Generals.marker(p, "spade_as_heart", false) then
+    return true
+  end
+  return false
+end
+
+Generals.WU = {
+  {
+    name = "孙权", key = "sunquan", max_hp = 4, kingdom = "wu",
+    skills = {
+      -- 制衡：出牌阶段限一次，弃置若干张牌，然后摸等量的牌
+      TriggerSkill.create("制衡", TriggerEvent.EventPhaseStart,
+        function(_s, room, player, data)
+          if not data or data.phase ~= "play" or data.player ~= player then return false end
+          if player.skip_play or player.zhiheng_used then return false end
+          -- AI 策略：只把打不出去的废牌（闪/无懈可击）换掉，且留一张保命
+          local junk = {}
+          for _, c in ipairs(player.hand) do
+            if JUNK[c.name] then table.insert(junk, c) end
+          end
+          if #junk <= 1 then return false end
+          local n = math.min(#junk - 1, 3)
+          player.zhiheng_used = true
+          for i = 1, n do
+            player:takeCard(junk[i])
+            table.insert(room.discardPile, junk[i])
+          end
+          room:log("%s 发动【制衡】，弃置 %d 张牌并摸 %d 张", player.name, n, n)
+          room:drawCards(player, n)
+          return false
+        end, { zh = "制衡" }),
+      resetFlag("制衡·重置", { flag = "zhiheng_used", zh = "制衡" }),
+    },
+  },
+  {
+    name = "甘宁", key = "ganning", max_hp = 4, kingdom = "wu",
+    skills = { singleViewAs("奇袭", "dismantlement", isBlack) },
+  },
+  {
+    name = "吕蒙", key = "lvmeng", max_hp = 4, kingdom = "wu",
+    skills = {
+      -- 克己：出牌阶段未使用过【杀】则跳过弃牌阶段
+      TriggerSkill.create("克己", TriggerEvent.EventPhaseStart,
+        function(_s, room, player, data)
+          if not data or data.phase ~= "discard" or data.player ~= player then return false end
+          if player.keji_slash then return false end
+          if #player.hand <= player.hp then return false end
+          room:log("%s 发动【克己】，本回合未出杀，跳过弃牌阶段", player.name)
+          return true -- 截断：跳过弃牌阶段
+        end, { zh = "克己" }),
+      -- 记录出牌阶段是否用过杀
+      TriggerSkill.create("克己·记录", TriggerEvent.PreCardUsed,
+        function(_s, _room, player, data)
+          if not data or data.from ~= player or not data.card then return false end
+          if isSlashName(data.card.name) and player.phase == "play" then
+            player.keji_slash = true
+          end
+          return false
+        end, { zh = "克己" }),
+      resetFlag("克己·重置", { flag = "keji_slash", zh = "克己" }),
+    },
+  },
+  {
+    name = "黄盖", key = "huanggai", max_hp = 4, kingdom = "wu",
+    skills = {
+      -- 苦肉：出牌阶段，失去 1 点体力，摸两张牌
+      TriggerSkill.create("苦肉", TriggerEvent.EventPhaseStart,
+        function(_s, room, player, data)
+          if not data or data.phase ~= "play" or data.player ~= player then return false end
+          if player.skip_play or player.kurou_used then return false end
+          -- AI 策略：体力低于 2 时不再自残
+          if player.hp < 3 then return false end
+          player.kurou_used = true
+          room:log("%s 发动【苦肉】，失去 1 点体力并摸两张牌", player.name)
+          room:loseHp(player, 1)
+          if not player.alive then return false end
+          room:drawCards(player, 2)
+          return false
+        end, { zh = "苦肉" }),
+      resetFlag("苦肉·重置", { flag = "kurou_used", zh = "苦肉" }),
+    },
+  },
+  {
+    name = "周瑜", key = "zhouyu", max_hp = 3, kingdom = "wu",
+    skills = {
+      -- 英姿：摸牌阶段多摸一张
+      TriggerSkill.create("英姿", TriggerEvent.DrawNCards,
+        function(_s, room, player, data)
+          if not data or data.player ~= player then return false end
+          data.n = (data.n or 2) + 1
+          room:log("%s 发动【英姿】，多摸一张牌", player.name)
+          return false
+        end, { zh = "英姿" }),
+      -- 反间：令一名其他角色获得你的一张手牌，若其猜错花色则受到 1 点伤害
+      TriggerSkill.create("反间", TriggerEvent.EventPhaseStart,
+        function(_s, room, player, data)
+          if not data or data.phase ~= "play" or data.player ~= player then return false end
+          if player.skip_play or player.fanjian_used or #player.hand == 0 then return false end
+          local t = nil
+          for _, q in ipairs(foes(player, room)) do t = q break end
+          if not t then return false end
+          player.fanjian_used = true
+          local idx = room:random(#player.hand)
+          local card = player.hand[idx]
+          player:takeCard(card)
+          table.insert(t.hand, card)
+          local SUITS = { Card.Suit.Spade, Card.Suit.Heart, Card.Suit.Club, Card.Suit.Diamond }
+          local guess = SUITS[room:random(4)]
+          room:log("%s 发动【反间】，%s 获得一张手牌并猜测花色", player.name, t.name)
+          if guess ~= card.suit then
+            room:log("%s 猜错花色，受到 1 点伤害", t.name)
+            room:damage(player, t, 1)
+          else
+            room:log("%s 猜中花色，无事发生", t.name)
+          end
+          return false
+        end, { zh = "反间" }),
+      resetFlag("反间·重置", { flag = "fanjian_used", zh = "反间" }),
+    },
+  },
+  {
+    name = "大乔", key = "daqiao", max_hp = 3, kingdom = "wu", female = true,
+    skills = {
+      -- 国色：方块手牌当【乐不思蜀】
+      singleViewAs("国色", "indulgence", function(c) return c.suit == Card.Suit.Diamond end),
+      -- 流离：成为【杀】的目标时，弃一张牌将其转移给攻击范围内的另一名角色
+      TriggerSkill.create("流离", TriggerEvent.TargetConfirming,
+        function(_s, room, player, data)
+          if not data or not data.card or not isSlashName(data.card.name) then return false end
+          local mine = false
+          for _, t in ipairs(data.to or {}) do
+            if t == player then mine = true break end
+          end
+          if not mine or #player.hand == 0 then return false end
+          local alt = nil
+          for _, q in ipairs(room.players) do
+            if q ~= player and q ~= data.from and q.alive
+              and room:distance(player, q) <= player:attackRange() then
+              alt = q
+              break
+            end
+          end
+          if not alt then return false end
+          local c = player.hand[1]
+          player:takeCard(c)
+          table.insert(room.discardPile, c)
+          room:log("%s 发动【流离】，弃置一张牌将【杀】转移给 %s", player.name, alt.name)
+          data.to = { alt }
+          return false
+        end, { zh = "流离" }),
+    },
+  },
+  {
+    name = "陆逊", key = "luxun", max_hp = 3, kingdom = "wu",
+    skills = {
+      -- 谦逊（锁定技）：不能成为【顺手牵羊】/【乐不思蜀】的目标
+      markerSkill("谦逊", { no_target_tricks = { snatch = true, indulgence = true } }),
+      -- 度势：红色手牌当【以逸待劳】（摸两张后弃两张）
+      singleViewAs("度势", "await_exhausted", isRed),
+    },
+  },
+  {
+    name = "孙尚香", key = "sunshangxiang", max_hp = 3, kingdom = "wu", female = true,
+    skills = {
+      -- 结姻：出牌阶段弃两张手牌，与一名已受伤的男性角色各回复 1 点体力
+      TriggerSkill.create("结姻", TriggerEvent.EventPhaseStart,
+        function(_s, room, player, data)
+          if not data or data.phase ~= "play" or data.player ~= player then return false end
+          if player.skip_play or player.jieyin_used then return false end
+          if #player.hand < 2 or player.hp >= player.max_hp then return false end
+          local t = nil
+          for _, q in ipairs(room.players) do
+            if q ~= player and q.alive and not q.female and q.hp < q.max_hp then
+              t = q
+              break
+            end
+          end
+          if not t then return false end
+          player.jieyin_used = true
+          for i = 1, 2 do
+            local c = table.remove(player.hand, 1)
+            table.insert(room.discardPile, c)
+          end
+          room:log("%s 发动【结姻】，与 %s 各回复 1 点体力", player.name, t.name)
+          room:heal(player, 1)
+          room:heal(t, 1)
+          return false
+        end, { zh = "结姻" }),
+      resetFlag("结姻·重置", { flag = "jieyin_used", zh = "结姻" }),
+      -- 枭姬：失去装备区的牌后摸两张
+      TriggerSkill.create("枭姬", TriggerEvent.CardsMoveOneTime,
+        function(_s, room, player, data)
+          if not data or data.player ~= player then return false end
+          if data.from_place ~= "equip" then return false end
+          room:log("%s 发动【枭姬】，失去装备后摸两张牌", player.name)
+          room:drawCards(player, 2)
+          return false
+        end, { zh = "枭姬" }),
+    },
+  },
+  {
+    name = "孙坚", key = "sunjian", max_hp = 4, kingdom = "wu",
+    skills = {
+      -- 英魂：回合开始若已受伤，令一名其他角色摸 X 张牌后弃 1 张（X = 已损失体力）
+      TriggerSkill.create("英魂", TriggerEvent.EventPhaseStart,
+        function(_s, room, player, data)
+          if not data or data.phase ~= "start" or data.player ~= player then return false end
+          local x = player.max_hp - player.hp
+          if x <= 0 then return false end
+          local t = nil
+          for _, q in ipairs(allies(player, room)) do t = q break end
+          if not t then return false end
+          room:log("%s 发动【英魂】，%s 摸 %d 张牌后弃 1 张", player.name, t.name, x)
+          room:drawCards(t, x)
+          local dropped = room:askForDiscard(t, 1) or {}
+          for _, c in ipairs(dropped) do
+            if t:takeCard(c) then table.insert(room.discardPile, c) end
+          end
+          return false
+        end, { zh = "英魂" }),
+    },
+  },
+  {
+    name = "小乔", key = "xiaoqiao", max_hp = 3, kingdom = "wu", female = true,
+    skills = {
+      -- 红颜（锁定技）：黑桃牌视为红桃牌
+      -- 注：原版是 FilterSkill，会改写所有花色查询；这里先支持【天香】的判定，
+      -- 完整「影响全局花色判定」要等 Phase B 的过滤技框架。
+      markerSkill("红颜", { spade_as_heart = true }),
+      -- 天香：受到伤害时弃一张红桃手牌，将此伤害转移给另一名角色，其再摸 X 张牌
+      TriggerSkill.create("天香", TriggerEvent.DamageInflicted,
+        function(_s, room, player, data)
+          if not data or data.to ~= player then return false end
+          local idx = nil
+          for i, c in ipairs(player.hand) do
+            if isTianxiangCard(player, c) then idx = i break end
+          end
+          if not idx then return false end
+          local t = nil
+          for _, q in ipairs(foes(player, room)) do t = q break end
+          if not t then return false end
+          local c = player.hand[idx]
+          player:takeCard(c)
+          table.insert(room.discardPile, c)
+          room:log("%s 发动【天香】，将此伤害转移给 %s", player.name, t.name)
+          room:damage(data.from, t, data.n, data.nature, data.card)
+          local lost = t.max_hp - t.hp
+          if lost > 0 and t.alive then
+            room:log("%s 因【天香】摸 %d 张牌", t.name, lost)
+            room:drawCards(t, lost)
+          end
+          return true -- 截断：原伤害不再结算
+        end, { zh = "天香" }),
+    },
+  },
+  {
+    name = "太史慈", key = "taishici", max_hp = 4, kingdom = "wu",
+    skills = {
+      -- 天义：出牌阶段与一名角色拼点，赢则杀无距离限制且次数不限，输则本回合不能出杀
+      TriggerSkill.create("天义", TriggerEvent.EventPhaseStart,
+        function(_s, room, player, data)
+          if not data or data.phase ~= "play" or data.player ~= player then return false end
+          if player.skip_play or player.tianyi_used or #player.hand == 0 then return false end
+          local t = nil
+          for _, q in ipairs(foes(player, room)) do
+            if #q.hand > 0 then t = q break end
+          end
+          if not t then return false end
+          player.tianyi_used = true
+          room:log("%s 发动【天义】，与 %s 拼点", player.name, t.name)
+          if room:pindian(player, t) then
+            room:log("%s 拼点获胜：本回合【杀】无距离限制且次数不限", player.name)
+            grantMarker(player, "天义·胜", {
+              unlimited_slash = true, slash_no_distance = true, slash_extra_target = true,
+            })
+          else
+            room:log("%s 拼点失败：本回合不能使用【杀】", player.name)
+            grantMarker(player, "天义·负", { no_slash = true })
+          end
+          return false
+        end, { zh = "天义" }),
+      resetFlag("天义·重置", { flag = "tianyi_used", zh = "天义" }),
+      TriggerSkill.create("天义·清除", TriggerEvent.TurnStart,
+        function(_s, _room, player, data)
+          if data and data.player == player then
+            revokeMarker(player, "天义·胜")
+            revokeMarker(player, "天义·负")
+          end
+          return false
+        end, { zh = "天义" }),
+    },
+  },
+  {
+    name = "周泰", key = "zhoutai", max_hp = 4, kingdom = "wu",
+    skills = {
+      -- 不屈：濒死时翻出牌堆顶一张牌作为「创」，点数不重复则免死并回复至 1 点体力
+      TriggerSkill.create("不屈", TriggerEvent.Dying,
+        function(_s, room, player, data)
+          if not data or data.player ~= player then return false end
+          local c = drawForJudge(room)
+          if not c then return false end
+          player.buqu = player.buqu or {}
+          local dup = false
+          for _, b in ipairs(player.buqu) do
+            if b == c.number then dup = true break end
+          end
+          -- 「创」牌实体进弃牌堆以保证牌数守恒，这里只记点数
+          table.insert(room.discardPile, c)
+          if dup then
+            room:log("%s 的【不屈】翻出 %s%d，点数重复，无法免死",
+              player.name, c:suitString(), c.number)
+            return false
+          end
+          table.insert(player.buqu, c.number)
+          room:log("%s 发动【不屈】，翻出 %s%d 点数不重复，免于死亡并回复至 1 点体力",
+            player.name, c:suitString(), c.number)
+          player.hp = 1
+          return true -- 截断濒死结算
+        end, { zh = "不屈" }),
+    },
+  },
+  {
+    name = "鲁肃", key = "lusu", max_hp = 3, kingdom = "wu",
+    skills = {
+      -- 好施：摸牌阶段多摸两张；若手牌多于 5 张，将一半交给手牌最少的其他角色
+      TriggerSkill.create("好施", TriggerEvent.DrawNCards,
+        function(_s, room, player, data)
+          if not data or data.player ~= player then return false end
+          data.n = (data.n or 2) + 2
+          player.haoshi = true
+          room:log("%s 发动【好施】，多摸两张牌", player.name)
+          return false
+        end, { zh = "好施" }),
+      TriggerSkill.create("好施·散财", TriggerEvent.AfterDrawNCards,
+        function(_s, room, player, data)
+          if not data or data.player ~= player or not player.haoshi then return false end
+          player.haoshi = false
+          if #player.hand <= 5 then return false end
+          local beggar = nil
+          for _, q in ipairs(room:otherAlivePlayers(player)) do
+            if not beggar or #q.hand < #beggar.hand then beggar = q end
+          end
+          if not beggar then return false end
+          local n = math.floor(#player.hand / 2)
+          room:log("%s 的【好施】生效，将 %d 张手牌交给 %s", player.name, n, beggar.name)
+          for _ = 1, n do
+            local c = table.remove(player.hand, 1)
+            if c then table.insert(beggar.hand, c) end
+          end
+          return false
+        end, { zh = "好施" }),
+      -- 缔盟：弃 X 张手牌，交换两名手牌数相差 X 的其他角色的手牌
+      TriggerSkill.create("缔盟", TriggerEvent.EventPhaseStart,
+        function(_s, room, player, data)
+          if not data or data.phase ~= "play" or data.player ~= player then return false end
+          if player.skip_play or player.dimeng_used or #player.hand < 2 then return false end
+          -- AI 策略：把队友的少牌和敌人的多牌对调（经典用法）
+          local mate, foe = nil, nil
+          for _, q in ipairs(allies(player, room)) do
+            if not mate or #q.hand < #mate.hand then mate = q end
+          end
+          for _, q in ipairs(foes(player, room)) do
+            if not foe or #q.hand > #foe.hand then foe = q end
+          end
+          if not mate or not foe or mate == foe then return false end
+          local k = #foe.hand - #mate.hand
+          if k <= 0 or k > #player.hand then return false end
+          player.dimeng_used = true
+          for _ = 1, k do
+            table.insert(room.discardPile, table.remove(player.hand, 1))
+          end
+          room:log("%s 发动【缔盟】，弃 %d 张牌交换 %s 与 %s 的手牌",
+            player.name, k, mate.name, foe.name)
+          mate.hand, foe.hand = foe.hand, mate.hand
+          return false
+        end, { zh = "缔盟" }),
+      resetFlag("缔盟·重置", { flag = "dimeng_used", zh = "缔盟" }),
+    },
+  },
+  {
+    name = "二张", key = "erzhang", max_hp = 3, kingdom = "wu",
+    skills = {
+      -- 直谏：出牌阶段将一张装备牌置于一名其他角色的装备区，然后摸一张牌
+      TriggerSkill.create("直谏", TriggerEvent.EventPhaseStart,
+        function(_s, room, player, data)
+          if not data or data.phase ~= "play" or data.player ~= player then return false end
+          if player.skip_play or player.zhijian_used then return false end
+          local equip = nil
+          for _, c in ipairs(player.hand) do
+            if Cards.isEquip(c.name) then equip = c break end
+          end
+          if not equip then return false end
+          local t = nil
+          for _, q in ipairs(allies(player, room)) do t = q break end
+          if not t then return false end
+          local def = Cards.get(equip.name)
+          local slot = def and def.equip or "weapon"
+          if t.equips[slot] then return false end -- 目标该槽位已有装备
+          player.zhijian_used = true
+          player:takeCard(equip)
+          local old = t:equipCard(equip, slot)
+          if old then
+            room:_onEquipLost(t, old)
+            table.insert(room.discardPile, old)
+          end
+          room:log("%s 发动【直谏】，将【%s】装备给 %s 并摸一张牌",
+            player.name, equip:zhName(), t.name)
+          room:drawCards(player, 1)
+          return false
+        end, { zh = "直谏" }),
+      resetFlag("直谏·重置", { flag = "zhijian_used", zh = "直谏" }),
+      -- 固政：其他角色弃牌阶段结束时，将其弃牌中的一张还给他，其余收入自己手牌
+      TriggerSkill.create("固政", TriggerEvent.EventPhaseEnd,
+        function(_s, room, player, data)
+          if not data or data.phase ~= "discard" then return false end
+          local turner = data.player
+          if not turner or turner == player then return false end
+          if room.last_discard_player ~= turner then return false end
+          local cards = room.last_discarded or {}
+          if #cards == 0 then return false end
+          local take = function(c)
+            for i, x in ipairs(room.discardPile) do
+              if x == c then table.remove(room.discardPile, i) return true end
+            end
+            return false
+          end
+          local back = table.remove(cards, 1)
+          take(back)
+          table.insert(turner.hand, back)
+          for _, c in ipairs(cards) do
+            take(c)
+            table.insert(player.hand, c)
+          end
+          room:log("%s 发动【固政】，归还 %s 一张牌并获得其余 %d 张",
+            player.name, turner.name, #cards)
+          room.last_discarded = {}
+          return false
+        end, { zh = "固政" }),
+    },
+  },
+  {
+    name = "丁奉", key = "dingfeng", max_hp = 4, kingdom = "wu",
+    skills = {
+      -- 短兵（锁定技）：【杀】可额外指定一名距离 1 以内的角色
+      markerSkill("短兵", { slash_extra_target = true }),
+      -- 奋迅：出牌阶段弃一张牌，令本回合与一名角色的距离固定为 1
+      TriggerSkill.create("奋迅", TriggerEvent.EventPhaseStart,
+        function(_s, room, player, data)
+          if not data or data.phase ~= "play" or data.player ~= player then return false end
+          if player.skip_play or player.fenxun_used or #player.hand == 0 then return false end
+          local t, far = nil, 1
+          for _, q in ipairs(foes(player, room)) do
+            local d = room:distance(player, q)
+            if d > far then t, far = q, d end
+          end
+          if not t then return false end
+          player.fenxun_used = true
+          local c = table.remove(player.hand, 1)
+          table.insert(room.discardPile, c)
+          player.fixed_distance = player.fixed_distance or {}
+          player.fixed_distance[t] = 1
+          room:log("%s 发动【奋迅】，与 %s 的距离视为 1（原为 %d）", player.name, t.name, far)
+          return false
+        end, { zh = "奋迅" }),
+      resetFlag("奋迅·重置", { flag = "fenxun_used", zh = "奋迅" }),
+      TriggerSkill.create("奋迅·清除", TriggerEvent.TurnStart,
+        function(_s, _room, player, data)
+          if data and data.player == player then player.fixed_distance = nil end
+          return false
+        end, { zh = "奋迅" }),
+    },
+  },
+}
+
 -- 汇总所有已实现的武将
 function Generals.all()
   local out = {}
   for _, g in ipairs(Generals.SHU) do table.insert(out, g) end
   for _, g in ipairs(Generals.WEI) do table.insert(out, g) end
+  for _, g in ipairs(Generals.WU) do table.insert(out, g) end
   return out
 end
 

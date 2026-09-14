@@ -24,6 +24,7 @@ function Player:init(name, general, seat, is_human)
   self.max_hp = (general and general.max_hp) or 4
   self.hp = self.max_hp
   self.kingdom = (general and general.kingdom) or "qun"
+  self.female = (general and general.female) or false -- 【结姻】等按性别选目标
 
   self.hand = {}                    -- 手牌
   self.equips = {                   -- 装备区
