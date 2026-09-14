@@ -38,8 +38,22 @@ function Card:displayName()
   return string.format("%s%s-%s[#%s]", self:suitString(), self.number, self:zhName(), self.id)
 end
 
+-- 复制一张牌。原版扩展常用 `LuaSkillCard:clone()` 得到一张新的技能牌，
+-- 因此必须把技能相关的属性（skill_card / subcards / virtual 等）一起带过去，
+-- 否则克隆出来的牌会被当成普通卡牌走卡牌结算。
 function Card:clone()
-  return Card.create(self.id, self.name, self.suit, self.number, self.ctype)
+  local c = Card.create(self.id, self.name, self.suit, self.number, self.ctype)
+  c.virtual = self.virtual
+  c.phantom = self.phantom
+  c.skill_card = self.skill_card
+  c.skill_name = self.skill_name
+  c.can_recast = self.can_recast
+  c.will_throw = self.will_throw
+  c.target_fixed = self.target_fixed
+  c.no_distance_limit = self.no_distance_limit
+  c.subcards = {}
+  for _, sc in ipairs(self.subcards or {}) do table.insert(c.subcards, sc) end
+  return c
 end
 
 return Card

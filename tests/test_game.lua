@@ -1158,10 +1158,72 @@ do -- DIY 的 TriggerSkill：受伤后摸一张牌
     .. #ps[1].hand .. "）")
 end
 
+do -- 技能牌：CreateSkillCard + clone + subcards + on_use
+  local Loader = require "src.compat.loader"
+  local engine = Engine.create()
+  Standard.setup(engine)
+  Loader.loadDirectory(engine, "diy")
+
+  local g = engine:getGeneral("试作武将")
+  check(g ~= nil, "DIY 技能牌武将【试作武将】应注册进引擎")
+  check(g and #g.skills == 1, "应注册 1 个技能（实得 " .. (g and #g.skills or 0) .. "）")
+
+  local ps = {}
+  for i, name in ipairs({ "试作武将", "白板武将" }) do
+    table.insert(ps, Player.create("P" .. i, engine:getGeneral(name), i, false))
+  end
+  local r = Room.create(engine, ps)
+  r.drawPile = Standard.buildDrawPile(3)
+
+  -- 手牌里放 3 张，弃 2 张换 2 张
+  give(ps[1], "slash", Card.Suit.Spade, 5)
+  give(ps[1], "slash", Card.Suit.Spade, 6)
+  give(ps[1], "dodge", Card.Suit.Heart, 2)
+  local skill = g.skills[1]
+  local made = skill:view_as({ ps[1].hand[1], ps[1].hand[2] })
+  check(made ~= nil, "【自守】应能产出一个技能牌")
+  check(made and made.skill_card ~= nil, "产出物应带 skill_card 规格")
+  check(made and made:getSubcards():length() == 2,
+    "技能牌应记录 2 张实体来源（实得 " .. (made and made:getSubcards():length() or -1) .. "）")
+
+  local before, dumped = #ps[1].hand, #r.discardPile
+  local consumed
+  runInRoom(function()
+    consumed = r:useCard(ps[1], made, nil)
+  end)
+  check(consumed, "技能牌应能被使用（引擎要拦下它而不是走卡牌结算）")
+  check(#r.discardPile == dumped + 2, "will_throw：作为代价的 2 张牌应进弃牌堆")
+  check(#ps[1].hand == before, "弃 2 摸 2，手牌数不变（" .. before .. " → " .. #ps[1].hand .. "）")
+end
+
 do -- 中文翻译表
   local sgs = require "src.compat.sgs"
   check(sgs.Translations["moligaloo"] == "太阳神上", "LoadTranslationTable 应记录包名")
   check(sgs.Translations["shentou"] == "神偷", "LoadTranslationTable 应记录技能名")
+end
+
+do -- 名称归一 / cloneCard / Card_Parse
+  local sgs = require "src.compat.sgs"
+  check(sgs.lowerCardName("Duel") == "duel", "Duel 应归一为 duel")
+  check(sgs.lowerCardName("ArcheryAttack") == "archery_attack",
+    "ArcheryAttack 应归一为 archery_attack")
+  -- 原版脚本常写首字母大写，engine 里是 snake_case
+  local duel = sgs.Sanguosha:cloneCard("Duel", sgs.Card_NoSuit, 0)
+  check(duel.name == "duel", "cloneCard(\"Duel\") 应得到 duel（实得 " .. duel.name .. "）")
+  local aa = sgs.Sanguosha:cloneCard("ArcheryAttack", sgs.Card_NoSuit, 0)
+  check(aa.name == "archery_attack", "cloneCard 应处理多段驼峰（实得 " .. aa.name .. "）")
+  check(duel.virtual, "cloneCard 产出的是虚拟牌，便于引擎取 subcards")
+
+  local parsed = sgs.Card_Parse("archery_attack:luanji[diamond:K]=29+28")
+  check(parsed ~= nil and parsed.name == "archery_attack",
+    "Card_Parse 应解析出牌名（实得 " .. tostring(parsed and parsed.name) .. "）")
+  check(parsed and parsed.suit == Card.Suit.Diamond, "Card_Parse 应解析花色")
+  check(parsed and parsed.number == 13, "Card_Parse 应把 K 解析为 13")
+  check(parsed and #parsed.subcards == 2, "Card_Parse 应记录 2 张子卡")
+  local skillcard = sgs.Card_Parse("@RendeCard=0")
+  check(skillcard ~= nil and skillcard.name == "rende_card",
+    "Card_Parse 应解析 @Class 形式的技能卡（实得 "
+      .. tostring(skillcard and skillcard.name) .. "）")
 end
 
 print("\n--- 卡牌定义完整性 ---")

@@ -34,6 +34,17 @@ define(Card, "getId", function(self) return self.id end)
 define(Card, "getEffectiveId", function(self) return self.id end)
 define(Card, "getSuit", function(self) return self.suit end)
 define(Card, "getNumber", function(self) return self.number end)
+-- 原版 AI 脚本用这两个拼 Card_Parse 字符串，需要的是花色/点数的**名字**
+define(Card, "getSuitString", function(self)
+  return string.lower(self:suitString()) == "s" and "spade"
+    or string.lower(self:suitString()) == "h" and "heart"
+    or string.lower(self:suitString()) == "c" and "club"
+    or string.lower(self:suitString()) == "d" and "diamond" or "no_suit"
+end)
+define(Card, "getNumberString", function(self)
+  return ({ [1] = "A", [11] = "J", [12] = "Q", [13] = "K" })[self.number]
+    or tostring(self.number)
+end)
 define(Card, "isBlack", function(self) return not self:isRed() end)
 define(Card, "getTypeId", function(self) return self.ctype end)
 define(Card, "objectName", function(self) return self.name end)
@@ -44,7 +55,11 @@ define(Card, "setSkillName", function(self, n)
   return self
 end)
 define(Card, "subcardsLength", function(self) return #(self.subcards or {}) end)
-define(Card, "getSubcards", function(self) return self.subcards or {} end)
+define(Card, "toString", function(self) return string.format("%s:%d", self.name, self.id) end)
+-- 原版返回 QList，脚本会调 :length()，这里返回带 length/at 的壳
+define(Card, "getSubcards", function(self)
+  return API.list(self.subcards or {})
+end)
 define(Card, "sameSuitWith", function(self, other) return other and self.suit == other.suit end)
 
 define(Card, "isKindOf", function(self, n)
@@ -82,6 +97,25 @@ define(Card, "addSubcard", function(self, x)
 end)
 
 function API.setCurrentSubcards(cards) current_subcards = cards or {} end
+
+-- ===== 列表壳 =====
+-- 原版 getSubcards() 返回 QList，脚本会写 :length() / :at() / :contains()
+local List = {}
+List.__index = List
+function API.list(t)
+  local l = setmetatable({ __items = t or {} }, List)
+  return l
+end
+function List:length() return #self.__items end
+function List:at(i) return self.__items[(i or 0) + 1] end
+function List:first() return self.__items[1] end
+function List:last() return self.__items[#self.__items] end
+function List:isEmpty() return #self.__items == 0 end
+function List:contains(x)
+  for _, v in ipairs(self.__items) do if v == x then return true end end
+  return false
+end
+function List:toTable() return self.__items end
 
 -- ===== Skill =====
 
@@ -177,6 +211,10 @@ define(Player, "setFlags", function(self, f)
   self.flags[neg and string.sub(f, 2) or f] = not neg
 end)
 define(Player, "getMaxCards", function(self) return math.max(self.hp, 0) end)
+-- 原版的「禁用/限制」概念（鸡肋、卡牌限制）本引擎未实现，一律放行
+define(Player, "isProhibited", function() return false end)
+define(Player, "isCardLimited", function() return false end)
+define(Player, "isJilei", function() return false end)
 define(Player, "canDiscard", function(_self, _who, _flags) return true end)
 define(Player, "drawCards", function(self, n)
   local room = (require "src.compat.sgs").CurrentRoom
@@ -242,6 +280,24 @@ define(Room, "setFixedDistance", function(_self, from, to, d)
 end)
 define(Room, "killPlayer", function(self, p)
   if p and p.alive then self:_kill(p, nil) end
+end)
+
+-- 原版 room:getThread():trigger(event, room, player, data)
+-- 本引擎的 trigger 就在 Room 上，这里套一层即可
+define(Room, "getThread", function(self)
+  return {
+    trigger = function(_thread, event, _room, player, data)
+      return self:trigger(event, player, data)
+    end,
+    delay = function() end,
+  }
+end)
+
+-- room:moveCardTo(card, from, to, place, reason, silent)
+define(Room, "moveCardTo", function(self, card, from, _to, _place, _reason, _silent)
+  if from then from:takeCard(card) end
+  -- 本引擎目前只有「弃牌堆」一个去处，其余落点一律按弃牌处理
+  table.insert(self.discardPile, card)
 end)
 
 -- 同名覆盖：必须兼容引擎内部调用与原版脚本调用两种签名

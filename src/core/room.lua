@@ -686,6 +686,12 @@ function Room:useCard(from, card, target)
     return false
   end
 
+  -- 技能牌（原版 SkillCard）：效果写在 skill_card 的 on_use / on_effect 里。
+  -- 必须在卡牌分派之前拦下——否则查不到卡牌定义，会落进「暂无结算规则」兜底。
+  if card.skill_card then
+    return self:_useSkillCard(from, card, use)
+  end
+
   self:trigger("CardUsed", from, use)
   -- 目标确认中：【流离】在此把【杀】转移给攻击范围内的另一名角色
   self:trigger("TargetConfirming", use.to[1], use)
@@ -1140,6 +1146,43 @@ function Room:obtain(p, card)
   end
   if p:hasEquip(card.name) == card then p:unequipCard(card) end
   table.insert(p.hand, card)
+  return true
+end
+
+-- 技能牌结算（原版 SkillCard）
+-- will_throw 默认为 true：作为代价选中的牌先入弃牌堆，再执行 on_use。
+-- on_use 若被重写则由它自己处理目标；否则对每个目标调 on_effect。
+function Room:_useSkillCard(from, card, use)
+  local sc = card.skill_card
+  -- 供兼容层在回调里取 sgs.Self / sgs.CurrentRoom（core 不依赖 compat）
+  card.__user, card.__room = from, self
+  local targets = {}
+  for _, t in ipairs(use.to or {}) do
+    if t and t.alive then table.insert(targets, t) end
+  end
+
+  if sc.will_throw ~= false then
+    for _, c in ipairs(card.subcards or {}) do table.insert(self.discardPile, c) end
+  end
+
+  self:log("%s 发动技能牌【%s】", from.name, sc.name or card.name)
+
+  local ok, err
+  if sc.on_use then
+    ok, err = pcall(sc.on_use, card, self, from, targets)
+  else
+    ok, err = true, nil
+    for _, t in ipairs(targets) do
+      if sc.on_effect then
+        ok, err = pcall(sc.on_effect, card, { card = card, from = from, to = t })
+        if not ok then break end
+      end
+    end
+  end
+  if not ok then
+    error(string.format("[兼容层] 技能牌 %s 结算出错: %s",
+      tostring(sc.name), tostring(err)), 0)
+  end
   return true
 end
 

@@ -61,6 +61,44 @@ sgs.DamageStruct_Normal = "normal"
 sgs.DamageStruct_Fire = "fire"
 sgs.DamageStruct_Thunder = "thunder"
 
+-- 卡牌区域（原版 Player::Place），值沿用引擎的字符串
+sgs.Player_Hand = "hand"
+sgs.Player_Equip = "equip"
+sgs.Player_Judge = "judge"
+sgs.Player_DiscardPile = "discardPile"
+sgs.Player_DrawPile = "drawPile"
+sgs.Player_PlaceTable = "table"
+sgs.Player_PlaceSpecial = "special"
+
+-- 回合阶段（原版 Player::Phase）
+sgs.Player_RoundStart = "round_start"
+sgs.Player_Start = "start"
+sgs.Player_Judge = "judge"
+sgs.Player_Draw = "draw"
+sgs.Player_Play = "play"
+sgs.Player_Discard = "discard"
+sgs.Player_Finish = "finish"
+sgs.Player_NotActive = "not_active"
+
+-- 卡牌操作方式（原版 Card::HandlingMethod）
+sgs.Card_MethodUse = "use"
+sgs.Card_MethodResponse = "response"
+sgs.Card_MethodDiscard = "discard"
+sgs.Card_MethodRecast = "recast"
+sgs.Card_MethodPindian = "pindian"
+
+-- 原版 AI 提示表：脚本会往这些表里塞元素，必须先存在，否则赋值即崩。
+-- 本引擎的 AI 不走这套（用 CONVERT_TARGETS + 试算），这里只为兼容。
+sgs.ai_view_as = {}
+sgs.ai_filterskill_filter = {}
+sgs.ai_skill_invoke = {}
+sgs.ai_skill_use = {}
+sgs.ai_skill_playerchosen = {}
+sgs.ai_skill_cardask = {}
+sgs.ai_skill_choice = {}
+sgs.ai_cardshow = {}
+sgs.ai_chaofeng = {}
+
 -- 原版牌名 -> 本引擎牌名（只列命名不一致的）
 local CARD_ALIAS = {
   jink = "dodge", analeptic = "analeptic", slash = "slash",
@@ -338,12 +376,162 @@ function sgs.CreateFilterSkill(spec)
   return markerSpec(spec, { filter_view = spec.view_as, filter_view_filter = spec.view_filter })
 end
 
+-- ===== 技能牌 =====
+-- 原版的大量技能都实现为「技能牌」：把效果写在一张没有实体的抽象牌上，
+-- 发动技能即视为使用这张牌（见 extension-doc/4-SkillCard.lua）。
+-- 这里产出的是一张 virtual Card，附带 skill_card 规格；引擎在
+-- Room:_useSkillCard 里拦下它，改走 on_use / on_effect。
+
+-- 回调包装：进入前置位 sgs.Self / sgs.CurrentRoom（引擎会把它们写在
+-- card.__user / card.__room 上），离开后还原。
+local function wrapSkillCardFn(fn)
+  if type(fn) ~= "function" then return nil end
+  return function(self, ...)
+    local prev, prev_room = sgs.Self, sgs.CurrentRoom
+    sgs.Self = self.__user
+    sgs.CurrentRoom = self.__room
+    local ok, res = pcall(fn, self, ...)
+    sgs.Self, sgs.CurrentRoom = prev, prev_room
+    if not ok then error(res, 0) end
+    return res
+  end
+end
+
+function sgs.CreateSkillCard(spec)
+  local name = spec.name or "skill_card"
+  local c = Cards.get(name)
+  local card = Card.create(-1, name, Card.Suit.NoSuit, 0, (c and c.ctype) or Card.Type.Basic)
+  card.virtual = true
+  card.phantom = false    -- 有实体来源（subcards），只是没有卡牌定义
+  card.subcards = {}
+  card.skill_card = spec
+  card.target_fixed = spec.target_fixed == true
+  card.will_throw = spec.will_throw ~= false -- 默认 true
+  card.can_recast = spec.can_recast == true
+  card.__user, card.__room = nil, nil
+  -- 包装一次即可（在 spec 上就地替换，不能重复包装）
+  for _, k in ipairs({ "on_use", "on_effect", "filter", "feasible" }) do
+    local w = wrapSkillCardFn(spec[k])
+    if w then spec[k] = w end
+  end
+  return card
+end
+
+-- sgs.Card_Parse("name:skill[suit:number]=id+id") 或 "@Class=ids" / "#obj:ids"
+-- 主要由 AI 脚本用来构造虚拟牌；本引擎的 AI 不依赖它，这里做最小可用实现。
+local SUIT_BY_NAME = {
+  spade = Card.Suit.Spade, heart = Card.Suit.Heart,
+  club = Card.Suit.Club, diamond = Card.Suit.Diamond,
+  no_suit = Card.Suit.NoSuit,
+}
+local function parseNumber(s)
+  if s == "A" then return 1 end
+  if s == "J" then return 11 end
+  if s == "Q" then return 12 end
+  if s == "K" then return 13 end
+  return tonumber(s) or 0
+end
+
+function sgs.Card_Parse(str)
+  if type(str) ~= "string" then return nil end
+  -- "@Class=ids"：技能卡，名字取 Class 的 snake_case
+  local cls, ids = string.match(str, "^@([%w_]+)=(.*)$")
+  if not cls then
+    -- "#obj:ids"：Lua 技能卡
+    cls, ids = string.match(str, "^#([%w_]+):(.*)$")
+  end
+  if cls then
+    local c = Card.create(-1, sgs.lowerCardName(cls), Card.Suit.NoSuit, 0, Card.Type.Basic)
+    c.virtual = true
+    c.subcards = {}
+    for id in string.gmatch(ids or "", "%d+") do
+      table.insert(c.subcards, { id = tonumber(id) })
+    end
+    return c
+  end
+  -- "name:skill[suit:number]=ids"
+  local name, skill, suit, number, rest =
+    string.match(str, "^([%w_]+):([%w_]+)%[([%w_]+):([%w]+)%]=(.*)$")
+  if not name then
+    name = string.match(str, "^([%w_]+)$")
+    if not name then return nil end
+    skill, suit, number, rest = "", "no_suit", "0", "."
+  end
+  local c = Card.create(-1, sgs.lowerCardName(name),
+    SUIT_BY_NAME[string.lower(suit or "no_suit")] or Card.Suit.NoSuit,
+    parseNumber(number or "0"), Card.Type.Basic)
+  c.virtual = true
+  c.skill_name = skill
+  c.subcards = {}
+  for id in string.gmatch(rest or "", "%d+") do
+    table.insert(c.subcards, { id = tonumber(id) })
+  end
+  return c
+end
+
+-- 原版常用构造体
+
+-- sgs.CardUseStruct(card, from, to)：to 可为玩家或玩家列表
+function sgs.CardUseStruct(card, from, to)
+  local list = {}
+  if type(to) == "table" and to[1] then
+    for _, t in ipairs(to) do table.insert(list, t) end
+  elseif to then
+    table.insert(list, to)
+  end
+  return { card = card, from = from, to = list }
+end
+
+-- sgs.DamageStruct(from, to, damage, nature)
+function sgs.DamageStruct(from, to, damage, nature)
+  return { from = from, to = to, n = damage or 1, damage = damage or 1,
+    nature = nature or "normal" }
+end
+
+-- sgs.LogMessage()：原版日志对象，本引擎只记录 type/card_str 等字段
+function sgs.LogMessage()
+  return { type = "", from = nil, to = {}, arg = "", arg2 = "", card_str = "" }
+end
+
+-- sgs.qlist(容器)：原版遍历 QList；本引擎的列表就是 Lua 表，原样返回
+function sgs.qlist(t) return t or {} end
+
+-- sgs.CardMoveReason(...) 与 sgs.LogMessage 类似，只作数据载体
+function sgs.CardMoveReason(_reason, _name, _skill, _event, _extra)
+  return { m_reason = _reason, m_playerId = _name, m_skillName = _skill,
+    m_eventName = _event, m_targetId = _extra }
+end
+
 -- ===== Sanguosha 单例 =====
 
 local Sanguosha = {}
 
+-- CamelCase -> snake_case："Duel" -> "duel"，"ArcheryAttack" -> "archery_attack"
+function sgs.lowerCardName(n)
+  n = tostring(n or "")
+  local s = string.gsub(n, "(%u)", function(c) return "_" .. string.lower(c) end)
+  s = string.gsub(s, "^_", "")
+  return string.lower(s)
+end
+
+-- 原版脚本常写 sgs.Sanguosha:cloneCard("Duel", ...)（首字母大写），
+-- 而本引擎用 snake_case，这里统一归一。
+local CARD_NAME_ALIAS = {
+  duel = "duel", jink = "dodge", slash = "slash", peach = "peach",
+  analeptic = "analeptic", snatch = "snatch", dismantlement = "dismantlement",
+  indulgence = "indulgence", supplyshortage = "supply_shortage",
+  lightning = "lightning", archeryattack = "archery_attack",
+  savageassault = "savage_assault", exnihilo = "ex_nihilo",
+  ironchain = "iron_chain", fireattack = "fire_attack",
+  godsalvation = "god_salvation", amazinggrace = "amazing_grace",
+  collateral = "collateral", fireslash = "fire_slash",
+  thunderslash = "thunder_slash", nullification = "nullification",
+}
+
 function Sanguosha:cloneCard(name, suit, number)
-  name = CARD_ALIAS[name] or name
+  local lower = sgs.lowerCardName(name)
+  name = CARD_NAME_ALIAS[lower] or CARD_NAME_ALIAS[string.lower(name or "")]
+    or CARD_ALIAS[name] or lower
   local def = Cards.get(name)
   local real_suit = suit or Card.Suit.NoSuit
   if real_suit == sgs.Card_SuitToBeDecided then real_suit = Card.Suit.NoSuit end

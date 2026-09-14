@@ -141,7 +141,19 @@ function AI.makeAI()
           local def = Cards.get(cname)
           local ok, target = true, nil
 
-          if def and def.ctype == Card.Type.Equip then
+          -- 技能牌（原版 SkillCard）：没有卡牌定义，目标由 filter/feasible 决定。
+          -- 这里做近似：target_fixed 对自己，否则打第一个敌人。
+          if not def and c.skill_card then
+            if c.skill_card.target_fixed then
+              target = p
+            else
+              for _, q in ipairs(opponentsOf(p, room)) do
+                target = q
+                break
+              end
+              ok = target ~= nil
+            end
+          elseif def and def.ctype == Card.Type.Equip then
             target = p
           elseif def and Cards.isDelayed(cname) then
             if cname == "lightning" then

@@ -124,9 +124,23 @@ obtain / takeOneCard / loseHp`。
 3. **事件/频率常量直接复用引擎的字符串值**，`events = { sgs.Damaged }`
    写进来就是 `{ "Damaged" }`，无需转换。
 
-已用 `diy/moligaloo.lua`（改编自 `QSanguosha/extension-doc/1-Start.lua`）验证：
+已用 `diy/` 下两份示例验证（`moligaloo.lua` 改编自 `extension-doc/1-Start.lua`，
+`skillcard_demo.lua` 改编自 `extension-doc/4-SkillCard.lua`）：
 Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
-`LoadTranslationTable` 均可跑通。
+`LoadTranslationTable`/**SkillCard**（`CreateSkillCard` + `clone()` + subcards +
+`will_throw` + `on_use`）均可跑通。
+
+引擎侧为技能牌留了出口：`Room:_useSkillCard`。技能牌没有卡牌定义，
+若走普通卡牌分派会落进「暂无结算规则」兜底，因此必须在分派前拦下。
+
+其他已实现的原版 API：`sgs.Card_Parse`（含 `@Class=` / `#obj:` 形式）、
+`CardUseStruct` / `DamageStruct` / `LogMessage` / `CardMoveReason` / `qlist`、
+`room:getThread():trigger`、`room:moveCardTo`、`Card:getSubcards():length()`、
+`getSuitString()` / `getNumberString()`、区域与阶段常量、以及 AI 提示表
+（`sgs.ai_view_as` 等，仅作容器——本引擎 AI 不走这套）。
+
+名称归一：原版脚本常写 `cloneCard("Duel")` 驼峰形式，`sgs.lowerCardName`
+统一转 snake_case。
 
 ## 五、开发约定
 
