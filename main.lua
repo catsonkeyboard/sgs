@@ -1,7 +1,8 @@
--- 入口：--test 无头跑测试；否则进入菜单 → 牌桌
-local is_test, autostart = false, false
+-- 入口：--test 无头跑测试；--soak 大批量压力测试；否则进入菜单 → 牌桌
+local is_test, autostart, is_soak = false, false, false
 for _, a in ipairs(arg or {}) do
   if a == "--test" then is_test = true end
+  if a == "--soak" then is_soak = true end
   if a == "--autostart" then autostart = true end
 end
 
@@ -9,9 +10,9 @@ local current_scene = nil
 
 local startGame, backToMenu
 
-startGame = function()
+startGame = function(mode)
   local RoomScene = require "src.ui.scene_room"
-  current_scene = RoomScene.create(backToMenu)
+  current_scene = RoomScene.create(backToMenu, mode)
 end
 
 backToMenu = function()
@@ -20,8 +21,10 @@ backToMenu = function()
 end
 
 function love.load()
-  if is_test then
-    for _, mod in ipairs { "tests.test_game", "tests.test_ui" } do
+  local mods = is_test and { "tests.test_game", "tests.test_ui" }
+    or is_soak and { "tests.test_soak" } or nil
+  if mods then
+    for _, mod in ipairs(mods) do
       local ok, err = pcall(require, mod)
       if not ok then
         print("TEST CRASH (" .. mod .. "): " .. tostring(err))

@@ -1,6 +1,6 @@
--- 牌桌场景：人机 1v1（标准牌堆 + 锦囊/装备/判定）
+-- 牌桌场景：身份局（4 人）与 1v1 死斗
 -- 与 headless 测试共用同一个 core/ 引擎——UI 只是协程驱动的另一个响应源。
--- 注意：core/ 里的同一份规则对 UI 与 AI 生效，UI 不实现任何规则判断，
+-- core/ 里的同一份规则对 UI 与 AI 生效；UI 不实现任何规则判断，
 -- 只把人类玩家的鼠标点击翻译成 room:step(response)。
 local class = require "src.class"
 local Engine = require "src.core.engine"
@@ -15,29 +15,61 @@ local AI = require "src.core.ai"
 local RoomScene = class("RoomScene")
 
 local CARD_W, CARD_H = 62, 86
-local EQ_W, EQ_H = 54, 30
-local JUDGE_S = 22
+local EQ_W, EQ_H = 50, 26
+local JUDGE_S = 20
+local PANEL_W, PANEL_H = 210, 104
 
-function RoomScene:init(on_exit)
+-- 座位锚点：1=自己（下），2=下家（左），3=对家（上），4=上家（右）
+local ANCHORS_4 = {
+  [1] = { 40, 440 }, [2] = { 40, 168 }, [3] = { 460, 24 }, [4] = { 880, 168 },
+}
+local ANCHORS_2 = { [1] = { 40, 440 }, [2] = { 40, 24 } }
+
+function RoomScene:init(on_exit, mode)
   local engine = Engine.create()
   Standard.setup(engine)
-  local p1 = Player.create("你", engine:getGeneral("白板武将"), 1, true)
-  local p2 = Player.create("AI·乙", engine:getGeneral("剑阁武将"), 2, false)
-  self.human, self.ai_player = p1, p2
-  self.room = Room.create(engine, { p1, p2 })
-  self.room.drawPile = Standard.buildDrawPile(os.time() % 2147483647)
+  mode = mode or "identity"
+
+  local players = {}
+  if mode == "identity" then
+    local generals = { "张飞", "曹操", "司马懿", "华佗" }
+    for i = 1, 4 do
+      local is_human = (i == 1)
+      local g = engine:getGeneral(generals[i]) or engine:getGeneral("白板武将")
+      table.insert(players,
+        Player.create(is_human and "你" or ("AI·" .. g.name), g, i, is_human))
+    end
+  else
+    table.insert(players, Player.create("你", engine:getGeneral("白板武将"), 1, true))
+    table.insert(players, Player.create("AI·乙", engine:getGeneral("剑阁武将"), 2, false))
+  end
+
+  self.mode = mode
+  self.players = players
+  self.human = players[1]
+  self.ai_player = players[2] -- 兼容旧引用
+
+  local seed = os.time() % 2147483647
+  self.room = Room.create(engine, players)
+  self.room.drawPile = Standard.buildDrawPile(seed)
+  self.room.rng = Standard.makeRng(seed)
+  if mode == "identity" then
+    self.room:setupRoles(Standard.makeRng(seed + 1))
+  end
   self.room:start()
   self.driver = Driver.create(self.room, AI.makeAI())
   self.driver:advance()
 
+  self.anchors = (#players == 2) and ANCHORS_2 or ANCHORS_4
   self.on_exit = on_exit
   self.font = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 15)
   self.font_mid = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 20)
   self.font_sm = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 12)
   self.msg = ""
   self.buttons = {}
-  self.selected = {}   -- 弃牌阶段多选：[card]=true
-  self.revealed = nil  -- askForChooseCard 的候选牌
+  self.selected = {}   -- 弃牌多选
+  self.revealed = nil  -- askForChooseCard 候选
+  self.picked = nil    -- 已选中、等待指定目标的卡牌
 end
 
 -- ===== 布局 =====
@@ -49,8 +81,7 @@ end
 
 function RoomScene:cardAt(x, y)
   local hand = self.human.hand
-  local count = #hand
-  for idx = 1, count do
+  for idx = 1, #hand do
     local cx, cy, cw, ch = self:handCardRect(idx)
     if x >= cx and x <= cx + cw and y >= cy and y <= cy + ch then
       return hand[idx], idx
@@ -59,7 +90,21 @@ function RoomScene:cardAt(x, y)
   return nil
 end
 
--- 便利：选中的弃牌数量
+function RoomScene:anchorOf(p)
+  local a = self.anchors[p.seat] or { 40, 24 }
+  return a[1], a[2]
+end
+
+function RoomScene:panelAt(x, y)
+  for _, p in ipairs(self.players) do
+    local px, py = self:anchorOf(p)
+    if x >= px and x <= px + PANEL_W and y >= py and y <= py + PANEL_H then
+      return p
+    end
+  end
+  return nil
+end
+
 function RoomScene:selectedCount()
   local n = 0
   for _, c in ipairs(self.human.hand) do
@@ -76,13 +121,16 @@ function RoomScene:selectedCards()
   return out
 end
 
--- 人类玩家的对手列表（1v1 下只有一个）
-function RoomScene:opponents()
-  local out = {}
-  for _, q in ipairs(self.room.players) do
-    if q ~= self.human and q.alive then table.insert(out, q) end
+-- 该玩家是否可作为当前 picked 卡牌的目标
+function RoomScene:isValidTarget(p)
+  if not self.picked then return false end
+  if not p.alive then return false end
+  local def = Cards.get(self.picked.name)
+  if not def then return false end
+  if def.target == "enemy" or (def.delayed and def.target ~= "self") then
+    return p ~= self.human
   end
-  return out
+  return p == self.human
 end
 
 -- ===== 交互 =====
@@ -90,6 +138,7 @@ end
 function RoomScene:_step(resp)
   self.selected = {}
   self.revealed = nil
+  self.picked = nil
   self.room:step(resp)
   self.driver:advance()
   self:_refreshButtons()
@@ -105,11 +154,13 @@ function RoomScene:_refreshButtons()
   elseif req and req.player.is_human then
     if req.type == "askForUseCard" then
       push("结束出牌", function() self:_step(nil) end)
+      if self.picked then
+        push("取消选择", function() self.picked = nil self.msg = "" end)
+      end
     elseif req.type == "askForCard" then
       push("不出", function() self:_step(nil) end)
     elseif req.type == "askForDiscard" then
-      local need = req.n
-      local have = self:selectedCount()
+      local need, have = req.n, self:selectedCount()
       if have == need then
         push("确认弃牌", function() self:_step(self:selectedCards()) end)
       end
@@ -126,7 +177,6 @@ function RoomScene:_refreshButtons()
         self:_step(out)
       end)
     elseif req.type == "askForDiscardFrom" then
-      -- 对手手牌不可见，随机取一张（与原版一致的默认行为）
       push("确定拆牌", function()
         local t = req.target
         self:_step((t and t.hand[1]) or nil)
@@ -136,7 +186,7 @@ function RoomScene:_refreshButtons()
 
   for i, b in ipairs(btns) do
     b.x = 1130 - 40 - i * 120
-    b.y = 480
+    b.y = 300
     b.w, b.h = 110, 40
   end
   self.buttons = btns
@@ -149,6 +199,12 @@ function RoomScene:update(_dt)
   self:_refreshButtons()
   local req = self.room.pending
   self.revealed = (req and req.type == "askForChooseCard") and req.cards or nil
+  if not (req and req.type == "askForUseCard") then self.picked = nil end
+end
+
+function RoomScene:_useOn(card, target)
+  self.msg = ""
+  self:_step({ card = card, target = target })
 end
 
 function RoomScene:mousepressed(x, y, button)
@@ -162,14 +218,27 @@ function RoomScene:mousepressed(x, y, button)
   local req = self.room.pending
   if not (req and req.player.is_human) or self.room.game_over then return end
 
-  -- 五谷丰登：从展示的牌里挑一张
+  -- 五谷丰登：从展示牌中挑一张
   if req.type == "askForChooseCard" and self.revealed then
     for i, c in ipairs(self.revealed) do
       local cx = 40 + (i - 1) * (CARD_W + 8)
-      if x >= cx and x <= cx + CARD_W and y >= 300 and y <= 300 + CARD_H then
+      if x >= cx and x <= cx + CARD_W and y >= 320 and y <= 320 + CARD_H then
         self:_step(c)
         return
       end
+    end
+    return
+  end
+
+  -- 已选中卡牌 → 点击玩家面板指定目标
+  if self.picked then
+    local p = self:panelAt(x, y)
+    if p and self:isValidTarget(p) then
+      self:_useOn(self.picked, p)
+    elseif p then
+      self.msg = "该目标不合法"
+    else
+      self.picked = nil
     end
     return
   end
@@ -180,14 +249,18 @@ function RoomScene:mousepressed(x, y, button)
   if req.type == "askForUseCard" then
     local def = Cards.get(card.name)
     if not def then self.msg = "这张牌暂无规则" return end
-    local target = self.human
-    if def.target == "enemy" then
-      local foes = self:opponents()
-      target = foes[1]
-      if not target then self.msg = "没有合法目标" return end
+    local needs_target = (def.target == "enemy") or (def.delayed and def.target ~= "self")
+    if needs_target then
+      local foes = 0
+      for _, q in ipairs(self.players) do
+        if q ~= self.human and q.alive then foes = foes + 1 end
+      end
+      if foes == 0 then self.msg = "没有合法目标" return end
+      self.picked = card
+      self.msg = "已选中【" .. card:zhName() .. "】，点击目标角色"
+    else
+      self:_useOn(card, self.human)
     end
-    self.msg = ""
-    self:_step({ card = card, target = target })
 
   elseif req.type == "askForCard" then
     local wanted = req.card_name
@@ -214,28 +287,24 @@ end
 
 local function drawHp(x, y, hp, max_hp)
   for i = 1, max_hp do
-    if i <= hp then
-      love.graphics.setColor(0.85, 0.15, 0.1)
-    else
-      love.graphics.setColor(0.25, 0.25, 0.25)
-    end
-    love.graphics.circle("fill", x + (i - 1) * 18, y, 7)
+    if i <= hp then love.graphics.setColor(0.85, 0.15, 0.1)
+    else love.graphics.setColor(0.25, 0.25, 0.25) end
+    love.graphics.circle("fill", x + (i - 1) * 17, y, 6)
   end
 end
 
-local function cardFaceColor(c)
+local function faceColor(c)
   if not c then return 0.5, 0.5, 0.5 end
   local red = c:isRed()
   return red and 0.8 or 0.1, red and 0.1 or 0.1, red and 0.1 or 0.1
 end
 
--- 画一张牌（正面）
 local function drawCard(x, y, w, h, c, font, font_sm)
   love.graphics.setColor(0.96, 0.94, 0.88)
   love.graphics.rectangle("fill", x, y, w, h, 6, 6)
   love.graphics.setColor(0, 0, 0)
   love.graphics.rectangle("line", x, y, w, h, 6, 6)
-  love.graphics.setColor(cardFaceColor(c))
+  love.graphics.setColor(faceColor(c))
   love.graphics.setFont(font_sm)
   love.graphics.print(c:suitString() .. c.number, x + 5, y + 4)
   love.graphics.setColor(0, 0, 0)
@@ -243,42 +312,73 @@ local function drawCard(x, y, w, h, c, font, font_sm)
   love.graphics.printf(c:zhName(), x, y + h / 2 - 10, w, "center")
 end
 
--- 画背面（对手手牌）
-local function drawCardBack(x, y, w, h)
-  love.graphics.setColor(0.3, 0.35, 0.45)
-  love.graphics.rectangle("fill", x, y, w, h, 6, 6)
-  love.graphics.setColor(0.15, 0.18, 0.24)
-  love.graphics.rectangle("line", x, y, w, h, 6, 6)
-end
+local ROLE_COLOR = {
+  lord = { 0.95, 0.75, 0.2 },
+  loyalist = { 0.35, 0.65, 0.95 },
+  rebel = { 0.9, 0.3, 0.25 },
+  renegade = { 0.55, 0.55, 0.6 },
+}
 
-local function drawEquips(p, x, y, font_sm)
-  local slots = { { "weapon", "武" }, { "armor", "防" },
-    { "offensive_horse", "攻马" }, { "defensive_horse", "防马" } }
+function RoomScene:drawPlayerPanel(p, x, y, highlighted)
+  love.graphics.setColor(highlighted and 0.18 or 0.12,
+    highlighted and 0.30 or 0.16, highlighted and 0.18 or 0.12)
+  love.graphics.rectangle("fill", x, y, PANEL_W, PANEL_H, 8, 8)
+  if highlighted then
+    love.graphics.setColor(0.95, 0.8, 0.25)
+    love.graphics.rectangle("line", x, y, PANEL_W, PANEL_H, 8, 8)
+  end
+
+  love.graphics.setFont(self.font_sm)
+  love.graphics.setColor(1, 0.92, 0.75)
+  love.graphics.print(p.name .. "（" .. (p.general and p.general.name or "-") .. "）", x + 8, y + 6)
+
+  -- 身份：本人、主公、已阵亡者可见
+  if p.role and (p == self.human or p.role_revealed or not p.alive) then
+    local c = ROLE_COLOR[p.role] or { 0.7, 0.7, 0.7 }
+    love.graphics.setColor(c[1], c[2], c[3])
+    love.graphics.rectangle("fill", x + PANEL_W - 46, y + 5, 40, 18, 4, 4)
+    love.graphics.setColor(0, 0, 0)
+    love.graphics.printf(Player.ROLE_ZH[p.role] or p.role, x + PANEL_W - 46, y + 8, 40, "center")
+  else
+    love.graphics.setColor(0.45, 0.45, 0.45)
+    love.graphics.rectangle("fill", x + PANEL_W - 46, y + 5, 40, 18, 4, 4)
+    love.graphics.setColor(0, 0, 0)
+    love.graphics.printf("?", x + PANEL_W - 46, y + 8, 40, "center")
+  end
+
+  drawHp(x + 12, y + 38, p.hp, p.max_hp)
+
+  love.graphics.setFont(self.font_sm)
+  love.graphics.setColor(p.alive and 0.7 or 0.4, 0.75, 0.7)
+  love.graphics.print("手牌 × " .. #p.hand .. (p.alive and "" or " · 已阵亡"), x + 12, y + 56)
+  if p.chained then
+    love.graphics.setColor(0.85, 0.6, 0.2)
+    love.graphics.print("连环", x + 110, y + 56)
+  end
+
+  -- 装备
+  local slots = { "weapon", "armor", "offensive_horse", "defensive_horse" }
   local idx = 0
-  for _, item in ipairs(slots) do
-    local c = p.equips[item[1]]
+  for _, slot in ipairs(slots) do
+    local c = p.equips[slot]
     if c then
-      local ex = x + idx * (EQ_W + 6)
+      local ex = x + 12 + idx * (EQ_W + 4)
       love.graphics.setColor(0.85, 0.8, 0.6)
-      love.graphics.rectangle("fill", ex, y, EQ_W, EQ_H, 4, 4)
+      love.graphics.rectangle("fill", ex, y + 72, EQ_W, EQ_H, 3, 3)
       love.graphics.setColor(0, 0, 0)
-      love.graphics.rectangle("line", ex, y, EQ_W, EQ_H, 4, 4)
-      love.graphics.setFont(font_sm)
-      love.graphics.printf(c:zhName(), ex, y + 8, EQ_W, "center")
+      love.graphics.rectangle("line", ex, y + 72, EQ_W, EQ_H, 3, 3)
+      love.graphics.printf(c:zhName(), ex, y + 76, EQ_W, "center")
       idx = idx + 1
     end
   end
-  return idx
-end
 
-local function drawJudges(p, x, y, font_sm)
-  love.graphics.setFont(font_sm)
+  -- 判定区
   for i, c in ipairs(p.judges) do
-    local jx = x + (i - 1) * (JUDGE_S + 6)
+    local jx = x + PANEL_W - 8 - i * (JUDGE_S + 4)
     love.graphics.setColor(0.5, 0.25, 0.15)
-    love.graphics.rectangle("fill", jx, y, JUDGE_S, JUDGE_S, 3, 3)
+    love.graphics.rectangle("fill", jx, y + 72, JUDGE_S, JUDGE_S, 3, 3)
     love.graphics.setColor(1, 1, 1)
-    love.graphics.rectangle("line", jx, y, JUDGE_S, JUDGE_S, 3, 3)
+    love.graphics.rectangle("line", jx, y + 72, JUDGE_S, JUDGE_S, 3, 3)
   end
 end
 
@@ -286,42 +386,33 @@ function RoomScene:draw()
   love.graphics.clear(0.09, 0.13, 0.09)
   local room = self.room
 
-  -- 上方：AI 面板
-  love.graphics.setFont(self.font_mid)
-  love.graphics.setColor(1, 0.9, 0.7)
-  love.graphics.print(self.ai_player.name .. "（" .. self.ai_player.general.name .. "）", 40, 26)
-  drawHp(40, 60, self.ai_player.hp, self.ai_player.max_hp)
-  love.graphics.setColor(0.7, 0.75, 0.7)
-  love.graphics.print("手牌 × " .. #self.ai_player.hand, 240, 28)
-  drawEquips(self.ai_player, 240, 48, self.font_sm)
-  drawJudges(self.ai_player, 40, 82, self.font_sm)
+  for _, p in ipairs(self.players) do
+    local x, y = self:anchorOf(p)
+    local hl = (self.picked ~= nil) and self:isValidTarget(p) and (p ~= self.human)
+    self:drawPlayerPanel(p, x, y, hl)
+  end
 
   -- 中部：回合 / 牌堆
   love.graphics.setColor(0.8, 0.85, 0.8)
   love.graphics.setFont(self.font)
   local cur = room.players[room.current_seat]
-  local phase = self.human.phase or "-"
   love.graphics.print(string.format("第 %d 回合 · 行动：%s · 阶段：%s",
-    room.turn_count, cur and cur.name or "-", phase), 40, 130)
+    room.turn_count, cur and cur.name or "-", self.human.phase or "-"), 460, 290)
   love.graphics.print(string.format("摸牌堆 %d · 弃牌堆 %d",
-    #room.drawPile, #room.discardPile), 40, 155)
+    #room.drawPile, #room.discardPile), 460, 315)
+  if self.mode == "identity" then
+    love.graphics.setColor(0.6, 0.65, 0.6)
+    love.graphics.print("身份局：主公与忠臣 vs 反贼（内奸独立取胜）", 460, 340)
+  end
 
   -- 五谷丰登展示区
   if self.revealed and #self.revealed > 0 then
     love.graphics.setColor(0.9, 0.85, 0.6)
-    love.graphics.print("五谷丰登：点击一张收入手中", 40, 278)
+    love.graphics.print("五谷丰登：点击一张收入手中", 40, 298)
     for i, c in ipairs(self.revealed) do
-      drawCard(40 + (i - 1) * (CARD_W + 8), 300, CARD_W, CARD_H, c, self.font, self.font_sm)
+      drawCard(40 + (i - 1) * (CARD_W + 8), 320, CARD_W, CARD_H, c, self.font, self.font_sm)
     end
   end
-
-  -- 下方：人类玩家
-  love.graphics.setFont(self.font_mid)
-  love.graphics.setColor(1, 0.9, 0.7)
-  love.graphics.print(self.human.name .. "（" .. self.human.general.name .. "）", 40, 448)
-  drawHp(40, 470, self.human.hp, self.human.max_hp)
-  drawEquips(self.human, 240, 452, self.font_sm)
-  drawJudges(self.human, 40, 488, self.font_sm)
 
   -- 手牌
   love.graphics.setFont(self.font)
@@ -329,17 +420,20 @@ function RoomScene:draw()
     local c = self.human.hand[idx]
     if c == nil then break end
     local x, y = self:handCardRect(idx)
-    local lifted = self.selected[c] and 14 or 0
+    local lifted = ((self.selected[c] or self.picked == c) and 14 or 0)
     love.graphics.setColor(0.96, 0.94, 0.88)
     love.graphics.rectangle("fill", x, y - lifted, CARD_W, CARD_H, 6, 6)
-    if self.selected[c] then
+    if self.picked == c then
+      love.graphics.setColor(0.95, 0.8, 0.2)
+      love.graphics.rectangle("line", x, y - lifted, CARD_W, CARD_H, 6, 6)
+    elseif self.selected[c] then
       love.graphics.setColor(0.95, 0.75, 0.2)
       love.graphics.rectangle("line", x, y - lifted, CARD_W, CARD_H, 6, 6)
     else
       love.graphics.setColor(0, 0, 0)
       love.graphics.rectangle("line", x, y - lifted, CARD_W, CARD_H, 6, 6)
     end
-    love.graphics.setColor(cardFaceColor(c))
+    love.graphics.setColor(faceColor(c))
     love.graphics.setFont(self.font_sm)
     love.graphics.print(c:suitString() .. c.number, x + 6, y + 5 - lifted)
     love.graphics.setColor(0, 0, 0)
@@ -354,17 +448,20 @@ function RoomScene:draw()
   local req = room.pending
   local prompt = self.msg
   if room.game_over then
-    prompt = room.winner == self.human and "你赢了！点击【返回菜单】再来一局"
-      or "你阵亡了……点击【返回菜单】重整旗鼓"
+    local role_text = room.win_role and (Player.ROLE_ZH[room.win_role] or room.win_role) or ""
+    prompt = string.format("对局结束 —— %s阵营获胜（%s）。点击【返回菜单】",
+      role_text, room.winner and room.winner.name or "—")
   elseif req and req.player.is_human then
     if req.prompt then
       prompt = req.prompt
+    elseif self.picked then
+      prompt = "已选中【" .. self.picked:zhName() .. "】，点击一名角色作为目标"
     elseif req.type == "askForUseCard" then
       prompt = "你的出牌阶段：点手牌使用，或【结束出牌】"
     elseif req.type == "askForDiscard" then
       prompt = string.format("弃牌阶段：已选 %d/%d 张", self:selectedCount(), req.n)
     elseif req.type == "askForChooseCard" then
-      prompt = "点击上方展示牌，选择一张收入手中"
+      prompt = "点击展示牌，选择一张收入手中"
     elseif req.type == "askForDiscardFrom" then
       prompt = "过河拆桥：点【确定拆牌】弃掉对手一张手牌"
     end
@@ -389,7 +486,7 @@ function RoomScene:draw()
   local n = #room.loglines
   local start = math.max(1, n - 11)
   for i = start, n do
-    love.graphics.print(room.loglines[i], 560, 592 - 16 * (n - i))
+    love.graphics.print(room.loglines[i], 620, 592 - 16 * (n - i))
   end
 end
 

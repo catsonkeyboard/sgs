@@ -5,12 +5,37 @@ local Card = require "src.core.card"
 
 local AI = {}
 
+-- 候选目标：身份局下按阵营敌我排序，非身份局就是「除自己外的存活者」
 local function opponentsOf(p, room)
   local out = {}
   for _, q in ipairs(room.players) do
     if q ~= p and q.alive then table.insert(out, q) end
   end
-  return out
+  if not p.role or not room.identity_mode then return out end
+
+  local want
+  local role = p.role
+  if role == "lord" or role == "loyalist" then
+    want = { "rebel", "renegade" }
+  elseif role == "rebel" then
+    want = { "lord", "loyalist" }
+  elseif role == "renegade" then
+    -- 内奸：场上人多时先削反贼，残局谁都打
+    if #room:alivePlayers() > 2 then want = { "rebel" } else want = { "lord", "loyalist", "rebel" } end
+  else
+    return out
+  end
+
+  local ordered, seen = {}, {}
+  for _, r in ipairs(want) do
+    for _, q in ipairs(out) do
+      if q.role == r and not seen[q] then seen[q] = true table.insert(ordered, q) end
+    end
+  end
+  for _, q in ipairs(out) do
+    if not seen[q] then table.insert(ordered, q) end
+  end
+  return ordered
 end
 
 -- 第一个在攻击范围内的敌人
@@ -29,9 +54,27 @@ local function findByName(p, name)
   return nil
 end
 
--- 出牌阶段的优先级：装备 > 纯收益 > 干扰 > 输出
+-- 身份局下 p 是否视 q 为敌
+local function isEnemy(p, q, room)
+  if not p.role or not room.identity_mode then return true end -- 非身份局人人是敌
+  local r = p.role
+  if r == "lord" or r == "loyalist" then
+    return q.role == "rebel" or q.role == "renegade"
+  elseif r == "rebel" then
+    return q.role == "lord" or q.role == "loyalist"
+  elseif r == "renegade" then
+    return #room:alivePlayers() <= 2 or q.role == "rebel"
+  end
+  return true
+end
+
+-- 出牌阶段的优先级：装备 > 纯收益 > AOE > 干扰 > 输出
+-- 注意：AOE（南蛮/万箭）与群体治疗（桃园）需要按敌我分布动态判断，
+-- 不能只看固定优先级，否则 8 人局会因无人输出而长时间僵持。
 local PLAY_PRIORITY = {
-  ex_nihilo = 10, god_salvation = 8,
+  ex_nihilo = 10,
+  savage_assault = 7, archery_attack = 7, amazing_grace = 5,
+  god_salvation = 8,
   crossbow = 9, qinggang_sword = 9, ice_sword = 9, spear = 9, kylin_bow = 9, axe = 9,
   eight_diagram = 9, renwang_shield = 9, silver_lion = 8, vine = 7,
   offensive_horse = 9, defensive_horse = 9,
@@ -86,6 +129,28 @@ function AI.makeAI()
               end
             end
             target, ok = foe, foe ~= nil
+          elseif def and def.target == "all_other" then
+            -- AOE：只在不会误伤自己人时使用
+            target = p
+            local foes, allies = 0, 0
+            for _, q in ipairs(opponentsOf(p, room)) do
+              if isEnemy(p, q, room) then foes = foes + 1 else allies = allies + 1 end
+            end
+            ok = (foes > 0 and foes >= allies)
+          elseif def and def.target == "all" then
+            -- 群体收益：桃园结义不能资敌
+            target = p
+            if c.name == "god_salvation" then
+              local wounded_foes = 0
+              for _, q in ipairs(room:alivePlayers()) do
+                if q.hp < q.max_hp and isEnemy(p, q, room) then
+                  wounded_foes = wounded_foes + 1
+                end
+              end
+              ok = (p.hp < p.max_hp) and (wounded_foes == 0)
+            else
+              ok = true
+            end
           elseif c.name == "slash" or c.name == "fire_slash" or c.name == "thunder_slash" then
             if p.slash_count > 0 and not room:allowsUnlimitedSlash(p) then
               ok = false

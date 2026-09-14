@@ -31,7 +31,70 @@ function Room:init(engine, players)
   self.turn_count = 0
   self.loglines = {}
   self.rng = nil         -- 可注入确定性 rng（测试用）
+  self.identity_mode = false -- 身份局：启用角色胜负判定
+  self.win_role = nil    -- 获胜阵营 "lord"/"rebel"/"renegade"
   for _, p in ipairs(players) do p.seat = p.seat or 0 end
+end
+
+-- ===== 身份（Role）=====
+-- 各人数下的身份配置，对齐原版默认配置
+Room.ROLE_SETUP = {
+  [2] = { lord = 1, rebel = 1 },
+  [3] = { lord = 1, loyalist = 1, rebel = 1 },
+  [4] = { lord = 1, loyalist = 1, rebel = 1, renegade = 1 },
+  [5] = { lord = 1, loyalist = 1, rebel = 2, renegade = 1 },
+  [6] = { lord = 1, loyalist = 1, rebel = 3, renegade = 1 },
+  [7] = { lord = 1, loyalist = 2, rebel = 3, renegade = 1 },
+  [8] = { lord = 1, loyalist = 2, rebel = 4, renegade = 1 },
+}
+-- 固定遍历顺序，保证同样 rng 下洗牌结果可复现
+Room.ROLE_ORDER = { "lord", "loyalist", "rebel", "renegade" }
+
+-- 分配身份并据此调整主公体力；主公身份公开，其余隐藏
+function Room:setupRoles(rng)
+  local n = #self.players
+  local spec = Room.ROLE_SETUP[n] or Room.ROLE_SETUP[4]
+  local list = {}
+  for _, role in ipairs(Room.ROLE_ORDER) do
+    for _ = 1, (spec[role] or 0) do table.insert(list, role) end
+  end
+  -- 人数与配置不符时补反贼，避免身份缺失
+  while #list < n do table.insert(list, "rebel") end
+
+  local f = rng or math.random
+  for i = #list, 2, -1 do
+    local j = f(i)
+    list[i], list[j] = list[j], list[i]
+  end
+
+  for i, p in ipairs(self.players) do
+    p.role = list[i]
+    p.role_revealed = (p.role == "lord") -- 主公明身份，其余暗置
+    if p.role == "lord" then
+      p.max_hp = p.max_hp + 1
+      p.hp = p.max_hp
+    end
+  end
+  self.identity_mode = true
+  self:log("身份已分配：主公 %s（体力 %d）",
+    self:getLord() and self:getLord().name or "-",
+    self:getLord() and self:getLord().max_hp or 0)
+  return self
+end
+
+function Room:getLord()
+  for _, p in ipairs(self.players) do
+    if p.role == "lord" then return p end
+  end
+  return nil
+end
+
+-- 某阵营是否还有存活者
+function Room:roleAlive(role)
+  for _, p in ipairs(self.players) do
+    if p.alive and p.role == role then return true end
+  end
+  return false
 end
 
 -- ===== 随机源 =====
@@ -731,7 +794,7 @@ function Room:damage(from, to, n, nature, card)
 
   if to.hp <= 0 then
     to.hp = 0
-    self:_dying(to)
+    self:_dying(to, from)
   end
 end
 
@@ -746,7 +809,7 @@ function Room:_spreadChain(origin, from, n, nature)
         p.hp = p.hp - n
         if p.hp <= 0 then
           p.hp = 0
-          self:_dying(p)
+          self:_dying(p, from)
         else
           self:trigger("Damaged", p, data)
         end
@@ -762,7 +825,7 @@ function Room:heal(p, n)
   end
 end
 
-function Room:_dying(p)
+function Room:_dying(p, killer)
   self:trigger("Dying", p, { player = p })
   self:log("%s 濒死，请求【桃】", p.name)
   while p.hp <= 0 do
@@ -779,7 +842,7 @@ function Room:_dying(p)
         self:log("%s 使用【酒】回复体力", p.name)
         self:heal(p, 1)
       else
-        self:_kill(p)
+        self:_kill(p, killer)
         return
       end
     end
@@ -787,10 +850,11 @@ function Room:_dying(p)
   self:trigger("QuitDying", p, { player = p })
 end
 
-function Room:_kill(p)
+function Room:_kill(p, killer)
   p.alive = false
+  p.role_revealed = true -- 阵亡即亮身份
   self:trigger("Death", p, { player = p })
-  self:log("%s 阵亡", p.name)
+  self:log("%s 阵亡（身份：%s）", p.name, Player.ROLE_ZH[p.role] or "未知")
   for i = #p.hand, 1, -1 do
     table.insert(self.discardPile, table.remove(p.hand, i))
   end
@@ -801,15 +865,77 @@ function Room:_kill(p)
     if e then table.insert(self.discardPile, e) end
     p.equips[slot] = nil
   end
+  self:_rewardAndPunish(killer, p)
   self:_checkWinner()
 end
 
+-- 奖惩：击败反贼摸 3 张；主公误杀忠臣则弃光全部牌与装备
+function Room:_rewardAndPunish(killer, victim)
+  if not killer or not killer.alive or killer == victim then return end
+  if victim.role == "rebel" then
+    self:log("%s 击败反贼，摸 3 张牌", killer.name)
+    self:drawCards(killer, 3)
+  elseif victim.role == "loyalist" and killer.role == "lord" then
+    self:log("主公误杀忠臣，弃置所有手牌与装备")
+    for i = #killer.hand, 1, -1 do
+      table.insert(self.discardPile, table.remove(killer.hand, i))
+    end
+    for _, slot in ipairs(Player.EQUIP_SLOTS) do
+      local e = killer.equips[slot]
+      if e then table.insert(self.discardPile, e) end
+      killer.equips[slot] = nil
+    end
+  end
+end
+
 function Room:_checkWinner()
+  if self.identity_mode then
+    self:_checkIdentityWinner()
+  else
+    self:_checkLastManStanding()
+  end
+end
+
+function Room:_checkLastManStanding()
   local alive = self:alivePlayers()
   if #alive <= 1 then
     self.game_over = true
     self.winner = alive[1]
     self.win_role = self.winner and self.winner.role or nil
+    self:log("游戏结束，%s 获胜", self.winner and self.winner.name or "无人")
+  end
+end
+
+-- 身份局胜负：
+--   主公阵亡 → 仅剩内奸一人则内奸胜，否则反贼胜
+--   反贼与内奸全部覆灭 → 主公/忠臣方胜
+function Room:_checkIdentityWinner()
+  local alive = self:alivePlayers()
+  local lord = self:getLord()
+
+  if not lord or not lord.alive then
+    self.game_over = true
+    if #alive == 1 and alive[1].role == "renegade" then
+      self.winner, self.win_role = alive[1], "renegade"
+      self:log("主公已阵亡，仅存内奸 %s —— 内奸获胜", alive[1].name)
+    else
+      self.winner, self.win_role = nil, "rebel"
+      self:log("主公已阵亡 —— 反贼获胜")
+    end
+    return
+  end
+
+  if not self:roleAlive("rebel") and not self:roleAlive("renegade") then
+    self.game_over = true
+    self.winner, self.win_role = lord, "lord"
+    self:log("反贼与内奸均已覆灭 —— 主公与忠臣获胜")
+    return
+  end
+
+  if #alive <= 1 then
+    self.game_over = true
+    self.winner = alive[1]
+    self.win_role = alive[1] and alive[1].role or nil
     self:log("游戏结束，%s 获胜", self.winner and self.winner.name or "无人")
   end
 end
