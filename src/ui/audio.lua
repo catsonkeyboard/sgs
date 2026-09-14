@@ -32,10 +32,8 @@ local function loadSource(path)
   return src
 end
 
-function Audio:play(key)
-  if not self.enabled or self.muted or not key then return false end
-  if not (love and love.audio) then return false end -- headless 无音频
-  local rel = self.skin:sound(key)
+-- 播放一个已解析出的相对路径（内部用）
+function Audio:_playRel(rel)
   if not rel then return false end
   local path = self.skin:path(rel)
   if not path then return false end
@@ -55,6 +53,21 @@ function Audio:play(key)
     return s
   end)
   return ok and inst ~= nil
+end
+
+function Audio:play(key)
+  if not self.enabled or self.muted or not key then return false end
+  if not (love and love.audio) then return false end -- headless 无音频
+  local rel = self.skin:sound(key)
+  return self:_playRel(rel)
+end
+
+-- 技能台词：技能名是中文，由 Skin:skillSound 查拼音键（带 1/2 两个版本）
+function Audio:playSkill(skillName)
+  if not self.enabled or self.muted or not skillName then return false end
+  if not (love and love.audio) then return false end
+  if not (self.skin and self.skin.skillSound) then return false end
+  return self:_playRel(self.skin:skillSound(skillName))
 end
 
 -- 按卡牌名播放使用音效（原版键名形如 "slash"、"peach"）

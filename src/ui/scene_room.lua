@@ -501,9 +501,19 @@ function RoomScene:bindPresentationHooks()
     end
   end)
 
+  -- 技能发动：台词（原版 audio/skill/<拼音>1|2.ogg）+ 横幅
+  room:onEvent("skill", function(d)
+    if not d then return end
+    if audio:playSkill(d.skill) and d.player then
+      fx:showBanner(string.format("%s 发动【%s】", d.player.name, tostring(d.skill)),
+        { 0.95, 0.85, 0.35 })
+    end
+  end)
+
   room:onEvent("death", function(d)
     if d and d.player then
-      audio:play("death")
+      -- 阵亡台词按武将拼音（audio/death/<key>.ogg），取不到再退回通用 death
+      if not (d.key and audio:play(d.key)) then audio:play("death") end
       fx:showBanner(string.format("%s 阵亡", d.player.name), { 0.9, 0.3, 0.25 })
     end
   end)

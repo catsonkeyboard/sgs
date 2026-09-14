@@ -142,6 +142,20 @@ end)
 check(ok_audio, "无音频环境下播放应静默降级"
   .. (ok_audio and "" or ("：" .. tostring(err_audio))))
 
+
+-- 技能台词 / 阵亡台词：资源是拼音文件名，技能名是中文，靠 skill_keys 桥接
+local skillKeys = require "src.ui.skill_keys"
+local sk_ok, sk_bad = 0, {}
+for zh in pairs(skillKeys) do
+  if scene.skin:skillSound(zh) then sk_ok = sk_ok + 1 else table.insert(sk_bad, zh) end
+end
+check(#sk_bad == 0, "登记的 " .. sk_ok .. " 个技能台词都应能解析到音频文件（失败: "
+  .. table.concat(sk_bad, ",") .. "）")
+check(scene.skin:skillSound("奸雄") ~= nil, "【奸雄】应有台词文件")
+check(scene.skin:skillSound("马术") == nil, "被动技【马术】原版就没有台词，应静默跳过")
+check(scene.skin:sound("caocao") ~= nil, "阵亡台词应按武将拼音 key 解析（caocao）")
+
+
 print(string.format("\n===== UI: %d passed, %d failed =====", passes, failures))
 if failures > 0 then error("UI 测试失败", 0) end
 

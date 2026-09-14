@@ -988,14 +988,11 @@ Generals.WU = {
       -- 制衡：出牌阶段限一次，弃置若干张牌，然后摸等量的牌
       TriggerSkill.create("制衡", TriggerEvent.EventPhaseStart,
         function(_s, room, player, data)
-          if not data or data.phase ~= "play" or data.player ~= player then return false end
-          if player.skip_play or player.zhiheng_used then return false end
           -- BOT 策略：只把打不出去的废牌（闪/无懈可击）换掉，且留一张保命
           local junk = {}
           for _, c in ipairs(player.hand) do
             if JUNK[c.name] then table.insert(junk, c) end
           end
-          if #junk <= 1 then return false end
           local n = math.min(#junk - 1, 3)
           player.zhiheng_used = true
           for i = 1, n do
@@ -1005,7 +1002,20 @@ Generals.WU = {
           room:log("%s 发动【制衡】，弃置 %d 张牌并摸 %d 张", player.name, n, n)
           room:drawCards(player, n)
           return false
-        end, { zh = "制衡" }),
+        end, {
+          zh = "制衡",
+          can_trigger = function(_s, _room, player, data)
+            if not (data and data.phase == "play" and data.player == player) then
+              return false
+            end
+            if player.skip_play or player.zhiheng_used then return false end
+            local junk = 0
+            for _, c in ipairs(player.hand) do
+              if JUNK[c.name] then junk = junk + 1 end
+            end
+            return junk > 1 -- 换不到牌就不念台词、不做事
+          end,
+        }),
       resetFlag("制衡·重置", { flag = "zhiheng_used", zh = "制衡" }),
       -- 救援（主公技·锁定）：其他吴势力角色在你濒死时对你使用【桃】，
       -- 额外回复 1 点体力
@@ -1054,17 +1064,23 @@ Generals.WU = {
     skills = {
       -- 苦肉：出牌阶段，失去 1 点体力，摸两张牌（每阶段可多次发动）。
       -- 次数不做硬限制；BOT 保留「体力低于 3 时不再自残」的保守策略。
+      -- can_trigger：条件不满足时既不做事也不念台词（技能台词挂在 trigger 上）
       TriggerSkill.create("苦肉", TriggerEvent.EventPhaseStart,
         function(_s, room, player, data)
-          if not data or data.phase ~= "play" or data.player ~= player then return false end
-          if player.skip_play then return false end
-          if player.hp < 3 then return false end
           room:log("%s 发动【苦肉】，失去 1 点体力并摸两张牌", player.name)
           room:loseHp(player, 1)
           if not player.alive then return false end
           room:drawCards(player, 2)
           return false
-        end, { zh = "苦肉" }),
+        end, {
+          zh = "苦肉",
+          can_trigger = function(_s, _room, player, data)
+            if not (data and data.phase == "play" and data.player == player) then
+              return false
+            end
+            return not player.skip_play and player.hp >= 3
+          end,
+        }),
       resetFlag("苦肉·重置", { flag = "kurou_used", zh = "苦肉" }),
     },
   },
@@ -1171,9 +1187,6 @@ Generals.WU = {
       -- 结姻：出牌阶段弃两张手牌，与一名已受伤的男性角色各回复 1 点体力
       TriggerSkill.create("结姻", TriggerEvent.EventPhaseStart,
         function(_s, room, player, data)
-          if not data or data.phase ~= "play" or data.player ~= player then return false end
-          if player.skip_play or player.jieyin_used then return false end
-          if #player.hand < 2 then return false end
           -- 文档/原版只要求目标是「已受伤的其他男性角色」，不要求自己也受伤
           local t = nil
           for _, q in ipairs(room.players) do
@@ -1192,7 +1205,23 @@ Generals.WU = {
           room:heal(player, 1)
           room:heal(t, 1)
           return false
-        end, { zh = "结姻" }),
+        end, {
+          zh = "结姻",
+          can_trigger = function(_s, room, player, data)
+            if not (data and data.phase == "play" and data.player == player) then
+              return false
+            end
+            if player.skip_play or player.jieyin_used or #player.hand < 2 then
+              return false
+            end
+            for _, q in ipairs(room.players) do
+              if q ~= player and q.alive and not q.female and q.hp < q.max_hp then
+                return true
+              end
+            end
+            return false
+          end,
+        }),
       resetFlag("结姻·重置", { flag = "jieyin_used", zh = "结姻" }),
       -- 枭姬：失去装备区的牌后摸两张
       TriggerSkill.create("枭姬", TriggerEvent.CardsMoveOneTime,
@@ -1548,8 +1577,6 @@ Generals.QUN = {
       -- 青囊：出牌阶段限一次，弃一张手牌令一名角色回复 1 点体力
       TriggerSkill.create("青囊", TriggerEvent.EventPhaseStart,
         function(_s, room, player, data)
-          if not data or data.phase ~= "play" or data.player ~= player then return false end
-          if player.skip_play or player.qingnang_used or #player.hand == 0 then return false end
           -- 优先救最缺血的队友，其次是自己
           -- BOT 策略：只救损失 2 点以上体力的角色，不把牌浪费在「补 1 点」上
           local t = nil
@@ -1564,7 +1591,21 @@ Generals.QUN = {
           room:log("%s 发动【青囊】，%s 回复 1 点体力", player.name, t.name)
           room:heal(t, 1)
           return false
-        end, { zh = "青囊" }),
+        end, {
+          zh = "青囊",
+          can_trigger = function(_s, room, player, data)
+            if not (data and data.phase == "play" and data.player == player) then
+              return false
+            end
+            if player.skip_play or player.qingnang_used or #player.hand == 0 then
+              return false
+            end
+            for _, q in ipairs(room:alivePlayers()) do
+              if q.max_hp - q.hp >= 2 then return true end
+            end
+            return false
+          end,
+        }),
       resetFlag("青囊·重置", { flag = "qingnang_used", zh = "青囊" }),
     },
   },

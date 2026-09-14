@@ -258,12 +258,30 @@ function Skin:sound(key, gender)
     if readFile(self.root .. "/" .. rel) then return rel end
   end
 
-  -- 4) 技能 / 阵亡
+  -- 4) 技能 / 阵亡（键为拼音）
   for _, fmt in ipairs({ "audio/skill/%s.ogg", "audio/death/%s.ogg" }) do
     local rel = string.format(fmt, key)
     if readFile(self.root .. "/" .. rel) then return rel end
   end
   return nil
+end
+
+local SKILL_KEYS = require "src.ui.skill_keys"
+
+-- 技能台词：技能名是中文，原版音频文件是拼音，且同一技能常有 1/2 两个版本。
+-- 子技能（名字带「·」，如「仁德·回血」）沿用主技能的键。
+function Skin:skillSound(skillName)
+  if not (self.root and skillName) then return nil end
+  local base = string.match(skillName, "^(.-)·") or skillName
+  local key = SKILL_KEYS[base]
+  if not key then return nil end
+  local found = {}
+  for _, suffix in ipairs({ "1", "2", "" }) do
+    local rel = string.format("audio/skill/%s%s.ogg", key, suffix)
+    if readFile(self.root .. "/" .. rel) then table.insert(found, rel) end
+  end
+  if #found == 0 then return nil end
+  return pick(found)
 end
 
 -- 是否真的接上了原版资源

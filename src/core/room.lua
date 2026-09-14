@@ -218,8 +218,15 @@ function Room:trigger(event, player, data)
         and not internal and not self:isCompulsorySkill(s)
       if askable and not self:askForSkillInvoke(who, s) then
         -- 玩家选择不发动，跳过该技能
-      elseif s:onTrigger(event, self, who, data) then
-        return true
+      else
+        -- 表现层事件：技能台词 / 横幅。内部子技能（记账用）不出声，
+        -- 免得每回合都在念【仁德】【苦肉】。
+        if not internal then
+          self:emit("skill", { player = who, skill = s.name or s.zh })
+        end
+        if s:onTrigger(event, self, who, data) then
+          return true
+        end
       end
     end
   end
@@ -1749,7 +1756,10 @@ function Room:_kill(p, killer)
   p.alive = false
   p.role_revealed = true -- 阵亡即亮身份
   self:trigger("Death", p, { player = p, killer = killer }) -- 【断肠】需要凶手
-  self:emit("death", { player = p, killer = killer })
+  self:emit("death", {
+    player = p, killer = killer,
+    key = (p.general and p.general.key) or nil, -- 阵亡台词按武将拼音取
+  })
   self:log("%s 阵亡（身份：%s）", p.name, Player.ROLE_ZH[p.role] or "未知")
   for i = #p.hand, 1, -1 do
     table.insert(self.discardPile, table.remove(p.hand, i))
