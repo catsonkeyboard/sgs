@@ -2255,21 +2255,62 @@ do -- 【完杀】：贾诩回合内他人无法救援
   check(#ps[2].hand == 1, "【完杀】下救援者的【桃】不应被消耗")
 end
 
+print("\n--- 标准版牌堆（108 张固定花色点数）---")
+
+do
+  local DeckSpec = require "src.core.deck_spec"
+  local ok, errs = DeckSpec.verify()
+  check(ok, "固定花色点数表自检应通过（" .. table.concat(errs, "；") .. "）")
+  check(#DeckSpec.STANDARD == 108, "标准版牌堆应为 108 张（实得 "
+    .. #DeckSpec.STANDARD .. "）")
+  check(Standard.deckSize("standard") == 108, "deckSize(standard) 应为 108")
+  check(Standard.PRESET == "standard", "默认牌堆预设应为 standard")
+
+  local pile = Standard.buildStandardPile(1)
+  check(#pile == 108, "生成 108 张（实得 " .. #pile .. "）")
+  local bySuit = {}
+  for _, c in ipairs(pile) do bySuit[c.suit] = (bySuit[c.suit] or 0) + 1 end
+  check(bySuit[Card.Suit.Spade] == 27 and bySuit[Card.Suit.Heart] == 27
+    and bySuit[Card.Suit.Club] == 27 and bySuit[Card.Suit.Diamond] == 27,
+    string.format("每种花色应各 27 张（实得 ♠%d ♥%d ♣%d ♦%d）",
+      bySuit[Card.Suit.Spade] or 0, bySuit[Card.Suit.Heart] or 0,
+      bySuit[Card.Suit.Club] or 0, bySuit[Card.Suit.Diamond] or 0))
+
+  -- 文档第 8 节的几个锚点：♥3 是桃、♦2 是闪、♠A 是决斗/闪电、♣2(EX) 是仁王盾
+  local function find(suit, number, name)
+    for _, c in ipairs(pile) do
+      if c.suit == suit and c.number == number
+        and (name == nil or c.name == name) then return c end
+    end
+    return nil
+  end
+  check(find(Card.Suit.Heart, 3, "peach") ~= nil, "♥3 应为【桃】")
+  check(find(Card.Suit.Diamond, 2, "dodge") ~= nil, "♦2 应为【闪】")
+  check(find(Card.Suit.Spade, 1, "duel") ~= nil, "♠A 应有【决斗】")
+  check(find(Card.Suit.Spade, 1, "lightning") ~= nil, "♠A 应有【闪电】")
+  check(find(Card.Suit.Club, 2, "renwang_shield") ~= nil, "♣2 EX 应为【仁王盾】")
+  check(find(Card.Suit.Heart, 12, "lightning") ~= nil, "♥Q EX 应为【闪电】")
+  check(find(Card.Suit.Diamond, 12, "nullification") ~= nil, "♦Q EX 应为【无懈可击】")
+  check(find(Card.Suit.Spade, 2, "ice_sword") ~= nil, "♠2 EX 应为【寒冰剑】")
+end
+
 print("\n--- 卡牌定义完整性 ---")
 
-local missing = {}
-for _, spec in ipairs {
-  "slash", "dodge", "peach", "analeptic", "duel", "snatch", "dismantlement",
-  "ex_nihilo", "savage_assault", "archery_attack", "god_salvation", "amazing_grace",
-  "collateral", "fire_attack", "iron_chain", "nullification",
-  "indulgence", "supply_shortage", "lightning",
-  "crossbow", "kylin_bow", "eight_diagram", "silver_lion", "vine",
-  "offensive_horse", "defensive_horse",
-} do
-  if not Cards.get(spec) then table.insert(missing, spec) end
+do -- 白名单改为遍历牌堆配比，防止名单本身腐坏（历史教训 35）
+  local missing = {}
+  local DeckSpec = require "src.core.deck_spec"
+  local seen = {}
+  for _, row in ipairs(DeckSpec.STANDARD) do
+    local name = row[3]
+    if not seen[name] then
+      seen[name] = true
+      if not Cards.get(name) then table.insert(missing, name) end
+    end
+  end
+  check(#missing == 0, "标准版 108 张用到的牌名都有定义（缺失: "
+    .. table.concat(missing, ",") .. "）")
+  check(Card.ZH["ex_nihilo"] == "无中生有", "中文名映射由 cards.lua 注册")
 end
-check(#missing == 0, "关键卡牌定义齐全（缺失: " .. table.concat(missing, ",") .. "）")
-check(Card.ZH["ex_nihilo"] == "无中生有", "中文名映射由 cards.lua 注册")
 
 print(string.format("\n===== 核心: %d passed, %d failed =====", passes, failures))
 if failures > 0 then error("核心测试失败", 0) end

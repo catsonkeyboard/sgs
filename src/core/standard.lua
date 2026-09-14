@@ -26,7 +26,12 @@ end
 
 -- ===== 牌堆 =====
 
--- 标准牌堆配比：{牌名, 张数}
+-- 牌堆预设：
+--   "standard" 文档标准版 108 张，**花色点数固定**（core/deck_spec.lua），只洗序随机
+--   "extended" 标准版 + 军争篇混堆，花色点数随机（对齐标准版之前的旧行为）
+Standard.PRESET = "standard"
+
+-- 扩展（军争混堆）牌堆配比：{牌名, 张数}
 local DECK_SPEC = {
   -- 基本牌
   { "slash", 24 }, { "fire_slash", 3 }, { "thunder_slash", 3 },
@@ -49,14 +54,39 @@ local DECK_SPEC = {
   { "offensive_horse", 3 }, { "defensive_horse", 3 },
 }
 
-function Standard.deckSize()
+local DeckSpec = require "src.core.deck_spec"
+
+function Standard.deckSize(preset)
+  if (preset or Standard.PRESET) == "standard" then
+    return #DeckSpec.STANDARD
+  end
   local n = 0
   for _, spec in ipairs(DECK_SPEC) do n = n + spec[2] end
   return n
 end
 
--- 洗好的完整标准牌堆（ctype 由 cards.lua 的定义决定）
-function Standard.buildDrawPile(seed)
+-- 标准版 108 张：花色点数固定，仅顺序随机（同 seed 可复现）
+function Standard.buildStandardPile(seed)
+  local rng = makeRng(seed)
+  local cards = {}
+  for i, row in ipairs(DeckSpec.STANDARD) do
+    local suit, number, name = row[1], row[2], row[3]
+    local def = Cards.get(name)
+    assert(def, "未知卡牌定义: " .. name)
+    table.insert(cards, Card.create(i, name, suit, number, def.ctype))
+  end
+  for i = #cards, 2, -1 do
+    local j = rng(i)
+    cards[i], cards[j] = cards[j], cards[i]
+  end
+  return cards
+end
+
+-- 洗好的完整牌堆（ctype 由 cards.lua 的定义决定）
+function Standard.buildDrawPile(seed, preset)
+  if (preset or Standard.PRESET) == "standard" then
+    return Standard.buildStandardPile(seed)
+  end
   local rng = makeRng(seed)
   local cards, id = {}, 0
   local suits = { Card.Suit.Spade, Card.Suit.Heart, Card.Suit.Club, Card.Suit.Diamond }
