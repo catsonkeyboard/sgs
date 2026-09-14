@@ -78,6 +78,27 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 | 阵营胜负 | `Room:_checkIdentityWinner()` | 主公死→内奸独存则内奸胜否则反贼胜；反贼内奸全灭→主公方胜 |
 | 奖惩 | `Room:_rewardAndPunish()` | 击败反贼摸 3 张；主公误杀忠臣弃光 |
 
+### 武将技能库（`core/generals.lua`）
+
+| 势力 | 数量 | 状态 |
+| --- | --- | --- |
+| 蜀 | 15 | ✅ 刘备/关羽/张飞/诸葛亮/赵云/马超/黄月英/黄忠/魏延/庞统/卧龙/刘禅/孟获/祝融/甘夫人 |
+| 魏 | 15 | ✅ 曹操/司马懿/夏侯惇/张辽/许褚/郭嘉/甄姬/夏侯渊/张郃/徐晃/曹仁/典韦/荀彧/曹丕/乐进 |
+| 吴 | 0 | ⬜ 待补（对齐 `standard-wu-generals.cpp`） |
+| 群 | 0 | ⬜ 待补（对齐 `standard-qun-generals.cpp`） |
+
+技能三类写法：
+- **触发技** `TriggerSkill:create(事件, 回调)` —— 回调返回 `true` 截断结算
+- **转化技** `singleViewAs(名, 目标牌名, 过滤)` —— 手牌当别的牌用/打出
+- **标记技** `markerSkill(名, {字段})` —— 只挂标记，由引擎在判定处查询
+
+引擎侧查询的标记：`unlimited_slash` / `distance_mod` / `no_trick_range` /
+`no_target_empty` / `auto_armor` / `savage_immune` / `xiangle` /
+`extra_dist_<牌名>`（逐牌名叠加距离，如【断粮】的 `extra_dist_supply_shortage`）。
+
+阶段跳过、翻面、拼点、收牌等通用原语见 `Room:skipPhase / turnOver / pindian /
+obtain / takeOneCard / loseHp`。
+
 ## 五、开发约定
 
 1. **core/ 禁止 require 任何 love 模块** —— UI 与 AI 只是「响应源」，规则只在 core/。
@@ -95,6 +116,7 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 ./run-tests.sh          # 静态检查 + 单测 + UI 测试
 
 # 压力测试：1v1 / 4 人 / 5 人 / 8 人身份局各 25 局
+# + 随机武将池身份局 + 逐将覆盖（每名武将各 3 局）
 tools/love.app/Contents/MacOS/love . --soak
 
 # 图形界面

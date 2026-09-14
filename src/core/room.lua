@@ -17,6 +17,12 @@ local Room = class("Room")
 
 Room.MAX_TURNS = 300 -- 防死循环保险（测试断言用）
 
+-- 阶段中文名（日志与跳过提示用）
+Room.PHASE_ZH = {
+  start = "开始", judge = "判定", draw = "摸牌",
+  play = "出牌", discard = "弃牌", finish = "结束",
+}
+
 function Room:init(engine, players)
   assert(#players >= 2, "至少两名玩家")
   self.engine = engine
@@ -372,7 +378,16 @@ function Room:_main()
       error("超过最大回合数，疑似死循环", 0)
     end
     local p = self.players[self.current_seat]
-    if p.alive then self:_turn(p) end
+    if p.alive then
+      if p.turned_over then
+        -- 翻面：跳过整个回合并翻回正面（【放逐】【据守】等）
+        p.turned_over = false
+        self:log("%s 处于翻面状态，跳过整个回合", p.name)
+        self:trigger("TurnedOver", p, { player = p })
+      else
+        self:_turn(p)
+      end
+    end
     if not self.game_over then self:_advanceSeat() end
   end
   self:trigger("GameFinished", nil, { winner = self.winner })
@@ -411,6 +426,10 @@ end
 function Room:_phase(p, name)
   if self.game_over or not p.alive then return end
   p.phase = name
+  if p.skipped and p.skipped[name] then
+    self:log("%s 跳过%s阶段", p.name, Room.PHASE_ZH[name] or name)
+    return
+  end
   if self:trigger("EventPhaseStart", p, { player = p, phase = name }) then
     return
   end
@@ -494,7 +513,14 @@ function Room:_judgeCard(p, card)
     return nil
   end
 
-  self:trigger("StartJudge", p, { player = p, card = card, judge = judge_card })
+  self:trigger("StartJudge", p, { player = p, card = card, judge_card = judge_card })
+
+  -- 改判：技能（【鬼才】等）可把判定牌替换为一张手牌，被替换的旧判定牌进弃牌堆
+  local retrial = { player = p, card = card, judge_card = judge_card, reason = card.name }
+  if self:trigger("AskForRetrial", p, retrial) and retrial.judge_card ~= judge_card then
+    table.insert(self.discardPile, judge_card)
+    judge_card = retrial.judge_card
+  end
 
   local def = Cards.get(card.name)
   local result = false
@@ -502,7 +528,9 @@ function Room:_judgeCard(p, card)
     result = def.judge(self, p, judge_card) == true
   end
   table.insert(self.discardPile, judge_card)
-  self:trigger("FinishJudge", p, { player = p, card = card, result = result })
+  self:trigger("FinishJudge", p, {
+    player = p, card = card, judge_card = judge_card, result = result,
+  })
 
   if result then
     -- 延时锦囊生效后同样进入弃牌堆
@@ -547,7 +575,8 @@ function Room:useCard(from, card, target)
     for _, sc in ipairs(card.subcards or {}) do
       if from:takeCard(sc) then got = got + 1 end
     end
-    if got == 0 then
+    -- phantom：技能凭空生成的牌（【神速】等），无实体来源，允许 subcards 为空
+    if got == 0 and not card.phantom then
       self:log("%s 的转化牌来源已不在手牌中，忽略", from.name)
       return false
     end
@@ -650,7 +679,8 @@ function Room:_useBasic(from, card, targets)
       self:_refund(from, card)
       return false
     end
-    if self:distance(from, target) > from:attackRange() then
+    -- 【神速】等技能生成的【杀】无视距离
+    if not card.no_distance_limit and self:distance(from, target) > from:attackRange() then
       self:log("目标不在攻击范围内（距离 %d > 范围 %d），退还",
         self:distance(from, target), from:attackRange())
       self:_refund(from, card)
@@ -705,9 +735,11 @@ function Room:_validateUse(from, card, targets)
   local ignore_range = Generals.marker(from, "no_trick_range", false)
   if def.distance and not (ignore_range and def.ctype == Card.Type.Trick) then
     local t = targets[1]
-    if t and self:distance(from, t) > def.distance then
+    -- 逐牌名叠加距离加成：【断粮】使用【兵粮寸断】时距离 +1
+    local limit = def.distance + Generals.marker(from, "extra_dist_" .. card.name, 0)
+    if t and self:distance(from, t) > limit then
       self:log("目标超出【%s】的距离限制（%d > %d），退还",
-        card:zhName(), self:distance(from, t), def.distance)
+        card:zhName(), self:distance(from, t), limit)
       return false
     end
   end
@@ -789,8 +821,7 @@ function Room:_resolveSlash(from, to, card)
   -- 【铁骑】/【烈弓】：此【杀】不可被【闪】响应
   if card.cannot_dodge then
     self:log("此【杀】不可被【闪】响应")
-    self:trigger("SlashHit", to, { from = from, to = to, card = card })
-    self:_slashDamage(from, to, card, nature)
+    self:_slashHit(from, to, card, nature, ignore_armor)
     return
   end
 
@@ -934,6 +965,80 @@ function Room:heal(p, n)
     p.hp = math.min(p.hp + n, p.max_hp)
     self:log("%s 回复 %d 点体力（现 %d）", p.name, n, p.hp)
   end
+end
+
+-- 失去体力（【强袭】等）：不走伤害管线，直接扣血并进入濒死结算
+function Room:loseHp(p, n)
+  n = n or 1
+  p.hp = p.hp - n
+  self:log("%s 失去 %d 点体力（剩 %d）", p.name, n, math.max(p.hp, 0))
+  if p.hp <= 0 then
+    p.hp = 0
+    self:_dying(p, nil)
+  end
+end
+
+-- ===== 技能常用原语 =====
+
+-- 跳过 p 本回合的某个阶段（【巧变】【神速】等）
+function Room:skipPhase(p, name)
+  p.skipped = p.skipped or {}
+  p.skipped[name] = true
+end
+
+-- 翻面（【据守】【放逐】）：翻面角色跳过下一个回合
+function Room:turnOver(p)
+  p.turned_over = not p.turned_over
+  self:log("%s %s", p.name, p.turned_over and "被翻面（将跳过下一回合）" or "翻回正面")
+end
+
+-- 把一张牌收入某角色手牌：先从原区域摘除，再进手牌
+-- card 通常来自弃牌堆或他人手牌（【奸雄】【行殇】【反馈】）
+function Room:obtain(p, card)
+  if not card then return false end
+  for i, c in ipairs(self.discardPile) do
+    if c == card then table.remove(self.discardPile, i) break end
+  end
+  for _, q in ipairs(self.players) do
+    if q ~= p and q:takeCard(card) then break end
+  end
+  if p:hasEquip(card.name) == card then p:unequipCard(card) end
+  table.insert(p.hand, card)
+  return true
+end
+
+-- 拼点：双方各出一张手牌比点数，点数大者胜（平局算发起方负）；两张牌均弃置
+function Room:pindian(a, b)
+  if #a.hand == 0 or #b.hand == 0 then return false end
+  local ca, cb = a.hand[1], b.hand[1]
+  a:takeCard(ca)
+  b:takeCard(cb)
+  table.insert(self.discardPile, ca)
+  table.insert(self.discardPile, cb)
+  self:log("拼点：%s %s%d vs %s %s%d", a.name, ca:suitString(), ca.number,
+    b.name, cb:suitString(), cb.number)
+  return ca.number > cb.number
+end
+
+-- 从 victim 的手牌/装备中抽走一张给 from（【反馈】等）
+function Room:takeOneCard(from, victim)
+  if #victim.hand > 0 then
+    local c = victim.hand[1]
+    victim:takeCard(c)
+    table.insert(from.hand, c)
+    self:log("%s 获得 %s 的一张手牌", from.name, victim.name)
+    return c
+  end
+  for _, slot in ipairs(Player.EQUIP_SLOTS) do
+    local e = victim.equips[slot]
+    if e then
+      victim.equips[slot] = nil
+      table.insert(from.hand, e)
+      self:log("%s 获得 %s 的【%s】", from.name, victim.name, e:zhName())
+      return e
+    end
+  end
+  return nil
 end
 
 function Room:_dying(p, killer)

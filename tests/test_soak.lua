@@ -70,6 +70,39 @@ local function makeIdentity(seed, n)
   return r
 end
 
+-- 全武将池随机局：武将技能真正的回归网。
+-- 上面几组用的是固定武将，新加的武将不会被跑到，容易出现「技能写完但从没执行过」。
+-- 指定武将坐 1 号位的身份局：保证每名武将都被真正跑过
+local function makeGeneralGame(name, seed)
+  local engine = Engine.create()
+  Standard.setup(engine)
+  local rng = Standard.makeRng(seed + 7)
+  local ps = { Player.create("P1", engine:getGeneral(name), 1, false) }
+  for i = 2, 4 do
+    table.insert(ps, Player.create("P" .. i, Standard.randomGeneral(engine, rng), i, false))
+  end
+  local r = Room.create(engine, ps)
+  r.drawPile = Standard.buildDrawPile(seed)
+  r.rng = Standard.makeRng(seed)
+  r:setupRoles(Standard.makeRng(seed + 1))
+  return r
+end
+
+local function makeRandomIdentity(seed, n)
+  local engine = Engine.create()
+  Standard.setup(engine)
+  local rng = Standard.makeRng(seed + 7)
+  local ps = {}
+  for i = 1, n do
+    table.insert(ps, Player.create("P" .. i, Standard.randomGeneral(engine, rng), i, false))
+  end
+  local r = Room.create(engine, ps)
+  r.drawPile = Standard.buildDrawPile(seed)
+  r.rng = Standard.makeRng(seed)
+  r:setupRoles(Standard.makeRng(seed + 1))
+  return r
+end
+
 print(string.format("== 压力测试：每种模式 %d 个种子 ==", N))
 
 local function soak(label, builder)
@@ -88,6 +121,22 @@ soak("1v1 标准局", makeDuel)
 soak("4 人身份局", function(seed) return makeIdentity(seed, 4) end)
 soak("5 人身份局", function(seed) return makeIdentity(seed, 5) end)
 soak("8 人身份局", function(seed) return makeIdentity(seed, 8) end)
+soak("4 人随机武将身份局", function(seed) return makeRandomIdentity(seed, 4) end)
+soak("8 人随机武将身份局", function(seed) return makeRandomIdentity(seed, 8) end)
+
+print("\n-- 逐将覆盖：每名武将各跑 3 局 --")
+
+local Generals = require "src.core.generals"
+local roster = Generals.all()
+local bad = {}
+for _, g in ipairs(roster) do
+  for seed = 1, 3 do
+    local ok, err = runGame(function() return makeGeneralGame(g.name, seed) end)
+    if not ok then table.insert(bad, g.name .. "#" .. seed .. ":" .. tostring(err)) end
+  end
+end
+check(#bad == 0, string.format("%d 名武将各 3 局全部通过", #roster)
+  .. (#bad == 0 and "" or "（失败: " .. table.concat(bad, " | ") .. "）"))
 
 print(string.format("\n===== 压力测试: %d passed, %d failed =====", passes, failures))
 if failures > 0 then error("压力测试失败", 0) end

@@ -351,6 +351,13 @@ local function makeRoomWith(generalKeys, seed)
   return r, ps
 end
 
+local function hasCard(list, card)
+  for _, c in ipairs(list) do
+    if c == card then return true end
+  end
+  return false
+end
+
 local function give(p, name, suit, number, ctype)
   local c = Card.create(1000 + #p.hand, name, suit or Card.Suit.Spade, number or 5,
     ctype or Card.Type.Basic)
@@ -455,6 +462,203 @@ do -- 卧龙·看破：黑色牌当【无懈可击】
   local red = give(ps[1], "peach", Card.Suit.Heart, 6)
   check(r:viewAsCard(ps[1], "nullification", red) == nil,
     "红色牌不应能当【无懈可击】")
+end
+
+print("\n--- 魏国武将技能 ---")
+
+-- 会触发询问（askForXxx → coroutine.yield）的技能必须在协程里跑，
+-- 否则在主线程里 yield 会直接报错。这里统一用 nil 应答（表示「不响应」）。
+local function runInRoom(fn)
+  local co = coroutine.create(function()
+    local ok, err = pcall(fn)
+    return ok, err
+  end)
+  local ok, r1, r2 = coroutine.resume(co)
+  local guard = 0
+  while coroutine.status(co) ~= "dead" and guard < 60 do
+    guard = guard + 1
+    ok, r1, r2 = coroutine.resume(co, nil)
+  end
+  if not ok then error(r1, 0) end
+  if r1 == false then error(r2, 0) end
+  return true
+end
+
+do -- 曹操·奸雄：受到伤害后获得造成伤害的牌
+  local r, ps = makeRoomWith({ "曹操", "白板武将" }, 11)
+  local slash = Card.create(1, "slash", Card.Suit.Spade, 5, Card.Type.Basic)
+  table.insert(r.discardPile, slash)
+  r:trigger("Damaged", ps[1], { from = ps[2], to = ps[1], n = 1, card = slash })
+  check(ps[1].hand[#ps[1].hand] == slash, "【奸雄】应获得造成伤害的那张牌")
+  check(not hasCard(r.discardPile, slash), "【奸雄】获得后该牌应离开弃牌堆")
+end
+
+do -- 司马懿·反馈：受到伤害后获得来源一张牌
+  local r, ps = makeRoomWith({ "司马懿", "白板武将" }, 12)
+  give(ps[2], "slash", Card.Suit.Spade, 5)
+  local n1, n2 = #ps[1].hand, #ps[2].hand
+  r:trigger("Damaged", ps[1], { from = ps[2], to = ps[1], n = 1 })
+  check(#ps[1].hand == n1 + 1 and #ps[2].hand == n2 - 1,
+    "【反馈】应从伤害来源处获得一张牌")
+end
+
+do -- 司马懿·鬼才：判定生效前用手牌替换判定牌
+  local r, ps = makeRoomWith({ "司马懿", "白板武将" }, 13)
+  local indulgence = Card.create(1, "indulgence", Card.Suit.Spade, 6, Card.Type.Trick)
+  local spade = Card.create(2, "slash", Card.Suit.Spade, 9, Card.Type.Basic)
+  give(ps[1], "peach", Card.Suit.Heart, 3) -- 红桃可让【乐不思蜀】失效
+  local data = { player = ps[1], card = indulgence, judge_card = spade, reason = "indulgence" }
+  r:trigger("AskForRetrial", ps[1], data)
+  check(data.judge_card.suit == Card.Suit.Heart,
+    "【鬼才】应用红桃手牌替换掉会命中的判定牌")
+end
+
+do -- 夏侯惇·刚烈：判定非红桃，来源弃两张或受 1 点伤害
+  local r, ps = makeRoomWith({ "夏侯惇", "白板武将" }, 14)
+  table.insert(r.drawPile, Card.create(1, "slash", Card.Suit.Spade, 5, Card.Type.Basic))
+  local hp = ps[2].hp
+  r:trigger("Damaged", ps[1], { from = ps[2], to = ps[1], n = 1 })
+  check(ps[2].hp == hp - 1, "【刚烈】判定非红桃且无法弃两张时应造成伤害")
+end
+
+do -- 张辽·突袭：放弃摸牌改为夺取至多两名角色各一张手牌
+  local r, ps = makeRoomWith({ "张辽", "白板武将", "白板武将" }, 15)
+  give(ps[2], "slash", Card.Suit.Spade, 5)
+  give(ps[3], "slash", Card.Suit.Spade, 6)
+  local n1 = #ps[1].hand
+  local skipped = r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "draw" })
+  check(skipped, "【突袭】应截断正常摸牌阶段")
+  check(#ps[1].hand == n1 + 2, "【突袭】应夺得两名角色各一张手牌")
+end
+
+do -- 许褚·裸衣：少摸一张，【杀】伤害 +1
+  local r, ps = makeRoomWith({ "许褚", "白板武将" }, 16)
+  local data = { player = ps[1], n = 2 }
+  r:trigger("DrawNCards", ps[1], data)
+  check(data.n == 1, "【裸衣】摸牌阶段应少摸一张")
+  local dmg = { from = ps[1], to = ps[2], n = 1,
+    card = Card.create(1, "slash", Card.Suit.Spade, 5, Card.Type.Basic) }
+  r:trigger("DamageCaused", ps[1], dmg)
+  check(dmg.n == 2, "【裸衣】应使【杀】的伤害 +1")
+end
+
+do -- 郭嘉·天妒 / 遗计
+  local r, ps = makeRoomWith({ "郭嘉", "白板武将" }, 17)
+  local jcard = Card.create(1, "slash", Card.Suit.Spade, 5, Card.Type.Basic)
+  table.insert(r.discardPile, jcard)
+  r:trigger("FinishJudge", ps[1], { player = ps[1], judge_card = jcard, result = false })
+  check(ps[1].hand[#ps[1].hand] == jcard, "【天妒】应获得判定牌")
+  local n = #ps[1].hand
+  r:trigger("Damaged", ps[1], { from = ps[2], to = ps[1], n = 1 })
+  check(#ps[1].hand == n + 2, "【遗计】受到伤害后应摸两张牌")
+end
+
+do -- 甄姬·倾国：黑色手牌当【闪】
+  local r, ps = makeRoomWith({ "甄姬", "白板武将" }, 18)
+  local black = give(ps[1], "slash", Card.Suit.Club, 5)
+  local red = give(ps[1], "peach", Card.Suit.Heart, 5)
+  check((r:viewAsCard(ps[1], "dodge", black) or {}).name == "dodge", "【倾国】黑色牌应能当【闪】")
+  check(r:viewAsCard(ps[1], "dodge", red) == nil, "【倾国】红色牌不应能当【闪】")
+end
+
+do -- 甄姬·洛神：回合开始反复判定，黑色收入手中
+  local r, ps = makeRoomWith({ "甄姬", "白板武将" }, 19)
+  -- 判定从牌堆顶（数组末尾）摸，故按「先摸到的放后面」排列：黑黑白黑 → 收 3 张
+  r.drawPile = {
+    Card.create(4, "slash", Card.Suit.Heart, 8, Card.Type.Basic), -- 最后摸到，红色终止
+    Card.create(3, "slash", Card.Suit.Spade, 7, Card.Type.Basic),
+    Card.create(2, "slash", Card.Suit.Club, 6, Card.Type.Basic),
+    Card.create(1, "slash", Card.Suit.Spade, 5, Card.Type.Basic),
+  }
+  local n = #ps[1].hand
+  r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "start" })
+  check(#ps[1].hand == n + 3, "【洛神】应连续收入 3 张黑色判定牌（实得 "
+    .. (#ps[1].hand - n) .. "）")
+end
+
+do -- 夏侯渊·神速：跳过判定+摸牌阶段，打出无距离限制的【杀】
+  local r, ps = makeRoomWith({ "夏侯渊", "白板武将" }, 20)
+  ps[2].hp = 1 -- 残血，满足「值得放弃摸牌」的 AI 条件
+  local skipped = false
+  runInRoom(function()
+    skipped = r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "judge" })
+  end)
+  check(skipped, "【神速】应截断判定阶段")
+  check(ps[1].skipped and ps[1].skipped.draw, "【神速】应同时跳过摸牌阶段")
+end
+
+do -- 张郃·巧变：弃一张牌跳过摸牌阶段并夺取手牌
+  local r, ps = makeRoomWith({ "张郃", "白板武将" }, 21)
+  give(ps[1], "slash", Card.Suit.Spade, 5)
+  give(ps[1], "slash", Card.Suit.Spade, 6)
+  give(ps[2], "peach", Card.Suit.Heart, 3)
+  local n2 = #ps[2].hand
+  local skipped = r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "draw" })
+  check(skipped, "【巧变】应截断摸牌阶段")
+  check(#ps[2].hand == n2 - 1, "【巧变】跳过摸牌阶段时应夺取一张手牌")
+end
+
+do -- 徐晃·断粮：黑色基本牌当【兵粮寸断】且距离 +1
+  local r, ps = makeRoomWith({ "徐晃", "白板武将", "白板武将", "白板武将" }, 22)
+  local black = give(ps[1], "slash", Card.Suit.Club, 5, Card.Type.Basic)
+  check((r:viewAsCard(ps[1], "supply_shortage", black) or {}).name == "supply_shortage",
+    "【断粮】黑色基本牌应能当【兵粮寸断】")
+  local red = give(ps[1], "peach", Card.Suit.Heart, 5, Card.Type.Basic)
+  check(r:viewAsCard(ps[1], "supply_shortage", red) == nil, "【断粮】红色牌不应能转化")
+  local shortage = Card.create(2, "supply_shortage", Card.Suit.Spade, 6, Card.Type.Trick)
+  check(r:distance(ps[1], ps[3]) == 2, "徐晃到对家距离为 2")
+  check(r:_validateUse(ps[1], shortage, { ps[3] }), "【断粮】距离 +1 后应能指定距离为 2 的目标")
+  local r2, p2 = makeRoomWith({ "白板武将", "白板武将", "白板武将", "白板武将" }, 22)
+  check(not r2:_validateUse(p2[1], shortage, { p2[3] }), "白板武将的【兵粮寸断】应受距离 1 限制")
+end
+
+do -- 曹仁·据守：结束阶段摸三张并翻面
+  local r, ps = makeRoomWith({ "曹仁", "白板武将" }, 23)
+  local n = #ps[1].hand
+  r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "finish" })
+  check(#ps[1].hand == n + 3, "【据守】应摸三张牌")
+  check(ps[1].turned_over, "【据守】应使曹仁翻面")
+end
+
+do -- 典韦·强袭：弃武器或失去体力，对范围内角色造成 1 点伤害
+  local r, ps = makeRoomWith({ "典韦", "白板武将" }, 24)
+  local hp = ps[2].hp
+  runInRoom(function()
+    r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  end)
+  check(ps[2].hp == hp - 1, "【强袭】应对范围内角色造成 1 点伤害")
+  check(ps[1].hp == ps[1].max_hp - 1, "无武器时【强袭】应自失 1 点体力")
+end
+
+do -- 荀彧·节命：受伤后将手牌补至 min(5, 体力上限)
+  local r, ps = makeRoomWith({ "荀彧", "白板武将" }, 25)
+  local n = #ps[1].hand
+  r:trigger("Damaged", ps[1], { from = ps[2], to = ps[1], n = 1 })
+  check(#ps[1].hand == math.min(5, ps[1].max_hp),
+    "【节命】应将手牌补至 " .. math.min(5, ps[1].max_hp) .. " 张（" .. n .. " → " .. #ps[1].hand .. "）")
+end
+
+do -- 曹丕·行殇：其他角色阵亡时获得其所有牌
+  local r, ps = makeRoomWith({ "曹丕", "白板武将" }, 26)
+  give(ps[2], "slash", Card.Suit.Spade, 5)
+  give(ps[2], "peach", Card.Suit.Heart, 3)
+  local n = #ps[1].hand
+  r:trigger("Death", ps[1], { player = ps[2] })
+  check(#ps[1].hand == n + 2, "【行殇】应获得阵亡角色的 2 张牌（实得 "
+    .. (#ps[1].hand - n) .. "）")
+  check(#ps[2].hand == 0, "【行殇】应取走阵亡角色的手牌")
+end
+
+do -- 乐进·骁果：其他角色结束阶段，逼其弃装备或受伤
+  local r, ps = makeRoomWith({ "乐进", "白板武将" }, 27)
+  give(ps[1], "slash", Card.Suit.Spade, 5, Card.Type.Basic)
+  give(ps[1], "dodge", Card.Suit.Spade, 6, Card.Type.Basic)
+  ps[2].hp = 2 -- 残血，满足发动条件
+  local hp = ps[2].hp
+  runInRoom(function()
+    r:trigger("EventPhaseStart", ps[1], { player = ps[2], phase = "finish" })
+  end)
+  check(ps[2].hp == hp - 1, "【骁果】对方无装备时应造成 1 点伤害")
 end
 
 print("\n--- 卡牌定义完整性 ---")
