@@ -2611,5 +2611,70 @@ do
   end
 end
 
+print("\n--- 阶段技能的征询次数（防止每阶段都弹窗）---")
+
+do
+  -- 回归：离间/闭月这类「守卫写在效果里」的技能，之前每个玩家的每个阶段
+  -- 都会弹一次「是否发动」——实测每轮被问 6 次。
+  -- 现在守卫提前到 can_trigger，每轮至多被问 1 次。
+  local eng = Engine.create()
+  Standard.setup(eng)
+  local ps = {}
+  for i, n in ipairs { "貂蝉", "典韦", "曹操", "刘备", "孙权" } do
+    table.insert(ps, Player.create("P" .. i, eng:getGeneral(n), i, i == 1))
+  end
+  local r = Room.create(eng, ps)
+  r.drawPile = Standard.buildDrawPile(3)
+  r.rng = Standard.makeRng(3)
+  r:setupRoles(Standard.makeRng(4))
+  r:start()
+  local Driver = require "src.core.driver"
+  local Bot = require "src.core.bot"
+  local d = Driver.create(r, Bot.make())
+  local asks = {}
+  local guard = 0
+  while not r.game_over and guard < 2000 do
+    guard = guard + 1
+    local st, req = d:advance()
+    if st == "human" and req then
+      if req.type == "askForSkillInvoke" then
+        local sk = req.skill or "?"
+        asks[sk] = (asks[sk] or 0) + 1
+        r:step(true)
+      else
+        r:step(Bot.make()(req, r))
+      end
+    end
+  end
+  -- 32 轮内，每个技能被问次数不应明显超过貂蝉存活轮数（上限取 20 留余量）
+  for sk, n in pairs(asks) do
+    check(n <= 20, string.format("【%s】每轮至多被问一次（实得 %d 次/%d 轮）",
+      sk, n, r.turn_count))
+  end
+  check((asks["闭月"] or 0) > 0, "闭月应被征询过（防止改死）")
+end
+
+print("\n--- 无懈可击的询问 ---")
+
+do
+  local r, ps = makeRoomWith({ "曹操", "刘备", "孙权" }, 31)
+  -- 三人手里都没有无懈可击
+  ps[1].hand, ps[2].hand, ps[3].hand = {}, {}, {}
+  check(not r:canNullify(ps[1]), "空手牌不应判为可抵消")
+  give(ps[2], "nullification", Card.Suit.Spade, 12, Card.Type.Trick)
+  check(r:canNullify(ps[2]), "手里有无懈可击应判为可抵消")
+  -- 看破（卧龙）：黑色手牌可当无懈可击
+  local r2, qs = makeRoomWith({ "诸葛亮", "曹操", "刘备" }, 32)
+  qs[1].hand = {}
+  local wo = Engine.create()
+  Standard.setup(wo)
+  wo = wo:getGeneral("卧龙")
+  if wo then
+    qs[1].general = wo
+    give(qs[1], "slash", Card.Suit.Spade, 7, Card.Type.Basic) -- 黑色牌
+    check(r2:canNullify(qs[1]), "看破且有黑色牌应判为可抵消")
+  end
+end
+
 print(string.format("\n===== 核心: %d passed, %d failed =====", passes, failures))
 if failures > 0 then error("核心测试失败", 0) end

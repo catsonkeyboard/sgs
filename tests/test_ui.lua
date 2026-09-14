@@ -457,6 +457,39 @@ do
   check(#sc.players == 5, "按不存在的座位号不应有影响")
 end
 
+print("\n--- 退出对局 ---")
+do
+  local sc = RoomScene.create(function() end)
+  local hasExit = false
+  sc:_refreshButtons()
+  for _, b in ipairs(sc.buttons) do
+    if b.text == "退出对局" then hasExit = true end
+  end
+  check(hasExit, "应常驻「退出对局」按钮")
+
+  -- 二次确认：第一次只进确认态，不退出
+  local exited = false
+  sc.on_exit = function() exited = true end
+  sc:keypressed("escape")
+  check(sc.confirmExit == true, "按 Esc 应进入确认态")
+  check(not exited, "确认前不应真的退出")
+  -- 再按一次 Esc 是取消（设计上 Esc 第二次=取消，确认走按钮）
+  sc:keypressed("escape")
+  check(sc.confirmExit == false, "确认态再按 Esc 应取消")
+  -- 按钮确认退出
+  sc:keypressed("escape")
+  for _, b in ipairs(sc.buttons) do
+    if b.text == "确认退出？" then b.cb() end
+  end
+  check(exited, "点【确认退出？】应真的退出")
+
+  -- 数字键托管切换不能被 Esc 改动覆盖掉（整个文件只有一个 keypressed）
+  local sc2 = RoomScene.create(function() end)
+  sc2:keypressed("1")
+  check(sc2.players[1]:controlMode() == "ai",
+    "数字键切换 AI 托管仍应可用（实得 " .. sc2.players[1]:controlMode() .. "）")
+end
+
 print(string.format("\n===== UI: %d passed, %d failed =====", passes, failures))
 if failures > 0 then error("UI 测试失败", 0) end
 

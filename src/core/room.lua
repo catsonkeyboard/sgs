@@ -348,18 +348,48 @@ function Room:askForDiscardFrom(source, target, n)
   end
 end
 
+-- 该角色现在有没有可能打出【无懈可击】
+-- （手里有真牌，或有【看破】这类「黑色牌当无懈可击」的转化技且有符合条件的牌）
+function Room:canNullify(p)
+  for _, c in ipairs(p.hand) do
+    if c.name == "nullification" then return true end
+  end
+  for _, s in ipairs((p.general and p.general.skills) or {}) do
+    if s.result_name == "nullification" and s.filter then
+      for _, c in ipairs(p.hand) do
+        if s:filter(c) then return true end
+      end
+    end
+  end
+  return false
+end
+
 -- 询问所有角色是否使用【无懈可击】抵消当前锦囊
 function Room:askForNullification(use)
-  -- 按座位顺序轮询是否有人使用【无懈可击】
+  -- 按座位顺序轮询是否有人使用【无懈可击】。
+  -- 只问**手里真有可能出无懈可击**的人：
+  -- 之前见谁都问，手里一张都没有也要弹一次「请打出【无懈可击】或点【不出】」，
+  -- 每张锦囊都白点一下（用户实测反馈）。
   for _, p in ipairs(self:alivePlayers()) do
-    local null = self:askForCard(p, "nullification",
-      string.format("是否【无懈可击】抵消 %s 对 %s 的【%s】？",
-        use.from.name, (use.to[1] and use.to[1].name) or "-", use.card:zhName()),
-      { ask_target = use.to[1], ask_from = use.from })
-    if null and p:takeCard(null) then
-      self:log("%s 使用【无懈可击】抵消了效果", p.name)
-      table.insert(self.discardPile, null)
-      return true
+    if self:canNullify(p) then
+      -- 文案：目标与使用者是同一人时（如对自己用【无中生有】），
+      -- 不要说成「X 对 X」——那看起来就像 bug（用户实测反馈）
+      local target = use.to[1]
+      local prompt
+      if target == use.from then
+        prompt = string.format("是否【无懈可击】抵消 %s 的【%s】？",
+          use.from.name, use.card:zhName())
+      else
+        prompt = string.format("是否【无懈可击】抵消 %s 对 %s 的【%s】？",
+          use.from.name, (target and target.name) or "-", use.card:zhName())
+      end
+      local null = self:askForCard(p, "nullification", prompt,
+        { ask_target = target, ask_from = use.from })
+      if null and p:takeCard(null) then
+        self:log("%s 使用【无懈可击】抵消了效果", p.name)
+        table.insert(self.discardPile, null)
+        return true
+      end
     end
   end
   return false

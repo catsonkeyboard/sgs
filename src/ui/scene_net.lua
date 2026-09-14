@@ -113,6 +113,21 @@ function NetScene:_refreshButtons()
   for i, b in ipairs(btns) do
     b.x, b.y, b.w, b.h = x + (i - 1) * 130, y, 120, h
   end
+  -- 「退出对局」常驻（二次确认）：联机下退出要顺带断开连接，
+  -- 否则服务端会把座位挂到 60 秒宽限结束
+  table.insert(btns, {
+    text = self.confirmExit and "确认退出？" or "退出对局",
+    x = 20, y = 610, w = 110, h = 40,
+    cb = function()
+      if self.confirmExit then
+        self.confirmExit = false
+        self:_exitGame()
+      else
+        self.confirmExit = true
+        self.msg = "再点一次【确认退出？】（或按 Esc 取消）"
+      end
+    end,
+  })
   self.buttons = btns
 end
 
@@ -158,8 +173,37 @@ function NetScene:panelAt(x, y)
   return nil
 end
 
+-- 退出：断开连接并回菜单
+function NetScene:_exitGame()
+  if self.client and self.client.channel then
+    pcall(function() self.client.channel:close() end)
+  end
+  if self.on_exit then self.on_exit() end
+end
+
+function NetScene:keypressed(key)
+  if key ~= "escape" then return end
+  if self.confirmExit then
+    self.confirmExit = false
+    self.msg = "已取消退出"
+  else
+    self.confirmExit = true
+    self.msg = "再按一次 Esc 退出对局（或点【确认退出？】）"
+  end
+end
+
 function NetScene:mousepressed(x, y, button)
   if button ~= 1 then return end
+  if self.confirmExit then
+    local hitConfirm = false
+    for _, b in ipairs(self.buttons) do
+      if x >= b.x and x <= b.x + b.w and y >= b.y and y <= b.y + b.h
+        and b.text == "确认退出？" then
+        hitConfirm = true
+      end
+    end
+    if not hitConfirm then self.confirmExit = false end
+  end
   for _, b in ipairs(self.buttons) do
     if x >= b.x and x <= b.x + b.w and y >= b.y and y <= b.y + b.h then
       b.cb()

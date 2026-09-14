@@ -20,6 +20,24 @@ local ViewAsSkill = sk.ViewAsSkill
 local TriggerEvent = sk.TriggerEvent
 local Freq = sk.Frequency
 
+-- 阶段触发技能：把「阶段（+本人）」判定提到 can_trigger（征询玩家**之前**）。
+-- 否则条件写在 on_trigger 里的话，每个玩家的每个阶段开始都会弹一次
+-- 「是否发动【X】」——实测闭月/离间**每轮被问 6 次**。
+-- 该技能的触发阶段从原守卫里提取（data.phase ~= "X"），函数体原样保留。
+local function phaseTrigger(name, phase, fn, opts, scope, event)
+  -- scope: "self"（默认，仅本人该阶段）/ "other"（仅其他角色，如【骁果】【固政】）/ "any"
+  -- event: 默认 EventPhaseStart；【固政】【礼让】是 EventPhaseEnd
+  local s = TriggerSkill.create(name, event or TriggerEvent.EventPhaseStart, fn, opts)
+  scope = scope or "self"
+  s.can_trigger = function(_s, _room, player, data)
+    if not data or data.phase ~= phase then return false end
+    if scope == "self" and data.player ~= player then return false end
+    if scope == "other" and data.player == player then return false end
+    return true
+  end
+  return s
+end
+
 local Generals = {}
 
 -- 构造单牌转化技：一张符合 filter 的手牌 → result_name
@@ -213,7 +231,7 @@ Generals.SHU = {
     skills = {
       -- 观星：准备阶段观看牌堆顶 X 张（X = 存活角色数且至多为 5），
       -- 任意分配回牌堆顶与牌堆底。无交互时保持原序（BOT / headless）。
-      TriggerSkill.create("观星", TriggerEvent.EventPhaseStart,
+      phaseTrigger("观星", "start",
         function(_s, room, player, data)
           if not data or data.phase ~= "start" or data.player ~= player then
             return false
@@ -560,7 +578,7 @@ Generals.WEI = {
     name = "张辽", key = "zhangliao", max_hp = 4, kingdom = "wei",
     skills = {
       -- 突袭：摸牌阶段可放弃摸牌，改为获得至多两名其他角色各一张手牌
-      TriggerSkill.create("突袭", TriggerEvent.EventPhaseStart,
+      phaseTrigger("突袭", "draw",
         function(_s, room, player, data)
           if not data or data.phase ~= "draw" or data.player ~= player then return false end
           if player.skip_draw then return false end
@@ -631,7 +649,7 @@ Generals.WEI = {
     skills = {
       singleViewAs("倾国", "dodge", isBlack),
       -- 洛神：回合开始时可反复判定，黑色判定牌收入手中
-      TriggerSkill.create("洛神", TriggerEvent.EventPhaseStart,
+      phaseTrigger("洛神", "start",
         function(_s, room, player, data)
           if not data or data.phase ~= "start" or data.player ~= player then return false end
           local got = 0
@@ -660,7 +678,7 @@ Generals.WEI = {
     name = "夏侯渊", key = "xiahouyuan", max_hp = 4, kingdom = "wei",
     skills = {
       -- 神速①：跳过判定与摸牌阶段，视为使用一张无距离限制的【杀】
-      TriggerSkill.create("神速·壹", TriggerEvent.EventPhaseStart,
+      phaseTrigger("神速·壹", "judge",
         function(_s, room, player, data)
           if not data or data.phase ~= "judge" or data.player ~= player then return false end
           local target = firstInRange(player, room, math.huge)
@@ -674,7 +692,7 @@ Generals.WEI = {
           return true -- 截断：跳过判定阶段
         end, { zh = "神速" }),
       -- 神速②：弃置一张装备牌跳过出牌阶段，视为使用一张无距离限制的【杀】
-      TriggerSkill.create("神速·贰", TriggerEvent.EventPhaseStart,
+      phaseTrigger("神速·贰", "play",
         function(_s, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.shensu_used then return false end
@@ -758,7 +776,7 @@ Generals.WEI = {
     name = "曹仁", key = "caoren", max_hp = 4, kingdom = "wei",
     skills = {
       -- 据守：回合结束阶段可摸三张牌并翻面
-      TriggerSkill.create("据守", TriggerEvent.EventPhaseStart,
+      phaseTrigger("据守", "finish",
         function(_s, room, player, data)
           if not data or data.phase ~= "finish" or data.player ~= player then return false end
           room:log("%s 发动【据守】，摸三张牌并翻面", player.name)
@@ -772,7 +790,7 @@ Generals.WEI = {
     name = "典韦", key = "dianwei", max_hp = 4, kingdom = "wei",
     skills = {
       -- 强袭：出牌阶段，失去 1 点体力或弃置武器，对攻击范围内一名角色造成 1 点伤害
-      TriggerSkill.create("强袭", TriggerEvent.EventPhaseStart,
+      phaseTrigger("强袭", "play",
         function(_s, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play then return false end
@@ -799,7 +817,7 @@ Generals.WEI = {
     name = "荀彧", key = "xunyu", max_hp = 3, kingdom = "wei",
     skills = {
       -- 驱虎：出牌阶段与一名体力更多的角色拼点，赢则令其对范围内角色造成 1 点伤害
-      TriggerSkill.create("驱虎", TriggerEvent.EventPhaseStart,
+      phaseTrigger("驱虎", "play",
         function(_s, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or #player.hand == 0 then return false end
@@ -887,7 +905,7 @@ Generals.WEI = {
     name = "乐进", key = "yuejin", max_hp = 4, kingdom = "wei",
     skills = {
       -- 骁果：其他角色结束阶段，可弃一张基本牌令其弃一张装备牌，否则受 1 点伤害
-      TriggerSkill.create("骁果", TriggerEvent.EventPhaseStart,
+      phaseTrigger("骁果", "finish",
         function(_s, room, player, data)
           if not data or data.phase ~= "finish" then return false end
           local turner = data.player
@@ -921,7 +939,7 @@ Generals.WEI = {
             room:damage(player, turner, 1)
           end
           return false
-        end, { zh = "骁果" }),
+        end, { zh = "骁果" }, "other"),
     },
   },
 }
@@ -1039,7 +1057,7 @@ Generals.WU = {
     name = "吕蒙", key = "lvmeng", max_hp = 4, kingdom = "wu",
     skills = {
       -- 克己：出牌阶段未使用过【杀】则跳过弃牌阶段
-      TriggerSkill.create("克己", TriggerEvent.EventPhaseStart,
+      phaseTrigger("克己", "discard",
         function(_s, room, player, data)
           if not data or data.phase ~= "discard" or data.player ~= player then return false end
           if player.keji_slash then return false end
@@ -1096,7 +1114,7 @@ Generals.WU = {
           return false
         end, { zh = "英姿" }),
       -- 反间：令一名其他角色获得你的一张手牌，若其猜错花色则受到 1 点伤害
-      TriggerSkill.create("反间", TriggerEvent.EventPhaseStart,
+      phaseTrigger("反间", "play",
         function(_s, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.fanjian_used or #player.hand == 0 then return false end
@@ -1238,7 +1256,7 @@ Generals.WU = {
     name = "孙坚", key = "sunjian", max_hp = 4, kingdom = "wu",
     skills = {
       -- 英魂：回合开始若已受伤，令一名其他角色摸 X 张牌后弃 1 张（X = 已损失体力）
-      TriggerSkill.create("英魂", TriggerEvent.EventPhaseStart,
+      phaseTrigger("英魂", "start",
         function(_s, room, player, data)
           if not data or data.phase ~= "start" or data.player ~= player then return false end
           local x = player.max_hp - player.hp
@@ -1291,7 +1309,7 @@ Generals.WU = {
     name = "太史慈", key = "taishici", max_hp = 4, kingdom = "wu",
     skills = {
       -- 天义：出牌阶段与一名角色拼点，赢则杀无距离限制且次数不限，输则本回合不能出杀
-      TriggerSkill.create("天义", TriggerEvent.EventPhaseStart,
+      phaseTrigger("天义", "play",
         function(_s, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.tianyi_used or #player.hand == 0 then return false end
@@ -1384,7 +1402,7 @@ Generals.WU = {
           return false
         end, { zh = "好施" }),
       -- 缔盟：弃 X 张手牌，交换两名手牌数相差 X 的其他角色的手牌
-      TriggerSkill.create("缔盟", TriggerEvent.EventPhaseStart,
+      phaseTrigger("缔盟", "play",
         function(_s, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.dimeng_used or #player.hand < 2 then return false end
@@ -1415,7 +1433,7 @@ Generals.WU = {
     name = "二张", key = "erzhang", max_hp = 3, kingdom = "wu",
     skills = {
       -- 直谏：出牌阶段将一张装备牌置于一名其他角色的装备区，然后摸一张牌
-      TriggerSkill.create("直谏", TriggerEvent.EventPhaseStart,
+      phaseTrigger("直谏", "play",
         function(_s, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.zhijian_used then return false end
@@ -1444,7 +1462,7 @@ Generals.WU = {
         end, { zh = "直谏" }),
       resetFlag("直谏·重置", { flag = "zhijian_used", zh = "直谏" }),
       -- 固政：其他角色弃牌阶段结束时，将其弃牌中的一张还给他，其余收入自己手牌
-      TriggerSkill.create("固政", TriggerEvent.EventPhaseEnd,
+      phaseTrigger("固政", "discard",
         function(_s, room, player, data)
           if not data or data.phase ~= "discard" then return false end
           local turner = data.player
@@ -1468,7 +1486,7 @@ Generals.WU = {
             player.name, turner.name, #cards)
           room.last_discarded = {}
           return false
-        end, { zh = "固政" }),
+        end, { zh = "固政" }, "other", TriggerEvent.EventPhaseEnd),
     },
   },
   {
@@ -1477,7 +1495,7 @@ Generals.WU = {
       -- 短兵（锁定技）：【杀】可额外指定一名距离 1 以内的角色
       markerSkill("短兵", { slash_extra_target = true }),
       -- 奋迅：出牌阶段弃一张牌，令本回合与一名角色的距离固定为 1
-      TriggerSkill.create("奋迅", TriggerEvent.EventPhaseStart,
+      phaseTrigger("奋迅", "play",
         function(_s, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.fenxun_used or #player.hand == 0 then return false end
@@ -1618,7 +1636,7 @@ Generals.QUN = {
     name = "貂蝉", key = "diaochan", max_hp = 3, kingdom = "qun", female = true,
     skills = {
       -- 离间：出牌阶段限一次，弃一张牌令一名男性角色对另一名男性角色使用【决斗】
-      TriggerSkill.create("离间", TriggerEvent.EventPhaseStart,
+      phaseTrigger("离间", "play",
         function(_s, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.lijian_used or #player.hand == 0 then return false end
@@ -1638,7 +1656,7 @@ Generals.QUN = {
         end, { zh = "离间" }),
       resetFlag("离间·重置", { flag = "lijian_used", zh = "离间" }),
       -- 闭月：结束阶段摸一张牌
-      TriggerSkill.create("闭月", TriggerEvent.EventPhaseStart,
+      phaseTrigger("闭月", "finish",
         function(_s, room, player, data)
           if not data or data.phase ~= "finish" or data.player ~= player then return false end
           room:log("%s 发动【闭月】，摸一张牌", player.name)
@@ -1659,7 +1677,7 @@ Generals.QUN = {
     name = "颜良文丑", key = "yanliangwenchou", max_hp = 4, kingdom = "qun",
     skills = {
       -- 双雄：摸牌阶段放弃摸牌改为判定，获得判定牌，本回合可按判定颜色把手牌当【决斗】
-      TriggerSkill.create("双雄", TriggerEvent.EventPhaseStart,
+      phaseTrigger("双雄", "draw",
         function(_s, room, player, data)
           if not data or data.phase ~= "draw" or data.player ~= player then return false end
           if player.skip_draw then return false end
@@ -1701,7 +1719,7 @@ Generals.QUN = {
       -- 帷幕（锁定技）：不能成为黑色锦囊牌的目标
       markerSkill("帷幕", { no_black_trick = true }),
       -- 乱武（限定技）：令所有其他角色各对距离最近的角色使用【杀】，否则失去 1 点体力
-      TriggerSkill.create("乱武", TriggerEvent.EventPhaseStart,
+      phaseTrigger("乱武", "play",
         function(s, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or s.luanwu_used then return false end
@@ -1839,7 +1857,7 @@ Generals.QUN = {
     skills = {
       markerSkill("马术", { distance_mod = -1 }),
       -- 雄异（限定技）：令所有队友各摸三张牌；若你已受伤则回复 1 点体力
-      TriggerSkill.create("雄异", TriggerEvent.EventPhaseStart,
+      phaseTrigger("雄异", "play",
         function(s, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or s.xiongyi_used then return false end
@@ -1876,7 +1894,7 @@ Generals.QUN = {
           return false
         end, { zh = "名士" }),
       -- 礼让：弃牌阶段结束后，可将弃置的牌分配给其他角色
-      TriggerSkill.create("礼让", TriggerEvent.EventPhaseEnd,
+      phaseTrigger("礼让", "discard",
         function(_s, room, player, data)
           if not data or data.phase ~= "discard" or data.player ~= player then return false end
           local cards = room.last_discarded or {}
@@ -1897,14 +1915,14 @@ Generals.QUN = {
           end
           room.last_discarded = {}
           return false
-        end, { zh = "礼让" }),
+        end, { zh = "礼让" }, "self", TriggerEvent.EventPhaseEnd),
     },
   },
   {
     name = "纪灵", key = "jiling", max_hp = 4, kingdom = "qun",
     skills = {
       -- 双刃：出牌阶段开始时与一名角色拼点，赢则视为对其使用【杀】；输则跳过出牌阶段
-      TriggerSkill.create("双刃", TriggerEvent.EventPhaseStart,
+      phaseTrigger("双刃", "play",
         function(_s, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or #player.hand == 0 then return false end

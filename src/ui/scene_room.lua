@@ -298,6 +298,21 @@ function RoomScene:_refreshButtons()
     b.y = 300
     b.w, b.h = 110, 40
   end
+  -- 「退出对局」常驻：以前只有对局结束才有「返回菜单」，
+  -- 中途想退出只能把游戏关掉。二次确认防误触。
+  table.insert(btns, {
+    text = self.confirmExit and "确认退出？" or "退出对局",
+    x = 1130 - 40 - 120, y = 348, w = 110, h = 34,
+    cb = function()
+      if self.confirmExit then
+        self.confirmExit = false
+        self:_exitGame()
+      else
+        self.confirmExit = true
+        self.msg = "再点一次【确认退出？】（或按 Esc 取消）"
+      end
+    end,
+  })
   self.buttons = btns
 end
 
@@ -337,7 +352,25 @@ end
 -- 想看某个对手由 LLM 决策，按它的座位号。
 local CONTROL_ZH = { human = "你来操作", bot = "规则 BOT", ai = "AI 托管" }
 
+-- 退出对局：回到菜单。联机场景可覆盖此方法顺带断开连接
+function RoomScene:_exitGame()
+  if self.on_exit then self.on_exit() end
+end
+
 function RoomScene:keypressed(key)
+  -- Esc 退出（二次确认）。注意：整个文件只能有**一个** keypressed，
+  -- 重复定义会整体覆盖，把下面的数字键托管切换一起弄丢（踩过）。
+  if key == "escape" then
+    if self.confirmExit then
+      self.confirmExit = false
+      self.msg = "已取消退出"
+    else
+      self.confirmExit = true
+      self.msg = "再按一次 Esc 退出对局（或点【确认退出？】）"
+    end
+    self:_refreshButtons()
+    return
+  end
   local n = tonumber(key)
   if not n or n < 1 or n > #self.players then return end
   local p = self.players[n]
@@ -421,6 +454,17 @@ function RoomScene:mousepressed(x, y, button)
     return
   end
   self.msg = "" -- 每次点击重新计算提示，避免上一条反馈一直挂着
+  -- 点了确认按钮以外的地方 → 取消退出确认态
+  if self.confirmExit then
+    local hitConfirm = false
+    for _, b in ipairs(self.buttons) do
+      if x >= b.x and x <= b.x + b.w and y >= b.y and y <= b.y + b.h
+        and b.text == "确认退出？" then
+        hitConfirm = true
+      end
+    end
+    if not hitConfirm then self.confirmExit = false end
+  end
   for _, b in ipairs(self.buttons) do
     if x >= b.x and x <= b.x + b.w and y >= b.y and y <= b.y + b.h then
       b.cb()
