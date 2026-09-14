@@ -12,9 +12,11 @@ local Effects = class("Effects")
 
 local FLOAT_LIFE = 0.9   -- 浮动文字存活秒数
 local BANNER_LIFE = 1.1  -- 横幅存活秒数
+local FLASH_LIFE = 0.75  -- 面板闪光存活秒数
 
 function Effects:init()
   self.floats = {}
+  self.flashes = {}
   self.banner = nil
 end
 
@@ -22,6 +24,14 @@ function Effects:float(x, y, text, color)
   table.insert(self.floats, {
     x = x, y = y, text = text, life = FLOAT_LIFE,
     color = color or { 0.95, 0.25, 0.2 },
+  })
+end
+
+-- 某个武将面板上闪一圈（发动技能时用，让玩家看清是谁在发动）
+function Effects:flashPanel(x, y, w, h, color)
+  table.insert(self.flashes, {
+    x = x, y = y, w = w, h = h, life = FLASH_LIFE,
+    color = color or { 0.95, 0.85, 0.35 },
   })
 end
 
@@ -40,6 +50,11 @@ function Effects:update(dt)
     self.banner.life = self.banner.life - dt
     if self.banner.life <= 0 then self.banner = nil end
   end
+  for i = #self.flashes, 1, -1 do
+    local f = self.flashes[i]
+    f.life = f.life - dt
+    if f.life <= 0 then table.remove(self.flashes, i) end
+  end
 end
 
 function Effects:draw(sceneW, sceneH, font, font_lg)
@@ -49,6 +64,17 @@ function Effects:draw(sceneW, sceneH, font, font_lg)
     love.graphics.setColor(f.color[1], f.color[2], f.color[3], a)
     if font_lg then love.graphics.setFont(font_lg) end
     love.graphics.printf(f.text, f.x - 60, f.y, 120, "center")
+  end
+
+  -- 面板闪光：随剩余时间扩散一圈并淡出
+  for _, f in ipairs(self.flashes) do
+    local t = math.max(0, math.min(1, f.life / FLASH_LIFE)) -- 1 -> 0
+    local grow = (1 - t) * 10                                -- 越淡越外扩
+    love.graphics.setColor(f.color[1], f.color[2], f.color[3], t * 0.9)
+    if love.graphics.setLineWidth then love.graphics.setLineWidth(3) end
+    love.graphics.rectangle("line", f.x - grow, f.y - grow,
+      f.w + grow * 2, f.h + grow * 2, 10, 10)
+    if love.graphics.setLineWidth then love.graphics.setLineWidth(1) end
   end
 
   -- 中部横幅

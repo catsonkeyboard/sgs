@@ -156,6 +156,38 @@ check(scene.skin:skillSound("马术") == nil, "被动技【马术】原版就没
 check(scene.skin:sound("caocao") ~= nil, "阵亡台词应按武将拼音 key 解析（caocao）")
 
 
+print("\n--- 技能视觉效果 ---")
+do
+  local Effects = require "src.ui.effects"
+  local fx = Effects.create()
+
+  -- 1) 面板闪光：加入后应存在，随时间衰减消失
+  fx:flashPanel(10, 20, 200, 90)
+  check(#fx.flashes == 1, "flashPanel 应记录一次闪光")
+  fx:update(2)
+  check(#fx.flashes == 0, "闪光应在时间到后消失")
+
+  -- 2) 技能事件：即使台词播放失败（无音频/无台词），也要有横幅与闪光
+  local sc = scene
+  sc.effects = Effects.create()
+  sc.audio = { playSkill = function() return false end, play = function() return false end }
+  sc.room:emit("skill", { player = sc.human, skill = "马术" }) -- 被动技，无台词
+  check(sc.effects.banner ~= nil,
+    "无台词的技能发动也应显示横幅（实得 " .. tostring(sc.effects.banner) .. "）")
+  check(#sc.effects.flashes == 1, "技能发动应在武将面板上闪一下")
+
+  -- 3) 有台词的技能同样要有视觉
+  sc.effects = Effects.create()
+  sc.audio = { playSkill = function() return true end, play = function() return true end }
+  sc.room:emit("skill", { player = sc.human, skill = "奸雄" })
+  check(sc.effects.banner ~= nil, "有台词的技能发动应显示横幅")
+
+  -- 4) 横幅文案应带上技能名
+  local text = sc.effects.banner and sc.effects.banner.text or ""
+  check(text:find("奸雄", 1, true) ~= nil,
+    "横幅应包含技能名（实得「" .. text .. "」）")
+end
+
 print("\n--- 拖拽出牌 ---")
 do
   local Card = require "src.core.card"

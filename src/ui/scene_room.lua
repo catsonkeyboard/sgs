@@ -511,41 +511,55 @@ end
 function RoomScene:bindPresentationHooks()
   local room = self.room
   if not room then return end
-  local audio, fx = self.audio, self.effects
+  -- 注意：闭包里要取 self.audio / self.effects，不能在绑定时捕获成 local。
+  -- 捕获之后替换 self.audio（比如测试里换成打桩对象）就完全不生效。
 
   room:onEvent("useCard", function(d)
     if d and d.card then
-      audio:play(d.card.name)
+      if self.audio then self.audio:play(d.card.name) end
       if d.from then
-        fx:showBanner(string.format("%s 使用【%s】", d.from.name, d.card:zhName()))
+        if self.effects then self.effects:showBanner(string.format("%s 使用【%s】", d.from.name, d.card:zhName())) end
       end
     end
   end)
 
   room:onEvent("damage", function(d)
     if d and d.to then
-      audio:play("injure")
+      if self.audio then self.audio:play("injure") end
       local a = self:anchorOf(d.to)
-      if a and fx then
-        fx:float(a[1] + (self.panelW or 210) / 2, a[2] + 30, "-" .. tostring(d.n))
+      if a and self.effects then
+        self.effects:float(a[1] + (self.panelW or 210) / 2, a[2] + 30, "-" .. tostring(d.n))
       end
     end
   end)
 
-  -- 技能发动：台词（原版 audio/skill/<拼音>1|2.ogg）+ 横幅
+  -- 技能发动：台词（原版 audio/skill/<拼音>1|2.ogg）+ 横幅 + 面板闪光
+  --
+  -- 注意：横幅**不能**挂在「台词是否播放成功」上。
+  -- 以前写成 `if audio:playSkill(...) then showBanner(...) end`，
+  -- 结果：没台词的技能（如被动技【马术】）发动时零反馈；
+  -- 更糟的是无音频环境下 playSkill 恒为 false，**横幅永远不显示**。
+  -- 音频与视觉是两件事，必须分开。
   room:onEvent("skill", function(d)
     if not d then return end
-    if audio:playSkill(d.skill) and d.player then
-      fx:showBanner(string.format("%s 发动【%s】", d.player.name, tostring(d.skill)),
-        { 0.95, 0.85, 0.35 })
+    if self.audio then self.audio:playSkill(d.skill) end
+    if not d.player then return end
+    if self.effects then self.effects:showBanner(string.format("%s 发动【%s】", d.player.name, tostring(d.skill)), { 0.95, 0.85, 0.35 }) end
+    local a = self:anchorOf(d.player)
+    if a then
+      if self.effects then self.effects:flashPanel(a[1], a[2], self.panelW or 210, self.panelH or 96,
+          { 0.95, 0.85, 0.35 })
+      end
     end
   end)
 
   room:onEvent("death", function(d)
     if d and d.player then
       -- 阵亡台词按武将拼音（audio/death/<key>.ogg），取不到再退回通用 death
-      if not (d.key and audio:play(d.key)) then audio:play("death") end
-      fx:showBanner(string.format("%s 阵亡", d.player.name), { 0.9, 0.3, 0.25 })
+      if self.audio then
+        if not (d.key and self.audio:play(d.key)) then self.audio:play("death") end
+      end
+      if self.effects then self.effects:showBanner(string.format("%s 阵亡", d.player.name), { 0.9, 0.3, 0.25 }) end
     end
   end)
 end
