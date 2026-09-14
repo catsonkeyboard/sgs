@@ -11,6 +11,7 @@ local class = require "src.class"
 local Cards = require "src.core.cards"
 local Card = require "src.core.card"
 local Player = require "src.core.player"
+local Generals = require "src.core.generals"
 
 local Room = class("Room")
 
@@ -259,8 +260,9 @@ function Room:distance(a, b)
   local n = #self.players
   local d = math.abs(a.seat - b.seat)
   d = math.min(d, n - d)
-  -- 进攻马 -1、防御马 +1；最低为 1
-  local dist = d + (a:distanceModifier() or 0) + (b:defenseModifier() or 0)
+  -- 进攻马 -1、防御马 +1、技能标记（如【马术】-1）；最低为 1
+  local skill_mod = Generals.marker(a, "distance_mod", 0) or 0
+  local dist = d + (a:distanceModifier() or 0) + (b:defenseModifier() or 0) + skill_mod
   if dist < 1 then dist = 1 end
   return dist
 end
@@ -306,6 +308,39 @@ end
 function Room:takeFromDiscard(card)
   for i, c in ipairs(self.discardPile) do
     if c == card then return table.remove(self.discardPile, i) end
+  end
+  return nil
+end
+
+-- 免疫【南蛮入侵】：藤甲，或技能标记（【祸首】/【巨象】）
+function Room:isSavageImmune(p)
+  if p:hasEquip("vine") then return true end
+  return Generals.marker(p, "savage_immune", false) == true
+end
+
+-- 找出能把某张手牌「当作」want_name 使用的转化技，返回 {skill, card} 列表
+function Room:viewAsCandidates(p, want_name)
+  local out = {}
+  local skills = {}
+  for _, s in ipairs((p.general and p.general.skills) or {}) do table.insert(skills, s) end
+  for _, s in ipairs(p.extra_skills or {}) do table.insert(skills, s) end
+  for _, s in ipairs(skills) do
+    if s.result_name == want_name and s.filter then
+      for _, c in ipairs(p.hand) do
+        if s.filter(c) then table.insert(out, { skill = s, card = c }) end
+      end
+    end
+  end
+  return out
+end
+
+-- 用转化技把 card 变成目标牌（返回虚拟牌或 nil）
+function Room:viewAsCard(p, want_name, card)
+  for _, item in ipairs(self:viewAsCandidates(p, want_name)) do
+    if item.card == card then
+      local made = item.skill:view_as({ card })
+      if made then return made end
+    end
   end
   return nil
 end
@@ -504,7 +539,19 @@ function Room:useCard(from, card, target)
   if target and target.is_human ~= nil then targets = { target } end
   targets = targets or {}
 
-  if not card or not from:takeCard(card) then
+  -- 转化技产生的虚拟牌：实体牌仍以 subcards 形式留在手中，需逐一取出
+  local is_virtual = card ~= nil and card.virtual == true
+  if not card then return false end
+  if is_virtual then
+    local got = 0
+    for _, sc in ipairs(card.subcards or {}) do
+      if from:takeCard(sc) then got = got + 1 end
+    end
+    if got == 0 then
+      self:log("%s 的转化牌来源已不在手牌中，忽略", from.name)
+      return false
+    end
+  elseif not from:takeCard(card) then
     self:log("%s 的响应包含不在手牌中的卡，忽略", from.name)
     return false
   end
@@ -522,22 +569,24 @@ function Room:useCard(from, card, target)
   end
 
   if self:trigger("PreCardUsed", from, use) then
-    table.insert(from.hand, card)
+    self:_refund(from, card)
     self:log("【%s】的使用被取消", card:zhName())
     return false
   end
 
-  -- 合法性校验（退还）
+  -- 合法性校验（不合法则退还）
   if not self:_validateUse(from, card, targets) then
-    table.insert(from.hand, card)
+    self:_refund(from, card)
     return false
   end
 
   self:trigger("CardUsed", from, use)
+  -- 指定目标后触发：【铁骑】【烈弓】等在此决定此牌可否被闪避
+  self:trigger("TargetChosen", from, use)
 
   -- 锦囊（含延时锦囊）可被【无懈可击】抵消
   if def and def.nullifiable and self:askForNullification(use) then
-    table.insert(self.discardPile, card)
+    self:_toDiscard(card)
     return true
   end
 
@@ -555,7 +604,7 @@ function Room:useCard(from, card, target)
   end
 
   if def and def.ctype == Card.Type.Trick and def.effect then
-    table.insert(self.discardPile, card)
+    self:_toDiscard(card)
     self:trigger("CardEffect", from, use)
     def.effect(self, use)
     self:trigger("CardFinished", from, use)
@@ -563,6 +612,26 @@ function Room:useCard(from, card, target)
   end
 
   return self:_useBasic(from, card, targets)
+end
+
+-- 退还：虚拟牌要把实体牌还给使用者
+function Room:_refund(p, card)
+  if card.virtual then
+    for _, sc in ipairs(card.subcards or {}) do table.insert(p.hand, sc) end
+  else
+    table.insert(p.hand, card)
+  end
+end
+
+-- 入弃牌堆：虚拟牌丢弃其实体牌（除非效果已另行处理）
+function Room:_toDiscard(card)
+  if card.virtual then
+    if not card.sub_consumed then
+      for _, sc in ipairs(card.subcards or {}) do table.insert(self.discardPile, sc) end
+    end
+  else
+    table.insert(self.discardPile, card)
+  end
 end
 
 -- 基本牌结算：杀 / 桃 / 酒
@@ -573,45 +642,45 @@ function Room:_useBasic(from, card, targets)
     local target = targets[1]
     if from.slash_count > 0 and not self:allowsUnlimitedSlash(from) then
       self:log("%s 本回合已使用过【杀】，退还", from.name)
-      table.insert(from.hand, card)
+      self:_refund(from, card)
       return false
     end
     if not target or target == from or not target.alive then
       self:log("【杀】的目标非法，退还")
-      table.insert(from.hand, card)
+      self:_refund(from, card)
       return false
     end
     if self:distance(from, target) > from:attackRange() then
       self:log("目标不在攻击范围内（距离 %d > 范围 %d），退还",
         self:distance(from, target), from:attackRange())
-      table.insert(from.hand, card)
+      self:_refund(from, card)
       return false
     end
     from.slash_used = true
     from.slash_count = from.slash_count + 1
-    table.insert(self.discardPile, card)
+    self:_toDiscard(card)
     self:_resolveSlash(from, target, card)
     return true
 
   elseif name == "peach" then
     if from.hp >= from.max_hp then
       self:log("%s 体力已满，不能使用【桃】，退还", from.name)
-      table.insert(from.hand, card)
+      self:_refund(from, card)
       return false
     end
-    table.insert(self.discardPile, card)
+    self:_toDiscard(card)
     self:log("%s 使用【桃】", from.name)
     self:heal(from, 1)
     return true
 
   elseif name == "analeptic" then
     if from.hp < from.max_hp then
-      table.insert(self.discardPile, card)
+      self:_toDiscard(card)
       self:log("%s 濒死时使用【酒】回复体力", from.name)
       self:heal(from, 1)
     else
       from.drunk = true
-      table.insert(self.discardPile, card)
+      self:_toDiscard(card)
       self:log("%s 饮酒，下一张【杀】伤害 +1", from.name)
     end
     return true
@@ -619,19 +688,22 @@ function Room:_useBasic(from, card, targets)
   elseif name == "dodge" then
     -- 【闪】不能主动使用
     self:log("【闪】不能主动使用，退还")
-    table.insert(from.hand, card)
+    self:_refund(from, card)
     return false
   end
 
   self:log("%s 打出 %s（暂无结算规则）", from.name, card:zhName())
-  table.insert(self.discardPile, card)
+  self:_toDiscard(card)
   return true
 end
 
 function Room:_validateUse(from, card, targets)
   local def = Cards.get(card.name)
   if not def then return true end
-  if def.distance then
+
+  -- 【奇才】：使用锦囊牌无视距离限制
+  local ignore_range = Generals.marker(from, "no_trick_range", false)
+  if def.distance and not (ignore_range and def.ctype == Card.Type.Trick) then
     local t = targets[1]
     if t and self:distance(from, t) > def.distance then
       self:log("目标超出【%s】的距离限制（%d > %d），退还",
@@ -639,10 +711,22 @@ function Room:_validateUse(from, card, targets)
       return false
     end
   end
+
   if def.target == "none" then return true end
   if #targets == 0 and def.target ~= "self" then
     self:log("【%s】需要目标，退还", card:zhName())
     return false
+  end
+
+  -- 【空城】（锁定技）：没有手牌时不能成为【杀】/【决斗】的目标
+  for _, t in ipairs(targets) do
+    if t and Generals.marker(t, "no_target_empty", false) and #t.hand == 0 then
+      if card.name == "slash" or card.name == "fire_slash"
+        or card.name == "thunder_slash" or card.name == "duel" then
+        self:log("%s 发动【空城】，无手牌时不能成为此牌的目标", t.name)
+        return false
+      end
+    end
   end
   return true
 end
@@ -691,6 +775,25 @@ function Room:_resolveSlash(from, to, card)
     return
   end
 
+  -- 【享乐】（锁定技）：体力大于 1 时成为【杀】的目标，使用者需弃一张牌，否则此【杀】无效
+  if Generals.marker(to, "xiangle", false) and to.hp > 1 and #from.hand > 0 then
+    self:log("%s 的【享乐】生效：%s 需弃置一张牌，否则此【杀】无效", to.name, from.name)
+    local dumped = self:askForDiscardFrom(to, from, 1)
+    if not dumped then
+      self:log("%s 未能弃牌，此【杀】无效", from.name)
+      self:trigger("SlashMissed", to, { from = from, to = to })
+      return
+    end
+  end
+
+  -- 【铁骑】/【烈弓】：此【杀】不可被【闪】响应
+  if card.cannot_dodge then
+    self:log("此【杀】不可被【闪】响应")
+    self:trigger("SlashHit", to, { from = from, to = to, card = card })
+    self:_slashDamage(from, to, card, nature)
+    return
+  end
+
   local dodged = false
   local dodge = self:askForCard(to, "dodge",
     string.format("%s 对你使用【%s】，请打出【闪】", from.name, card:zhName()))
@@ -701,7 +804,11 @@ function Room:_resolveSlash(from, to, card)
   end
 
   -- 八卦阵：未打出【闪】时可判定，红色视为打出【闪】
-  if not dodged and to:hasEquip("eight_diagram") and not ignore_armor then
+  -- 【八阵】：没装备防具时视为装备着【八卦阵】
+  local auto_armor = Generals.marker(to, "auto_armor", nil)
+  local has_bagua = to:hasEquip("eight_diagram") ~= nil
+    or (auto_armor == "eight_diagram" and to:getArmor() == nil)
+  if not dodged and has_bagua and not ignore_armor then
     local judge = (#self.drawPile > 0) and table.remove(self.drawPile) or nil
     if judge then
       local red = judge:isRed()
@@ -717,7 +824,11 @@ function Room:_resolveSlash(from, to, card)
     return
   end
 
-  -- 命中
+  self:_slashHit(from, to, card, nature, ignore_armor)
+end
+
+-- 【杀】命中后的伤害与后续效果
+function Room:_slashHit(from, to, card, nature, ignore_armor)
   self:trigger("SlashHit", to, { from = from, to = to, card = card })
 
   -- 寒冰剑：改为弃两张牌

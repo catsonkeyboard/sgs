@@ -126,8 +126,8 @@ Cards.define("savage_assault", {
     room:log("%s 使用【南蛮入侵】", from.name)
     for _, p in ipairs(use.to) do
       if p.alive then
-        if p:hasEquip("vine") then
-          room:log("%s 的【藤甲】使【南蛮入侵】无效", p.name)
+        if room:isSavageImmune(p) then
+          room:log("%s 免疫【南蛮入侵】（藤甲 / 祸首 / 巨象）", p.name)
         else
           local slash = room:askForCard(p, "slash", "南蛮入侵：打出【杀】，否则受到 1 点伤害")
           if slash and p:takeCard(slash) then
@@ -367,5 +367,25 @@ Cards.define("defensive_horse", {
   zh = "防御马", ctype = T.Equip, equip = "defensive_horse", range = 0,
   desc = "其他角色与你的距离 +1",
 })
+
+-- ==================== 技能牌 ====================
+-- 由转化技（ViewAsSkill）产生的虚拟牌，不参与牌堆构造，仅用于结算分派。
+
+Cards.define("rende", {
+  zh = "仁德", ctype = T.Basic, target = "other",
+  effect = function(room, use)
+    local to = use.to and use.to[1]
+    if not to then return end
+    local n = 0
+    for _, sc in ipairs(use.card.subcards or {}) do
+      table.insert(to.hand, sc)
+      n = n + 1
+    end
+    use.card.sub_consumed = true -- 实体牌已交给目标，不再进弃牌堆
+    room:log("%s 将 %d 张牌交给 %s", use.from.name, n, to.name)
+  end,
+})
+
+Cards.define("shushen", { zh = "淑慎", ctype = T.Basic, target = "other" })
 
 return Cards

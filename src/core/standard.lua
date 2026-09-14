@@ -157,6 +157,11 @@ function Standard.setup(engine)
   for _, g in ipairs(GENERALS) do
     engine:registerGeneral(g)
   end
+  -- 蜀国十五将（core/generals.lua）
+  local Generals = require "src.core.generals"
+  for _, g in ipairs(Generals.all()) do
+    engine:registerGeneral(g)
+  end
 end
 
 -- 给玩家随机分配一个武将（不含白板占位将）

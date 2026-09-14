@@ -191,6 +191,18 @@ function AI.makeAI()
       if wanted == "peach" and not card and p.hp <= 0 then
         card = findByName(p, "analeptic")
       end
+      -- 没有原牌时用转化技顶上（【看破】黑色牌当无懈可击、【龙胆】杀当闪 等）
+      if not card then
+        local made = nil
+        local cands = room:viewAsCandidates(p, wanted)
+        if #cands > 0 then
+          made = cands[1].skill:view_as({ cands[1].card })
+        end
+        if made then
+          room:log("%s 以【%s】转化出一张【%s】", p.name, cands[1].skill.name, made:zhName())
+          card = made
+        end
+      end
       return card
 
     -------------------------------------------------- 弃牌

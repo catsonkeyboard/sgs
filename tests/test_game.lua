@@ -13,6 +13,7 @@ local Room = require "src.core.room"
 local Driver = require "src.core.driver"
 local AI = require "src.core.ai"
 local skillmod = require "src.core.skill"
+local Generals = require "src.core.generals"
 
 local failures, passes = 0, 0
 local function check(cond, msg)
@@ -334,6 +335,126 @@ do
     if ok then ok_count = ok_count + 1 else table.insert(bad, seed) end
   end
   check(ok_count == 6, "4 人身份局 6 个种子全部跑通（失败: " .. table.concat(bad, ",") .. "）")
+end
+
+print("\n--- 蜀国武将技能 ---")
+
+local function makeRoomWith(generalKeys, seed)
+  local engine = Engine.create()
+  Standard.setup(engine)
+  local ps = {}
+  for i, k in ipairs(generalKeys) do
+    table.insert(ps, Player.create("P" .. i, engine:getGeneral(k), i, false))
+  end
+  local r = Room.create(engine, ps)
+  r.drawPile = Standard.buildDrawPile(seed or 1)
+  return r, ps
+end
+
+local function give(p, name, suit, number, ctype)
+  local c = Card.create(1000 + #p.hand, name, suit or Card.Suit.Spade, number or 5,
+    ctype or Card.Type.Basic)
+  table.insert(p.hand, c)
+  return c
+end
+
+do -- 关羽·武圣：红色牌当【杀】
+  local r, ps = makeRoomWith({ "关羽", "白板武将" })
+  local red_dodge = give(ps[1], "dodge", Card.Suit.Heart, 3)
+  local cands = r:viewAsCandidates(ps[1], "slash")
+  check(#cands > 0, "关羽应有可转化为【杀】的手牌")
+  local made = r:viewAsCard(ps[1], "slash", red_dodge)
+  check(made ~= nil and made.name == "slash", "红色【闪】应能转化为【杀】")
+  check(made and made.virtual and made.subcards[1] == red_dodge,
+    "转化牌应记录实体来源 subcards")
+end
+
+do -- 赵云·龙胆：杀当闪、闪当杀
+  local r, ps = makeRoomWith({ "赵云", "白板武将" })
+  local dodge = give(ps[1], "dodge", Card.Suit.Spade, 4)
+  local slash = give(ps[1], "slash", Card.Suit.Spade, 5)
+  check((r:viewAsCard(ps[1], "slash", dodge) or {}).name == "slash", "【闪】应能当【杀】")
+  check((r:viewAsCard(ps[1], "dodge", slash) or {}).name == "dodge", "【杀】应能当【闪】")
+end
+
+do -- 马超·马术：距离 -1
+  local r, ps = makeRoomWith({ "马超", "白板武将", "白板武将", "白板武将" })
+  check(r:distance(ps[1], ps[3]) == 1, "马超【马术】应使到对家距离 2→1")
+  check(r:distance(ps[2], ps[4]) == 2, "白板武将到对家距离应为 2")
+end
+
+do -- 诸葛亮·空城：无手牌不可被【杀】指定
+  local r, ps = makeRoomWith({ "白板武将", "诸葛亮" })
+  local slash = give(ps[1], "slash", Card.Suit.Spade, 5)
+  check(not r:_validateUse(ps[1], slash, { ps[2] }), "空城状态下【杀】应无法指定诸葛亮")
+  give(ps[2], "dodge", Card.Suit.Heart, 2)
+  check(r:_validateUse(ps[1], slash, { ps[2] }), "有手牌后【杀】应可指定")
+end
+
+do -- 黄月英·奇才：锦囊无视距离
+  local r, ps = makeRoomWith({ "黄月英", "白板武将", "白板武将", "白板武将" })
+  local snatch = give(ps[1], "snatch", Card.Suit.Spade, 3, Card.Type.Trick)
+  check(r:distance(ps[1], ps[3]) == 2, "黄月英到对家距离为 2")
+  check(r:_validateUse(ps[1], snatch, { ps[3] }), "【奇才】应使锦囊无视距离限制")
+  local r2, p2 = makeRoomWith({ "白板武将", "白板武将", "白板武将", "白板武将" })
+  local snatch2 = give(p2[1], "snatch", Card.Suit.Spade, 3, Card.Type.Trick)
+  check(not r2:_validateUse(p2[1], snatch2, { p2[3] }), "白板武将的锦囊应受距离限制")
+end
+
+do -- 黄月英·集智：使用锦囊后摸一张
+  local r, ps = makeRoomWith({ "黄月英", "白板武将" }, 5)
+  local before = #ps[1].hand
+  r:trigger("CardUsed", ps[1],
+    { from = ps[1], card = Card.create(1, "ex_nihilo", Card.Suit.Heart, 7, Card.Type.Trick),
+      to = { ps[1] } })
+  check(#ps[1].hand == before + 1, "【集智】使用锦囊后应摸 1 张（" .. before .. " → " .. #ps[1].hand .. "）")
+  -- 装备不应触发集智
+  local before2 = #ps[1].hand
+  r:trigger("CardUsed", ps[1],
+    { from = ps[1], card = Card.create(2, "crossbow", Card.Suit.Spade, 8, Card.Type.Equip),
+      to = { ps[1] } })
+  check(#ps[1].hand == before2, "使用装备不应触发【集智】")
+end
+
+do -- 魏延·狂骨：对距离 1 的角色造成伤害后回血
+  local r, ps = makeRoomWith({ "魏延", "白板武将" }, 6)
+  ps[1].hp = 2
+  r:trigger("Damaged", ps[2], { from = ps[1], to = ps[2], n = 1, nature = "normal" })
+  check(ps[1].hp == 3, "【狂骨】对距离 1 的目标造成伤害后应回 1 血（" .. ps[1].hp .. "）")
+end
+
+do -- 庞统·涅槃（限定技）：濒死时弃牌并回满
+  local r, ps = makeRoomWith({ "庞统", "白板武将" }, 7)
+  give(ps[1], "slash", Card.Suit.Spade, 5)
+  ps[1].hp = 0
+  local cancelled = r:trigger("Dying", ps[1], { player = ps[1] })
+  check(cancelled, "【涅槃】应截断濒死结算")
+  check(ps[1].hp == ps[1].max_hp, "【涅槃】后应回复至体力上限（" .. ps[1].hp .. "）")
+  check(#ps[1].hand == 0, "【涅槃】应弃置所有手牌")
+end
+
+do -- 卧龙·八阵 / 孟获·祸首 / 祝融·巨象
+  local r, ps = makeRoomWith({ "卧龙", "孟获", "祝融", "白板武将" }, 8)
+  check(Generals.marker(ps[1], "auto_armor", nil) == "eight_diagram",
+    "卧龙【八阵】无防具时视为装备八卦阵")
+  check(r:isSavageImmune(ps[2]), "孟获【祸首】应免疫【南蛮入侵】")
+  check(r:isSavageImmune(ps[3]), "祝融【巨象】应免疫【南蛮入侵】")
+  check(not r:isSavageImmune(ps[4]), "白板武将不应免疫【南蛮入侵】")
+end
+
+do -- 张飞·咆哮
+  local r, ps = makeRoomWith({ "张飞", "白板武将" }, 9)
+  check(r:allowsUnlimitedSlash(ps[1]), "张飞【咆哮】应允许无限出杀")
+end
+
+do -- 卧龙·看破：黑色牌当【无懈可击】
+  local r, ps = makeRoomWith({ "卧龙", "白板武将" }, 10)
+  local black = give(ps[1], "slash", Card.Suit.Spade, 6)
+  check((r:viewAsCard(ps[1], "nullification", black) or {}).name == "nullification",
+    "卧龙应能以黑色牌当【无懈可击】")
+  local red = give(ps[1], "peach", Card.Suit.Heart, 6)
+  check(r:viewAsCard(ps[1], "nullification", red) == nil,
+    "红色牌不应能当【无懈可击】")
 end
 
 print("\n--- 卡牌定义完整性 ---")
