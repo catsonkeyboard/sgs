@@ -24,6 +24,9 @@ local Host = class("Host")
 function Host:init(opts)
   opts = opts or {}
   self.count = opts.count or 5 -- 默认 5 人局（8 人为官方标准局，见 README）
+  -- 最少几个**真人**准备后才开局。默认 2：否则第一个人一 ready 就开局，
+  -- 后面连进来的人只能干等这一局打完（实测踩过）。想单人练手传 1。
+  self.minStart = opts.minStart or 2
   self.seat_count = self.count
   self.seats = {}
   for i = 1, self.count do
@@ -138,6 +141,15 @@ end
 
 -- 开局条件：至少 1 人连接，且**所有已连接者**都 ready。
 -- （空座会由 BOT 顶替，所以不要求坐满 —— 1 人也能开局试玩）
+-- 已准备的真人数量（用于「还差几人开局」提示）
+function Host:readyCount()
+  local n = 0
+  for _, s in ipairs(self.seats) do
+    if s.channel and s.ready then n = n + 1 end
+  end
+  return n
+end
+
 function Host:canStart()
   local n = 0
   for _, s in ipairs(self.seats) do
@@ -146,7 +158,7 @@ function Host:canStart()
       if not s.ready then return false end
     end
   end
-  return n > 0
+  return n >= (self.minStart or 2)
 end
 
 -- 局面变化时广播快照（不是每帧都发，避免刷屏）

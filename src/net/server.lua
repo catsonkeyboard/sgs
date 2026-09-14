@@ -17,9 +17,9 @@ local Server = class("Server")
 -- 可能解析成 IPv6，导致客户端连 127.0.0.1 直接失败（实测踩过）。
 local HOST = nil
 
-function Server:init(port, count)
+function Server:init(port, count, minStart)
   self.port = port or 9527
-  self.host = Host.create { count = count or 5 }
+  self.host = Host.create { count = count or 5, minStart = minStart or 2 }
   self.clients = {} -- channel -> seat
   self.specs = {}    -- 观战者 channel
   self.finished = false
@@ -45,6 +45,16 @@ function Server:acceptAll()
     local c = self.sock:accept()
     if not c then break end
     local ch = Channel.wrap(c)
+    -- 对局进行中新连入的人：先观战，下一局再上场。
+    -- 否则他会占到一个座位，但当前 room.players 里并没有他，
+    -- 既收不到请求又占着位置（实测踩过）。
+    if self.host.room and not self.host.room.game_over then
+      self.host:addSpectator(ch)
+      self.specs[ch] = true
+      ch:send { type = "spectating", seats = self.host:seatInfo(),
+        chats = self.host.chats }
+      print("[服务端] 对局进行中，新连接先观战（下一局上场）")
+    else
     local seat, tok = self.host:attach(nil, ch)
     if not seat then
       ch:send { type = "error", message = err or "房间已满" }
@@ -58,7 +68,9 @@ function Server:acceptAll()
         chats = self.host.chats,
       }
       self.host:broadcast { type = "seats", seats = self.host:seatInfo() }
-      print(string.format("[服务端] 座位 %d 接入", seat))
+      print(string.format("[服务端] 座位 %d 接入（已准备 %d/%d 人开局）",
+        seat, self.host:readyCount(), self.host.minStart or 2))
+    end
     end
   end
 end

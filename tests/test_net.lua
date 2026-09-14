@@ -176,7 +176,8 @@ do
   local socket = require "socket"
   local Server = require "src.net.server"
   local port = 9900 + (os.time() % 90)
-  local srv = Server.create(port, 5)
+  -- minStart=1：单人也要能开局（默认 2 是给多人联机用的，见 Host.minStart）
+  local srv = Server.create(port, 5, 1)
   local ok, err = pcall(function() srv:bind() end)
   if not ok then
     print("SKIP  真实 TCP 测试（无法监听: " .. tostring(err) .. "）")
