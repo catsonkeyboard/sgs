@@ -9,13 +9,6 @@ local current_scene = nil
 
 local startGame, backToMenu
 
--- A0.2: interpreter-only execution. The reported nil-argument crash on
--- the hand-rendering path is impossible under interpreter semantics
--- (numeric-for index cannot be nil); disabling the JIT rules out a
--- LuaJIT trace miscompile. This game has no perf need for the JIT.
-local has_jit, jit = pcall(require, "jit")
-if has_jit and jit and jit.off then jit.off() end
-
 startGame = function()
   local RoomScene = require "src.ui.scene_room"
   current_scene = RoomScene.create(backToMenu)
@@ -28,11 +21,13 @@ end
 
 function love.load()
   if is_test then
-    local ok, err = pcall(require, "tests.test_game")
-    if not ok then
-      print("TEST CRASH: " .. tostring(err))
-      love.event.quit(1)
-      return
+    for _, mod in ipairs { "tests.test_game", "tests.test_ui" } do
+      local ok, err = pcall(require, mod)
+      if not ok then
+        print("TEST CRASH (" .. mod .. "): " .. tostring(err))
+        love.event.quit(1)
+        return
+      end
     end
     love.event.quit()
     return

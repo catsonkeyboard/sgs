@@ -20,7 +20,7 @@ function MenuScene:draw()
 
   love.graphics.setFont(self.font)
   love.graphics.setColor(0.75, 0.8, 0.75)
-  love.graphics.printf("sgs-love · A0 人机 1v1 迷你局（杀/闪/桃）", 0, h * 0.22 + 90, w, "center")
+  love.graphics.printf("sgs-love · A1 人机 1v1 · 标准牌堆（锦囊/装备/判定）", 0, h * 0.22 + 90, w, "center")
 
   local b = self.btn
   love.graphics.setColor(0.75, 0.2, 0.15)

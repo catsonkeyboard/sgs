@@ -6,8 +6,11 @@ local Card = class("Card")
 Card.Suit = { NoSuit = 0, Spade = 1, Heart = 2, Club = 3, Diamond = 4 }
 Card.Type = { Basic = 0, Trick = 1, Equip = 2 }
 
--- 中文名映射（UI 显示用；引擎逻辑用英文键）
-Card.ZH = { slash = "杀", dodge = "闪", peach = "桃" }
+-- 中文名映射（UI 显示用；引擎逻辑用英文键）。锦囊/装备由 cards.lua 注册时补入。
+Card.ZH = {
+  slash = "杀", dodge = "闪", peach = "桃",
+  analeptic = "酒", fire_slash = "火杀", thunder_slash = "雷杀",
+}
 Card.SUIT_STR = { [Card.Suit.Spade] = "S", [Card.Suit.Heart] = "H",
   [Card.Suit.Club] = "C", [Card.Suit.Diamond] = "D" }
 
@@ -32,7 +35,7 @@ function Card:suitString()
 end
 
 function Card:displayName()
-  return string.format("%s%s-%d[%s]", self:suitString(), self.number, self:zhName(), self.id)
+  return string.format("%s%s-%s[#%s]", self:suitString(), self.number, self:zhName(), self.id)
 end
 
 function Card:clone()

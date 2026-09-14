@@ -1,20 +1,51 @@
--- 玩家：体力/手牌/存活状态/回合标记（对应原版 Player + ServerPlayer 的核心子集）
+-- 玩家：体力/手牌/装备区/判定区/身份/回合标记
+-- 对应原版 Player + ServerPlayer 的核心子集（src/core/player.h, src/server/serverplayer.h）
+--
+-- 区域对齐原版 Player::Place：PlaceHand(self.hand) / PlaceEquip(self.equips) /
+-- PlaceDelayedTrick(self.judges) / DiscardPile / DrawPile 等。
 local class = require "src.class"
 
 local Player = class("Player")
 
+-- 身份：对齐原版 Player::Role
+Player.Role = { Lord = "lord", Loyalist = "loyalist", Rebel = "rebel", Renegade = "renegade" }
+Player.ROLE_ZH = {
+  lord = "主公", loyalist = "忠臣", rebel = "反贼", renegade = "内奸",
+}
+
+-- 装备槽位（对应 Cards def 的 equip 字段）
+Player.EQUIP_SLOTS = { "weapon", "armor", "offensive_horse", "defensive_horse" }
+
 function Player:init(name, general, seat, is_human)
   self.name = name
-  self.general = general            -- engine 注册的武将表 {name, max_hp, skills}
+  self.general = general            -- engine 注册的武将表 {name, max_hp, kingdom, skills}
   self.seat = seat
   self.is_human = is_human or false
-  self.max_hp = general.max_hp
-  self.hp = general.max_hp
-  self.hand = {}                    -- Card 列表
+  self.max_hp = (general and general.max_hp) or 4
+  self.hp = self.max_hp
+  self.kingdom = (general and general.kingdom) or "qun"
+
+  self.hand = {}                    -- 手牌
+  self.equips = {                   -- 装备区
+    weapon = nil, armor = nil,
+    offensive_horse = nil, defensive_horse = nil,
+  }
+  self.judges = {}                  -- 判定区（延时锦囊）
+  self.chained = false              -- 铁索连环状态
+  self.turned_over = false          -- 翻面
+  self.extra_skills = {}            -- 运行时获得的技能
+
+  self.role = nil                   -- 身份
   self.alive = true
   self.phase = "not_active"
   self.slash_used = false           -- 本回合是否已使用杀
+  self.slash_count = 0              -- 本回合使用杀的次数（诸葛连弩判定用）
+  self.drunk = false                -- 本回合是否已饮酒
+  self.skip_play = false            -- 乐不思蜀：跳过出牌阶段
+  self.skip_draw = false            -- 兵粮寸断：跳过摸牌阶段
 end
+
+-- ===== 手牌 =====
 
 function Player:cardCount()
   return #self.hand
@@ -39,6 +70,93 @@ end
 function Player:takeCard(card)
   for i, c in ipairs(self.hand) do
     if c == card then return table.remove(self.hand, i) end
+  end
+  return nil
+end
+
+-- 所有可见区域的总牌数（卡牌守恒校验用）
+function Player:allCardCount()
+  local n = #self.hand + #self.judges
+  for _, slot in ipairs(Player.EQUIP_SLOTS) do
+    if self.equips[slot] then n = n + 1 end
+  end
+  return n
+end
+
+-- ===== 装备 =====
+
+function Player:hasEquip(name)
+  for _, slot in ipairs(Player.EQUIP_SLOTS) do
+    local c = self.equips[slot]
+    if c and c.name == name then return c end
+  end
+  return nil
+end
+
+function Player:getWeapon()
+  return self.equips.weapon
+end
+
+function Player:getArmor()
+  return self.equips.armor
+end
+
+-- 装备一张牌；返回被替换下来的旧装备（可能为 nil）
+function Player:equipCard(card, slot)
+  local old = self.equips[slot]
+  self.equips[slot] = card
+  return old
+end
+
+-- 卸下并返回指定装备
+function Player:unequipCard(card)
+  for _, slot in ipairs(Player.EQUIP_SLOTS) do
+    if self.equips[slot] == card then
+      self.equips[slot] = nil
+      return card
+    end
+  end
+  return nil
+end
+
+-- ===== 攻击范围 / 距离修正 =====
+
+-- 攻击范围：武器 range，无武器时为 1
+function Player:attackRange()
+  local w = self.equips.weapon
+  if w then
+    local Cards = require "src.core.cards"
+    local def = Cards.get(w.name)
+    if def and def.range and def.range > 0 then return def.range end
+  end
+  return 1
+end
+
+-- 进攻马 -1 / 防御马 +1；实际距离由 Room:distance 结合座位差计算
+function Player:distanceModifier()
+  return self.equips.offensive_horse and -1 or 0
+end
+
+function Player:defenseModifier()
+  return self.equips.defensive_horse and 1 or 0
+end
+
+-- ===== 判定区 =====
+
+function Player:addJudge(card)
+  table.insert(self.judges, card)
+end
+
+function Player:removeJudge(card)
+  for i, c in ipairs(self.judges) do
+    if c == card then return table.remove(self.judges, i) end
+  end
+  return nil
+end
+
+function Player:hasDelayed(name)
+  for _, c in ipairs(self.judges) do
+    if c.name == name then return c end
   end
   return nil
 end

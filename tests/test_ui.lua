@@ -1,0 +1,77 @@
+-- UI 布局回归测试：不需要图形环境，把 love.graphics 打桩后直接验证命中测试。
+--
+-- 这个测试守护的正是 A0.2/A0.3 误判为「LuaJIT 编译器错误」的那个 bug：
+-- scene_room.lua 用 self.handCardRect(i) 点号调用冒号定义的 handCardRect，
+-- 导致实参 i 被绑定到隐式 self、形参 i 收到 nil。
+-- 表现是「点牌崩溃」，根因却是调用语法。此处直接断言命中测试的分派结果。
+local real_love = love
+
+local ok, fatal = pcall(function()
+
+-- 打桩 love.graphics（core/ 不依赖 love，只有 ui 层用）
+local stub_font = setmetatable({}, { __call = function() end, __index = function() return function() end end })
+love = {
+  graphics = {
+    newFont = function() return stub_font end,
+    setFont = function() end,
+    setColor = function() end,
+    clear = function() end,
+    print = function() end,
+    printf = function() end,
+    rectangle = function() end,
+    circle = function() end,
+    getDimensions = function() return 1130, 650 end,
+  },
+}
+
+local failures, passes = 0, 0
+local function check(cond, msg)
+  if cond then passes = passes + 1 print("PASS  " .. msg)
+  else failures = failures + 1 print("FAIL  " .. msg) end
+end
+
+package.loaded["src.ui.scene_room"] = nil
+local RoomScene = require "src.ui.scene_room"
+
+-- 构造场景（init 会真实跑一局引擎初始化与 AI 推进）
+local scene = RoomScene.create(function() end)
+
+check(scene.human ~= nil, "场景应创建人类玩家")
+check(#scene.human.hand > 0, "人类玩家应有起始手牌（" .. #scene.human.hand .. " 张）")
+
+-- handCardRect 冒号调用应返回递增量 x
+local x1 = scene:handCardRect(1)
+local x2 = scene:handCardRect(2)
+check(type(x1) == "number", "handCardRect(1) 应返回数字 x（得到 " .. type(x1) .. "）")
+check(x2 > x1, "handCardRect(2) 的 x 应大于 handCardRect(1)")
+
+-- 命中测试：点每张牌中心都应命中自身
+local CARD_W, CARD_H = 62, 86
+local bad = {}
+for idx = 1, #scene.human.hand do
+  local cx, cy = scene:handCardRect(idx)
+  local card, got = scene:cardAt(cx + CARD_W / 2, cy + CARD_H / 2)
+  if not (got == idx and card == scene.human.hand[idx]) then
+    table.insert(bad, string.format("期望%d得到%s", idx, tostring(got)))
+  end
+end
+check(#bad == 0, "点击每张手牌中心都应命中自身"
+  .. (#bad == 0 and "（全部命中）" or "（" .. table.concat(bad, ",") .. "）"))
+
+-- 空白处不应命中
+local miss_card, miss_idx = scene:cardAt(5, 5)
+check(miss_card == nil and miss_idx == nil, "点击空白处不应命中任何手牌")
+
+-- draw / mousepressed 不应抛错（覆盖渲染与点击路径）
+local ok_draw, err_draw = pcall(function() scene:draw() end)
+check(ok_draw, "draw() 应无异常" .. (ok_draw and "" or ("：" .. tostring(err_draw))))
+local ok_mp, err_mp = pcall(function() scene:mousepressed(5, 5, 1) end)
+check(ok_mp, "mousepressed() 在空白处应无异常" .. (ok_mp and "" or ("：" .. tostring(err_mp))))
+
+print(string.format("\n===== UI: %d passed, %d failed =====", passes, failures))
+if failures > 0 then error("UI 测试失败", 0) end
+
+end)
+
+love = real_love
+if not ok then error(fatal, 0) end

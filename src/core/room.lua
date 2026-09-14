@@ -3,7 +3,14 @@
 -- 协程内：askForXxx 是直觉上的阻塞调用（内部 coroutine.yield 出请求）
 -- 协程外：room:step(response) 唤醒并注入响应，room.pending 变为下一个请求
 -- 由此，原版信号量挂起线程的模型被无损映射为协程，单机/网络共用同一语义。
+--
+-- 触发管线对应原版 RoomThread::trigger：
+--   trigger(event, player, data) 按 priority 升序执行所有监听该事件的技能，
+--   任一技能返回 true 即截断（取消结算）。返回 true 表示本次结算被取消。
 local class = require "src.class"
+local Cards = require "src.core.cards"
+local Card = require "src.core.card"
+local Player = require "src.core.player"
 
 local Room = class("Room")
 
@@ -20,8 +27,18 @@ function Room:init(engine, players)
   self.pending = nil     -- 当前等待响应的请求 {type=..., player=..., ...}
   self.game_over = false
   self.winner = nil
+  self.win_role = nil
   self.turn_count = 0
   self.loglines = {}
+  self.rng = nil         -- 可注入确定性 rng（测试用）
+  for _, p in ipairs(players) do p.seat = p.seat or 0 end
+end
+
+-- ===== 随机源 =====
+-- 统一走 self.rng（可注入），避免全局 math.random 破坏可复现性。
+function Room:random(n)
+  local rng = self.rng or math.random
+  return rng(n)
 end
 
 -- ===== 推进接口（协程外调用）=====
@@ -50,6 +67,45 @@ function Room:_resume(response)
   end
 end
 
+-- ===== 触发管线 =====
+
+-- 返回 true 表示结算被某个技能取消（对应原版「事件被截断」）
+function Room:trigger(event, player, data)
+  data = data or {}
+  data.event = event
+
+  local list = {}
+  for _, skill in ipairs(self.engine.global_skills or {}) do
+    if skill:listens(event) then table.insert(list, { skill = skill, owner = nil }) end
+  end
+  for _, p in ipairs(self.players) do
+    local src = (p.general and p.general.skills) or {}
+    for _, skill in ipairs(src) do
+      if skill:listens(event) then table.insert(list, { skill = skill, owner = p }) end
+    end
+    for _, skill in ipairs(p.extra_skills or {}) do
+      if skill:listens(event) then table.insert(list, { skill = skill, owner = p }) end
+    end
+  end
+  if #list == 0 then return false end
+
+  table.sort(list, function(a, b)
+    return (a.skill.priority or 0) < (b.skill.priority or 0)
+  end)
+  for _, item in ipairs(list) do
+    local who = item.owner or player
+    if item.skill:onTrigger(event, self, who, data) then
+      return true
+    end
+  end
+  return false
+end
+
+-- 纯广播（不关心返回值），保留兼容旧调用点
+function Room:broadcast(event, player, data)
+  return self:trigger(event, player, data)
+end
+
 -- ===== 询问 API（协程内调用，阻塞语义）=====
 
 -- 出牌阶段：主动使用一张牌；响应 {card=Card, target=Player} 或 nil（结束出牌）
@@ -57,17 +113,55 @@ function Room:askForUseCard(player)
   return coroutine.yield({ type = "askForUseCard", player = player })
 end
 
--- 要求打出指定名称的牌（闪/桃）；响应 Card 或 nil（不打出）
-function Room:askForCard(player, card_name, prompt)
-  return coroutine.yield({
+-- 要求打出指定名称的牌（闪/桃/杀）；响应 Card 或 nil（不打出）
+function Room:askForCard(player, card_name, prompt, extra)
+  local req = {
     type = "askForCard", player = player,
     card_name = card_name, prompt = prompt,
-  })
+  }
+  if extra then for k, v in pairs(extra) do req[k] = v end end
+  return coroutine.yield(req)
 end
 
 -- 弃牌阶段：弃 n 张；响应 Card 列表
 function Room:askForDiscard(player, n)
   return coroutine.yield({ type = "askForDiscard", player = player, n = n })
+end
+
+-- 从给定牌列表中选择一张（五谷丰登）；响应 Card
+function Room:askForChooseCard(player, cards, prompt)
+  return coroutine.yield({
+    type = "askForChooseCard", player = player,
+    cards = cards, prompt = prompt,
+  })
+end
+
+-- 令 source 玩家替 target 选择弃掉 n 张牌（过河拆桥）
+function Room:askForDiscardFrom(source, target, n)
+  local card = coroutine.yield({
+    type = "askForDiscardFrom", player = source, target = target, n = n,
+  })
+  if card and target:takeCard(card) then
+    self:log("%s 弃置 %s 的一张牌", target.name, card:zhName())
+    table.insert(self.discardPile, card)
+  end
+end
+
+-- 询问所有角色是否使用【无懈可击】抵消当前锦囊
+function Room:askForNullification(use)
+  -- 按座位顺序轮询是否有人使用【无懈可击】
+  for _, p in ipairs(self:alivePlayers()) do
+    local null = self:askForCard(p, "nullification",
+      string.format("是否【无懈可击】抵消 %s 对 %s 的【%s】？",
+        use.from.name, (use.to[1] and use.to[1].name) or "-", use.card:zhName()),
+      { ask_target = use.to[1], ask_from = use.from })
+    if null and p:takeCard(null) then
+      self:log("%s 使用【无懈可击】抵消了效果", p.name)
+      table.insert(self.discardPile, null)
+      return true
+    end
+  end
+  return false
 end
 
 -- ===== 日志与事件 =====
@@ -78,19 +172,98 @@ function Room:log(fmt, ...)
   if #self.loglines > 500 then table.remove(self.loglines, 1) end
 end
 
-function Room:broadcast(event, data)
-  for _, skill in ipairs(self.engine.global_skills) do
-    if skill.events and skill.events[event] then
-      skill:onTrigger(event, self, data)
-    end
+-- ===== 查询工具 =====
+
+function Room:alivePlayers()
+  local out = {}
+  for _, p in ipairs(self.players) do
+    if p.alive then table.insert(out, p) end
   end
-  -- 武将个人技能（阶段 A1 扩展点）：遍历玩家 general.skills
+  return out
+end
+
+function Room:otherAlivePlayers(me)
+  local out = {}
+  for _, p in ipairs(self.players) do
+    if p.alive and p ~= me then table.insert(out, p) end
+  end
+  return out
+end
+
+-- 座位距离，取环形最小值，再修正 ±马
+function Room:distance(a, b)
+  if not a or not b or a == b then return 0 end
+  local n = #self.players
+  local d = math.abs(a.seat - b.seat)
+  d = math.min(d, n - d)
+  -- 进攻马 -1、防御马 +1；最低为 1
+  local dist = d + (a:distanceModifier() or 0) + (b:defenseModifier() or 0)
+  if dist < 1 then dist = 1 end
+  return dist
+end
+
+function Room:seatOf(p)
+  for i, q in ipairs(self.players) do
+    if q == p then return i end
+  end
+  return 0
+end
+
+-- ===== 牌堆 =====
+
+function Room:drawCards(p, n)
+  for _ = 1, n do
+    if #self.drawPile == 0 then
+      if #self.discardPile == 0 then return end
+      self:log("洗牌：弃牌堆 %d 张回炉", #self.discardPile)
+      self:shuffle(self.discardPile)
+      for _, c in ipairs(self.discardPile) do table.insert(self.drawPile, c) end
+      self.discardPile = {}
+    end
+    local c = table.remove(self.drawPile)
+    table.insert(p.hand, c)
+  end
+end
+
+-- Fisher-Yates；走统一随机源，保持可复现
+function Room:shuffle(cards)
+  local rng = function(n) return self:random(n) end
+  for i = #cards, 2, -1 do
+    local j = rng(i)
+    cards[i], cards[j] = cards[j], cards[i]
+  end
+end
+
+-- 把一张牌丢进弃牌堆
+function Room:throwCard(_p, card)
+  table.insert(self.discardPile, card)
+end
+
+-- 从弃牌堆取回一张牌（【奸雄】等技能用）
+function Room:takeFromDiscard(card)
+  for i, c in ipairs(self.discardPile) do
+    if c == card then return table.remove(self.discardPile, i) end
+  end
+  return nil
+end
+
+-- 是否可无限出杀：诸葛连弩，或武将技能标记（如【咆哮】）
+function Room:allowsUnlimitedSlash(p)
+  if p:hasEquip("crossbow") then return true end
+  local skills = (p.general and p.general.skills) or {}
+  for _, s in ipairs(skills) do
+    if s.unlimited_slash then return true end
+  end
+  for _, s in ipairs(p.extra_skills or {}) do
+    if s.unlimited_slash then return true end
+  end
+  return false
 end
 
 -- ===== 主循环与回合 =====
 
 function Room:_main()
-  self:broadcast("GameStart", { room = self })
+  self:trigger("GameStart", nil, { room = self })
   self:log("游戏开始，%d 名玩家", #self.players)
   for _, p in ipairs(self.players) do
     self:drawCards(p, 4)
@@ -104,148 +277,481 @@ function Room:_main()
     if p.alive then self:_turn(p) end
     if not self.game_over then self:_advanceSeat() end
   end
+  self:trigger("GameFinished", nil, { winner = self.winner })
 end
 
 function Room:_advanceSeat()
+  local guard = 0
   repeat
     self.current_seat = (self.current_seat % #self.players) + 1
-  until self.players[self.current_seat].alive
+    guard = guard + 1
+  until self.players[self.current_seat].alive or guard > 100
 end
 
+-- 回合：六阶段，对齐原版 Player::Phase
 function Room:_turn(p)
-  p.phase = "play"
-  self:broadcast("TurnStart", { player = p })
-  self:log("—— %s 的回合（第 %d 轮）", p.name, self.turn_count)
-  self:drawCards(p, 2)
   p.slash_used = false
+  p.slash_count = 0
+  p.drunk = false
+  p.skip_play = false
+  p.skip_draw = false
 
-  while not self.game_over do
-    local use = self:askForUseCard(p)
-    if not use then break end
-    local consumed = self:useCard(p, use.card, use.target)
-    if not consumed then break end -- 引擎判定非法响应，终止出牌防止死循环
-  end
-  if self.game_over then return end
+  self:trigger("TurnStart", p, { player = p })
 
-  -- 弃牌阶段：手牌上限 = 当前体力
-  local excess = #p.hand - p.hp
-  if excess > 0 then
-    local discarded = self:askForDiscard(p, excess)
-    local n = 0
-    for _, c in ipairs(discarded or {}) do
-      if p:takeCard(c) then
-        table.insert(self.discardPile, c)
-        n = n + 1
-      end
-    end
-    if n > 0 then self:log("%s 弃置 %d 张牌", p.name, n) end
-  end
+  self:_phase(p, "start")
+  self:_phase(p, "judge")
+  self:_phase(p, "draw")
+  self:_phase(p, "play")
+  self:_phase(p, "discard")
+  self:_phase(p, "finish")
 
   p.phase = "not_active"
-  self:broadcast("TurnEnd", { player = p })
+  self:trigger("TurnEnd", p, { player = p })
 end
 
--- ===== 卡牌结算 =====
+-- 阶段机：每个阶段都发出 EventPhaseStart / EventPhaseEnd，技能可据此干预
+function Room:_phase(p, name)
+  if self.game_over or not p.alive then return end
+  p.phase = name
+  if self:trigger("EventPhaseStart", p, { player = p, phase = name }) then
+    return
+  end
+  local fn = self["_phase_" .. name]
+  if fn then fn(self, p) end
+  if self.game_over or not p.alive then return end
+  self:trigger("EventPhaseEnd", p, { player = p, phase = name })
+end
 
--- 返回 true=已消耗；false=非法响应（未消耗）
+function Room:_phase_start(_p)
+end
+
+-- 判定阶段：结算判定区里的延时锦囊
+function Room:_phase_judge(p)
+  while #p.judges > 0 do
+    local card = p.judges[1]
+    self:_judgeCard(p, card)
+  end
+end
+
+function Room:_phase_draw(p)
+  if p.skip_draw then
+    self:log("%s 跳过摸牌阶段", p.name)
+    return
+  end
+  local data = { player = p, n = 2 }
+  self:trigger("DrawNCards", p, data)
+  self:drawCards(p, data.n or 2)
+  self:trigger("AfterDrawNCards", p, data)
+end
+
+function Room:_phase_play(p)
+  if p.skip_play then
+    self:log("%s 跳过出牌阶段", p.name)
+    return
+  end
+  local guard = 0
+  while not self.game_over and p.alive do
+    guard = guard + 1
+    if guard > 100 then
+      self:log("出牌阶段异常：单回合动作数超过上限，强制结束")
+      break
+    end
+    local use = self:askForUseCard(p)
+    if not use then break end
+    local consumed = self:useCard(p, use.card, use.target or use.to)
+    if not consumed then break end -- 引擎判定非法响应，终止出牌防止死循环
+  end
+end
+
+function Room:_phase_discard(p)
+  local excess = #p.hand - p.hp
+  if excess <= 0 then return end
+  local discarded = self:askForDiscard(p, excess)
+  local n = 0
+  for _, c in ipairs(discarded or {}) do
+    if p:takeCard(c) then
+      table.insert(self.discardPile, c)
+      n = n + 1
+    end
+  end
+  if n > 0 then self:log("%s 弃置 %d 张牌", p.name, n) end
+end
+
+function Room:_phase_finish(_p)
+end
+
+-- ===== 判定 =====
+
+function Room:_judgeCard(p, card)
+  p:removeJudge(card)
+  local judge_card = nil
+  if #self.drawPile == 0 and #self.discardPile > 0 then
+    self:shuffle(self.discardPile)
+    for _, c in ipairs(self.discardPile) do table.insert(self.drawPile, c) end
+    self.discardPile = {}
+  end
+  if #self.drawPile > 0 then judge_card = table.remove(self.drawPile) end
+  if not judge_card then
+    table.insert(self.discardPile, card)
+    return nil
+  end
+
+  self:trigger("StartJudge", p, { player = p, card = card, judge = judge_card })
+
+  local def = Cards.get(card.name)
+  local result = false
+  if def and def.judge then
+    result = def.judge(self, p, judge_card) == true
+  end
+  table.insert(self.discardPile, judge_card)
+  self:trigger("FinishJudge", p, { player = p, card = card, result = result })
+
+  if result then
+    -- 延时锦囊生效后同样进入弃牌堆
+    table.insert(self.discardPile, card)
+    if def and def.on_judged then def.on_judged(self, p, true) end
+  elseif def and def.pass_on_miss then
+    -- 闪电未命中时传给下家，不进弃牌堆
+    self:passLightning(p, card)
+  else
+    table.insert(self.discardPile, card)
+  end
+  return judge_card
+end
+
+-- 闪电未命中时传给下家
+function Room:passLightning(from, card)
+  local seat = self:seatOf(from)
+  for i = 1, #self.players - 1 do
+    local nxt = self.players[((seat - 1 + i) % #self.players) + 1]
+    if nxt.alive and not nxt:hasDelayed("lightning") then
+      nxt:addJudge(card)
+      self:log("【闪电】传给 %s", nxt.name)
+      return
+    end
+  end
+  table.insert(self.discardPile, card)
+end
+
+-- ===== 卡牌使用 =====
+
+-- target 可为单个 Player 或列表；返回 true=已消耗
 function Room:useCard(from, card, target)
+  local targets = target
+  if target and target.is_human ~= nil then targets = { target } end
+  targets = targets or {}
+
   if not card or not from:takeCard(card) then
     self:log("%s 的响应包含不在手牌中的卡，忽略", from.name)
     return false
   end
-  if card.name == "slash" then
-    if from.slash_used then
+
+  local use = { from = from, card = card, to = targets }
+  local def = Cards.get(card.name)
+
+  -- AOE 类锦囊的作用目标由引擎展开，AI/UI 只需指定卡牌本身
+  if def and def.target == "all_other" then
+    targets = self:otherAlivePlayers(from)
+    use.to = targets
+  elseif def and def.target == "all" then
+    targets = self:alivePlayers()
+    use.to = targets
+  end
+
+  if self:trigger("PreCardUsed", from, use) then
+    table.insert(from.hand, card)
+    self:log("【%s】的使用被取消", card:zhName())
+    return false
+  end
+
+  -- 合法性校验（退还）
+  if not self:_validateUse(from, card, targets) then
+    table.insert(from.hand, card)
+    return false
+  end
+
+  self:trigger("CardUsed", from, use)
+
+  -- 锦囊（含延时锦囊）可被【无懈可击】抵消
+  if def and def.nullifiable and self:askForNullification(use) then
+    table.insert(self.discardPile, card)
+    return true
+  end
+
+  if def and Cards.isDelayed(card.name) then
+    -- 延时锦囊进判定区而非弃牌堆
+    local t = targets[1]
+    t:addJudge(card)
+    self:log("%s 对 %s 使用【%s】", from.name, t.name, card:zhName())
+    return true
+  end
+
+  if def and def.ctype == Card.Type.Equip then
+    self:_equipCard(from, card)
+    return true
+  end
+
+  if def and def.ctype == Card.Type.Trick and def.effect then
+    table.insert(self.discardPile, card)
+    self:trigger("CardEffect", from, use)
+    def.effect(self, use)
+    self:trigger("CardFinished", from, use)
+    return true
+  end
+
+  return self:_useBasic(from, card, targets)
+end
+
+-- 基本牌结算：杀 / 桃 / 酒
+function Room:_useBasic(from, card, targets)
+  local name = card.name
+
+  if name == "slash" or name == "fire_slash" or name == "thunder_slash" then
+    local target = targets[1]
+    if from.slash_count > 0 and not self:allowsUnlimitedSlash(from) then
       self:log("%s 本回合已使用过【杀】，退还", from.name)
       table.insert(from.hand, card)
       return false
     end
+    if not target or target == from or not target.alive then
+      self:log("【杀】的目标非法，退还")
+      table.insert(from.hand, card)
+      return false
+    end
+    if self:distance(from, target) > from:attackRange() then
+      self:log("目标不在攻击范围内（距离 %d > 范围 %d），退还",
+        self:distance(from, target), from:attackRange())
+      table.insert(from.hand, card)
+      return false
+    end
     from.slash_used = true
-  end
-  if card.name == "peach" and from.hp >= from.max_hp then
-    self:log("%s 体力已满，不能使用【桃】，退还", from.name)
-    table.insert(from.hand, card)
-    return false
-  end
-  if card.name == "slash" and (not target or target == from or not target.alive) then
-    self:log("【杀】的目标非法，退还")
-    table.insert(from.hand, card)
-    from.slash_used = false
-    return false
-  end
+    from.slash_count = from.slash_count + 1
+    table.insert(self.discardPile, card)
+    self:_resolveSlash(from, target, card)
+    return true
 
-  self:broadcast("CardUsed", { from = from, card = card, to = target })
-  table.insert(self.discardPile, card)
-
-  if card.name == "slash" then
-    self:_resolveSlash(from, target)
-  elseif card.name == "peach" then
+  elseif name == "peach" then
+    if from.hp >= from.max_hp then
+      self:log("%s 体力已满，不能使用【桃】，退还", from.name)
+      table.insert(from.hand, card)
+      return false
+    end
+    table.insert(self.discardPile, card)
     self:log("%s 使用【桃】", from.name)
     self:heal(from, 1)
-  else
-    self:log("%s 打出 %s（暂无结算规则）", from.name, card:displayName())
+    return true
+
+  elseif name == "analeptic" then
+    if from.hp < from.max_hp then
+      table.insert(self.discardPile, card)
+      self:log("%s 濒死时使用【酒】回复体力", from.name)
+      self:heal(from, 1)
+    else
+      from.drunk = true
+      table.insert(self.discardPile, card)
+      self:log("%s 饮酒，下一张【杀】伤害 +1", from.name)
+    end
+    return true
+
+  elseif name == "dodge" then
+    -- 【闪】不能主动使用
+    self:log("【闪】不能主动使用，退还")
+    table.insert(from.hand, card)
+    return false
+  end
+
+  self:log("%s 打出 %s（暂无结算规则）", from.name, card:zhName())
+  table.insert(self.discardPile, card)
+  return true
+end
+
+function Room:_validateUse(from, card, targets)
+  local def = Cards.get(card.name)
+  if not def then return true end
+  if def.distance then
+    local t = targets[1]
+    if t and self:distance(from, t) > def.distance then
+      self:log("目标超出【%s】的距离限制（%d > %d），退还",
+        card:zhName(), self:distance(from, t), def.distance)
+      return false
+    end
+  end
+  if def.target == "none" then return true end
+  if #targets == 0 and def.target ~= "self" then
+    self:log("【%s】需要目标，退还", card:zhName())
+    return false
   end
   return true
 end
 
-function Room:_resolveSlash(from, to)
-  self:log("%s 对 %s 使用【杀】", from.name, to.name)
-  local dodge = self:askForCard(to, "dodge", string.format("%s 对你使用【杀】，请打出【闪】", from.name))
-  if dodge and to:takeCard(dodge) then
-    self:log("%s 打出【闪】", to.name)
+-- 装备：旧装备进弃牌堆；白银狮子失去时回血
+function Room:_equipCard(from, card)
+  local def = Cards.get(card.name)
+  local slot = def and def.equip or "weapon"
+  local old = from:equipCard(card, slot)
+  if old then
+    table.insert(self.discardPile, old)
+    local olddef = Cards.get(old.name)
+    if olddef and old.name == "silver_lion" then
+      self:log("%s 失去【白银狮子】，回复 1 点体力", from.name)
+      self:heal(from, 1)
+    end
+  end
+  self:log("%s 装备【%s】", from.name, card:zhName())
+end
+
+-- ===== 杀的结算 =====
+
+function Room:_resolveSlash(from, to, card)
+  local nature = "normal"
+  if card.name == "fire_slash" then nature = "fire" end
+  if card.name == "thunder_slash" then nature = "thunder" end
+
+  self:log("%s 对 %s 使用【%s】", from.name, to.name, card:zhName())
+
+  -- 藤甲：普通杀无效
+  if nature == "normal" and to:hasEquip("vine") then
+    self:log("%s 的【藤甲】使普通【杀】无效", to.name)
+    self:trigger("SlashMissed", to, { from = from, to = to })
+    return
+  end
+  -- 仁王盾：黑色杀无效
+  local armor = to:getArmor()
+  local ignore_armor = from:hasEquip("qinggang_sword") ~= nil
+  if armor and armor.name == "renwang_shield" and not ignore_armor and not card:isRed() then
+    self:log("%s 的【仁王盾】使黑色【杀】无效", to.name)
+    self:trigger("SlashMissed", to, { from = from, to = to })
+    return
+  end
+
+  if self:trigger("SlashEffected", to, { from = from, to = to, card = card }) then
+    return
+  end
+
+  local dodged = false
+  local dodge = self:askForCard(to, "dodge",
+    string.format("%s 对你使用【%s】，请打出【闪】", from.name, card:zhName()))
+  if dodge and dodge.name == "dodge" and to:takeCard(dodge) then
+    dodged = true
     table.insert(self.discardPile, dodge)
-  else
-    self:damage(from, to, 1)
+    self:log("%s 打出【闪】", to.name)
+  end
+
+  -- 八卦阵：未打出【闪】时可判定，红色视为打出【闪】
+  if not dodged and to:hasEquip("eight_diagram") and not ignore_armor then
+    local judge = (#self.drawPile > 0) and table.remove(self.drawPile) or nil
+    if judge then
+      local red = judge:isRed()
+      table.insert(self.discardPile, judge)
+      self:log("%s 的【八卦阵】判定 %s %s", to.name, judge:suitString(),
+        red and "红色，视为打出【闪】" or "黑色，防具失效")
+      dodged = red
+    end
+  end
+
+  if dodged then
+    self:trigger("SlashMissed", to, { from = from, to = to })
+    return
+  end
+
+  -- 命中
+  self:trigger("SlashHit", to, { from = from, to = to, card = card })
+
+  -- 寒冰剑：改为弃两张牌
+  if from:hasEquip("ice_sword") then
+    self:log("%s 的【寒冰剑】改为弃置 %s 两张牌", from.name, to.name)
+    self:askForDiscardFrom(from, to, 2)
+    return
+  end
+
+  local n = 1
+  if from.drunk then
+    n = n + 1
+    from.drunk = false
+    self:log("【酒】使伤害 +1")
+  end
+  if nature == "fire" and to:hasEquip("vine") then
+    n = n + 1
+    self:log("【藤甲】使火焰伤害 +1")
+  end
+
+  self:damage(from, to, n, nature, card)
+
+  -- 麒麟弓：命中后弃目标一匹马
+  if from:hasEquip("kylin_bow") and to.alive then
+    for _, slot in ipairs { "offensive_horse", "defensive_horse" } do
+      local horse = to.equips[slot]
+      if horse then
+        to.equips[slot] = nil
+        table.insert(self.discardPile, horse)
+        self:log("%s 的【麒麟弓】击落 %s 的【%s】", from.name, to.name, horse:zhName())
+        break
+      end
+    end
   end
 end
 
 -- ===== 伤害/治疗/死亡 =====
+-- nature: "normal" / "fire" / "thunder"；card 为造成伤害的那张牌（【奸雄】等技能需要）
+function Room:damage(from, to, n, nature, card)
+  nature = nature or "normal"
+  local data = { from = from, to = to, n = n, nature = nature, card = card }
 
-function Room:damage(from, to, n)
-  self:broadcast("DamageCaused", { from = from, to = to, n = n })
+  if self:trigger("DamageForseen", to, data) then return end
+  if from and self:trigger("DamageCaused", from, data) then return end
+  if self:trigger("DamageInflicted", to, data) then return end
+
+  -- 白银狮子：伤害大于 1 时改为 1
+  local armor = to:getArmor()
+  local ignore_armor = from and from:hasEquip("qinggang_sword") ~= nil
+  if armor and armor.name == "silver_lion" and data.n > 1 and not ignore_armor then
+    self:log("%s 的【白银狮子】将伤害削减为 1", to.name)
+    data.n = 1
+  end
+
+  if self:trigger("PreDamageDone", to, data) then return end
+
+  n = data.n
   to.hp = to.hp - n
-  self:log("%s 受到 %s 造成的 %d 点伤害（剩 %d 体力）",
-    to.name, from and from.name or "系统", n, math.max(to.hp, 0))
-  self:broadcast("Damaged", { from = from, to = to, n = n })
+  self:log("%s 受到 %s 造成的 %d 点%s伤害（剩 %d 体力）",
+    to.name, from and from.name or "系统", n,
+    nature == "fire" and "火焰" or nature == "thunder" and "雷" or "",
+    math.max(to.hp, 0))
+
+  self:trigger("DamageDone", to, data)
+  self:trigger("Damage", to, data)
+  self:trigger("Damaged", to, data)
+
+  -- 铁索连环传导
+  if nature ~= "normal" and to.chained then
+    self:_spreadChain(to, from, n, nature)
+  end
+
+  self:trigger("DamageComplete", to, data)
+
   if to.hp <= 0 then
     to.hp = 0
     self:_dying(to)
   end
 end
 
-function Room:_dying(p)
-  self:broadcast("Dying", { player = p })
-  self:log("%s 濒死，请求【桃】", p.name)
-  while p.hp <= 0 do
-    local peach = self:askForCard(p, "peach", "你已濒死，请使用【桃】（不出则阵亡）")
-    if not peach or not p:takeCard(peach) then
-      self:_kill(p)
-      return
-    end
-    table.insert(self.discardPile, peach)
-    self:log("%s 使用【桃】", p.name)
-    self:heal(p, 1)
-  end
-end
-
-function Room:_kill(p)
-  p.alive = false
-  self:broadcast("Death", { player = p })
-  self:log("%s 阵亡", p.name)
-  for i = #p.hand, 1, -1 do
-    table.insert(self.discardPile, table.remove(p.hand, i))
-  end
-  self:_checkWinner()
-end
-
-function Room:_checkWinner()
-  local alive = {}
+-- 属性伤害传导到所有处于连环状态的角色（单次传导，不再级联）
+function Room:_spreadChain(origin, from, n, nature)
+  self:log("【%s】伤害沿铁索连环传导", nature == "fire" and "火" or "雷")
   for _, p in ipairs(self.players) do
-    if p.alive then table.insert(alive, p) end
-  end
-  if #alive <= 1 then
-    self.game_over = true
-    self.winner = alive[1]
-    self:log("游戏结束，%s 获胜", self.winner and self.winner.name or "无人")
+    if p ~= origin and p.chained and p.alive then
+      self:log("铁索连环：伤害传导至 %s", p.name)
+      local data = { from = from, to = p, n = n, nature = nature }
+      if not self:trigger("DamageInflicted", p, data) then
+        p.hp = p.hp - n
+        if p.hp <= 0 then
+          p.hp = 0
+          self:_dying(p)
+        else
+          self:trigger("Damaged", p, data)
+        end
+      end
+    end
   end
 end
 
@@ -256,28 +762,55 @@ function Room:heal(p, n)
   end
 end
 
--- ===== 牌堆 =====
-
-function Room:drawCards(p, n)
-  for _ = 1, n do
-    if #self.drawPile == 0 then
-      if #self.discardPile == 0 then error("牌堆与弃牌堆均空", 0) end
-      self:log("洗牌：弃牌堆 %d 张回炉", #self.discardPile)
-      self._rng = self._rng or math.random
-      self:shuffle(self.discardPile)
-      self.drawPile, self.discardPile = self.discardPile, {}
+function Room:_dying(p)
+  self:trigger("Dying", p, { player = p })
+  self:log("%s 濒死，请求【桃】", p.name)
+  while p.hp <= 0 do
+    local peach = self:askForCard(p, "peach", "你已濒死，请使用【桃】/【酒】（不出则阵亡）")
+    if peach and p:takeCard(peach) then
+      table.insert(self.discardPile, peach)
+      self:log("%s 使用【桃】", p.name)
+      self:heal(p, 1)
+    else
+      local wines = p:findCardsByName("analeptic")
+      if #wines > 0 then
+        local wine = p:takeCard(wines[1])
+        table.insert(self.discardPile, wine)
+        self:log("%s 使用【酒】回复体力", p.name)
+        self:heal(p, 1)
+      else
+        self:_kill(p)
+        return
+      end
     end
-    local c = table.remove(self.drawPile)
-    table.insert(p.hand, c)
   end
+  self:trigger("QuitDying", p, { player = p })
 end
 
--- Fisher-Yates；可选注入确定性 rng（测试用）
-function Room:shuffle(cards, rng)
-  rng = rng or math.random
-  for i = #cards, 2, -1 do
-    local j = rng(i)
-    cards[i], cards[j] = cards[j], cards[i]
+function Room:_kill(p)
+  p.alive = false
+  self:trigger("Death", p, { player = p })
+  self:log("%s 阵亡", p.name)
+  for i = #p.hand, 1, -1 do
+    table.insert(self.discardPile, table.remove(p.hand, i))
+  end
+  for _, card in ipairs(p.judges) do table.insert(self.discardPile, card) end
+  p.judges = {}
+  for _, slot in ipairs(Player.EQUIP_SLOTS) do
+    local e = p.equips[slot]
+    if e then table.insert(self.discardPile, e) end
+    p.equips[slot] = nil
+  end
+  self:_checkWinner()
+end
+
+function Room:_checkWinner()
+  local alive = self:alivePlayers()
+  if #alive <= 1 then
+    self.game_over = true
+    self.winner = alive[1]
+    self.win_role = self.winner and self.winner.role or nil
+    self:log("游戏结束，%s 获胜", self.winner and self.winner.name or "无人")
   end
 end
 
