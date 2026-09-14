@@ -10,7 +10,19 @@ local Cards = require "src.core.cards"
 local Card = require "src.core.card"
 local Room = require "src.core.room"
 local Driver = require "src.core.driver"
+
+-- 演示节奏（秒）：一条表现播完后隔多久播下一条。
+-- 必须声明在文件顶部 —— update() 在它之前定义，晚声明会取到 nil。
+-- 不加这层的话 driver:advance() 会同步跑完所有 BOT 行动，
+-- 十几条语音和特效在同一帧一起触发，全糊在一起（用户实测反馈）。
+local PRESENT_DELAY = {
+  useCard = 0.42,  -- 出牌
+  skill   = 0.62,  -- 发动技能（台词最长，留足时间）
+  damage  = 0.34,  -- 受伤
+  death   = 0.85,  -- 阵亡
+}
 local Bot = require "src.core.bot"
+local Agent = require "src.core.ai.agent"
 local Skin = require "src.ui.skin"
 local Audio = require "src.ui.audio"
 local Layout = require "src.ui.layout"
@@ -29,7 +41,8 @@ local ANCHORS_4 = {
 }
 local ANCHORS_2 = { [1] = { 40, 440 }, [2] = { 40, 24 } }
 
-function RoomScene:init(on_exit, mode, size)
+-- ai_mode: "off"（无人托管）/ "others"（除你以外的座位）/ "all"（全托管，含你自己）
+function RoomScene:init(on_exit, mode, size, ai_mode)
   -- 皮肤配置（原版 skins/*.json）与音频。缺资源时全部安全降级，不影响对局。
   self.skin = Skin.create()
   self.cardImages = {}
@@ -75,8 +88,41 @@ function RoomScene:init(on_exit, mode, size)
     self.room:setupRoles(Standard.makeRng(seed + 1))
   end
   self.room:start()
-  self.driver = Driver.create(self.room, Bot.make())
-  self.driver:advance()
+
+  -- ===== AI 响应源 =====
+  -- 座位标成 "ai" 后，Driver 会把它的请求转给 Agent；Agent 拿不到模型输出时
+  -- 会静默回落规则 BOT，所以**没配接口也不会卡死**，只是打得像 BOT。
+  -- agent 始终创建（传输层可以为空，空就等于一直用规则 BOT），
+  -- 这样牌桌上按数字键随时能把任意座位切给 AI，不用回菜单重开。
+  self.ai_mode = ai_mode or "off"
+  self.ai_error = nil
+  local transport = nil
+  if self.ai_mode ~= "off" then
+    local ok, mod = pcall(require, "src.ui.ai_transport")
+    if ok then
+      transport, self.ai_error = mod.fromEnv()
+    else
+      self.ai_error = "无法加载 AI 传输层：" .. tostring(mod)
+    end
+    if self.ai_mode == "others" then
+      for _, p in ipairs(players) do
+        if not p.is_human then p:setControl("ai") end
+      end
+    elseif self.ai_mode == "all" then
+      for _, p in ipairs(players) do p:setControl("ai") end
+    end
+  end
+  self.agent = Agent.create({
+    transport = transport,
+    -- 用 love.timer 而不是 os.time：os.time 只有秒级精度，超时判断会差一整秒
+    clock = love.timer and love.timer.getTime or nil,
+    on_error = function(reason)
+      print(string.format("[AI] 回落规则 BOT：%s", tostring(reason)))
+    end,
+  })
+
+  self.driver = Driver.create(self.room, Bot.make(), self.agent)
+  self.driver_state = self.driver:advance()
 
   -- 布局：优先按原版 layout.json 的间距参数推导（自适应人数），
   -- 缺少配置时 Layout 内部会退回与原来一致的固定锚点。
@@ -93,6 +139,12 @@ function RoomScene:init(on_exit, mode, size)
   self.font_sm = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 12)
   self.msg = ""
   self.buttons = {}
+  -- 演示队列：BOT 的每次出牌/发动技能/受伤/阵亡先入队，再按节奏逐个播放。
+  -- 不加这层的话 driver:advance() 会**同步跑完所有 BOT 行动**，
+  -- 十几条语音和特效在同一帧一起触发，全糊在一起（用户实测反馈）。
+  self.presentQueue = {}
+  self.presentTimer = 0
+
   self.selected = {}   -- 弃牌多选
   self.revealed = nil  -- askForChooseCard 候选
   self.picked = nil    -- 已选中、等待指定目标的卡牌
@@ -247,8 +299,25 @@ end
 
 function RoomScene:update(dt)
   if self.effects and dt then self.effects:update(dt) end
+
+  -- 演示队列：一次播一条，播完等它对应的间隔再播下一条。
+  -- 队列没排空前**不推进引擎**，这样 BOT 的一串行动会被摊开到若干秒里，
+  -- 语音与特效不再叠在一起。
+  if #self.presentQueue > 0 then
+    self.presentTimer = self.presentTimer - (dt or 0)
+    if self.presentTimer <= 0 then
+      local e = table.remove(self.presentQueue, 1)
+      self:playPresent(e)
+      self.presentTimer = PRESENT_DELAY[e.kind] or 0.4
+    end
+    self:_refreshButtons()
+    return
+  end
+
   if not self.room.game_over then
-    self.driver:advance()
+    -- AI 思考时这里会返回 "thinking"，什么都不做即可：
+    -- 下一帧再问一次，Agent 内部会继续轮询，主线程全程不阻塞。
+    self.driver_state = self.driver:advance()
   end
   self:_refreshButtons()
   local req = self.room.pending
@@ -257,6 +326,26 @@ function RoomScene:update(dt)
     self.picked = nil
     self.dragging = nil
   end
+end
+
+-- 数字键 1..N：把对应座位在「AI 托管」与「原本控制者」之间切换。
+-- 这是「任意座位可切 AI」的现场开关——想让 AI 替你打一手，按 1；
+-- 想看某个对手由 LLM 决策，按它的座位号。
+local CONTROL_ZH = { human = "你来操作", bot = "规则 BOT", ai = "AI 托管" }
+
+function RoomScene:keypressed(key)
+  local n = tonumber(key)
+  if not n or n < 1 or n > #self.players then return end
+  local p = self.players[n]
+  if not p then return end
+  local back = p.is_human and "human" or "bot"
+  local next_mode = (p:controlMode() == "ai") and back or "ai"
+  p:setControl(next_mode)
+  self.msg = string.format("%d 号位（%s）→ %s", n, p.name, CONTROL_ZH[next_mode] or next_mode)
+  if not self.room.game_over then
+    self.driver_state = self.driver:advance()
+  end
+  self:_refreshButtons()
 end
 
 -- 拖拽中某个面板的落点状态：ok=可落 / bad=不可落 / dead=已阵亡
@@ -321,6 +410,12 @@ end
 
 function RoomScene:mousepressed(x, y, button)
   if button ~= 1 then return end
+  -- 演示进行中不接受操作：此时画面还在播上一段，
+  -- 让玩家出牌会出现「状态已推进、画面没跟上」的错位
+  if self:isPresenting() then
+    self.msg = "对手行动中…"
+    return
+  end
   self.msg = "" -- 每次点击重新计算提示，避免上一条反馈一直挂着
   for _, b in ipairs(self.buttons) do
     if x >= b.x and x <= b.x + b.w and y >= b.y and y <= b.y + b.h then
@@ -508,60 +603,66 @@ end
 
 -- 把音频与动效挂到引擎的表现层事件上。
 -- 音效键名沿用原版 audio.json；缺失时 Audio 内部静默降级。
+-- 把音频与动效挂到引擎的表现层事件上。
+-- 音效键名沿用原版 audio.json；缺失时 Audio 内部静默降级。
+--
+-- 关键：这里**不直接播放**，而是入队，由 update 按节奏逐个播放。
+-- 引擎是同步推进的（一次 advance 可能跑完十几个 BOT 行动），
+-- 直接播就会全部叠在一起。
+function RoomScene:enqueuePresent(kind, d)
+  table.insert(self.presentQueue, { kind = kind, data = d })
+end
+
+function RoomScene:isPresenting()
+  return #self.presentQueue > 0
+end
+
+-- 演示队列为空之前不接受玩家操作，避免状态与画面错位
+function RoomScene:playPresent(e)
+  local room = self.room
+  local audio, fx = self.audio, self.effects
+  local d = e.data
+  if e.kind == "useCard" then
+    if d and d.card then
+      if audio then audio:play(d.card.name) end
+      if d.from and fx then
+        fx:showBanner(string.format("%s 使用【%s】", d.from.name, d.card:zhName()))
+      end
+    end
+  elseif e.kind == "damage" then
+    if d and d.to then
+      if audio then audio:play("injure") end
+      local a = self:anchorOf(d.to)
+      if a and fx then
+        fx:float(a[1] + (self.panelW or 210) / 2, a[2] + 30, "-" .. tostring(d.n))
+      end
+    end
+  elseif e.kind == "skill" then
+    if not d then return end
+    if audio then audio:playSkill(d.skill) end
+    if d.player then
+      if fx then fx:showBanner(string.format("%s 发动【%s】", d.player.name, tostring(d.skill)), { 0.95, 0.85, 0.35 }) end
+      local a = self:anchorOf(d.player)
+      if a and fx then
+        fx:flashPanel(a[1], a[2], self.panelW or 210, self.panelH or 96, { 0.95, 0.85, 0.35 })
+      end
+    end
+  elseif e.kind == "death" then
+    if d and d.player then
+      if audio then
+        if not (d.key and audio:play(d.key)) then audio:play("death") end
+      end
+      if fx then fx:showBanner(string.format("%s 阵亡", d.player.name), { 0.9, 0.3, 0.25 }) end
+    end
+  end
+end
+
 function RoomScene:bindPresentationHooks()
   local room = self.room
   if not room then return end
-  -- 注意：闭包里要取 self.audio / self.effects，不能在绑定时捕获成 local。
-  -- 捕获之后替换 self.audio（比如测试里换成打桩对象）就完全不生效。
-
-  room:onEvent("useCard", function(d)
-    if d and d.card then
-      if self.audio then self.audio:play(d.card.name) end
-      if d.from then
-        if self.effects then self.effects:showBanner(string.format("%s 使用【%s】", d.from.name, d.card:zhName())) end
-      end
-    end
-  end)
-
-  room:onEvent("damage", function(d)
-    if d and d.to then
-      if self.audio then self.audio:play("injure") end
-      local a = self:anchorOf(d.to)
-      if a and self.effects then
-        self.effects:float(a[1] + (self.panelW or 210) / 2, a[2] + 30, "-" .. tostring(d.n))
-      end
-    end
-  end)
-
-  -- 技能发动：台词（原版 audio/skill/<拼音>1|2.ogg）+ 横幅 + 面板闪光
-  --
-  -- 注意：横幅**不能**挂在「台词是否播放成功」上。
-  -- 以前写成 `if audio:playSkill(...) then showBanner(...) end`，
-  -- 结果：没台词的技能（如被动技【马术】）发动时零反馈；
-  -- 更糟的是无音频环境下 playSkill 恒为 false，**横幅永远不显示**。
-  -- 音频与视觉是两件事，必须分开。
-  room:onEvent("skill", function(d)
-    if not d then return end
-    if self.audio then self.audio:playSkill(d.skill) end
-    if not d.player then return end
-    if self.effects then self.effects:showBanner(string.format("%s 发动【%s】", d.player.name, tostring(d.skill)), { 0.95, 0.85, 0.35 }) end
-    local a = self:anchorOf(d.player)
-    if a then
-      if self.effects then self.effects:flashPanel(a[1], a[2], self.panelW or 210, self.panelH or 96,
-          { 0.95, 0.85, 0.35 })
-      end
-    end
-  end)
-
-  room:onEvent("death", function(d)
-    if d and d.player then
-      -- 阵亡台词按武将拼音（audio/death/<key>.ogg），取不到再退回通用 death
-      if self.audio then
-        if not (d.key and self.audio:play(d.key)) then self.audio:play("death") end
-      end
-      if self.effects then self.effects:showBanner(string.format("%s 阵亡", d.player.name), { 0.9, 0.3, 0.25 }) end
-    end
-  end)
+  for _, kind in ipairs({ "useCard", "damage", "skill", "death" }) do
+    room:onEvent(kind, function(d) self:enqueuePresent(kind, d) end)
+  end
 end
 
 function RoomScene:anchorOf(p)
@@ -883,11 +984,23 @@ function RoomScene:draw()
         prompt = "过河拆桥：点【确定拆牌】弃掉对手一张手牌"
       end
     elseif req then
-      prompt = "等待 " .. req.player.name .. " 响应…"
+      if self.driver_state == "thinking" and self.agent then
+        prompt = (self.agent:thinkingLabel() or "AI 思考中") .. "…"
+      else
+        prompt = "等待 " .. req.player.name .. " 响应…"
+      end
     end
   end
   love.graphics.setColor(1, 1, 0.85)
   love.graphics.print(prompt, 40, 620)
+
+  -- AI 未配置时给一句明确提示：否则「开着 AI 却打得像 BOT」会让人以为是坏了
+  if self.ai_mode ~= "off" and self.ai_error then
+    love.graphics.setColor(1, 0.6, 0.5)
+    love.graphics.setFont(self.font_sm)
+    love.graphics.print("AI 未启用（" .. self.ai_error .. "），这些座位正由规则 BOT 代打", 40, 588)
+    love.graphics.setFont(self.font)
+  end
 
   -- 按钮
   love.graphics.setFont(self.font)

@@ -21,7 +21,7 @@ D（网络对局）进行中：联机/重连/观战/聊天已通，UI 联调未�
 
 资源已**自带**在 `assets/`（约 28MB），不再引用原 QSanguosha 源码目录。
 
-测试：**核心 418 + UI 12 + 网络 45 = 475 全通过**。
+测试：**核心 426 + UI 55 + AI 46 = 527 全通过**（另有网络 45，走 `--net`）。
 
 ## 牌堆口径
 
@@ -57,6 +57,46 @@ Standard.PRESET = "extended"   -- 切回混堆；默认 "standard"
 
 距离/出杀次数/禁止技一律由引擎判定（`Room:canUseCardOn`），UI 不自己算规则。
 
+## AI 玩家（LLM 驱动）
+
+任意座位都能交给 AI：菜单上「AI 托管」切三档（关 / 其他座位 / 全部），
+进牌桌后按**数字键 1..N** 可随时切单个座位（想让 AI 替你打一手就按 1）。
+
+```bash
+export SGS_AI_URL="https://api.openai.com/v1/chat/completions"
+export SGS_AI_KEY="sk-..."
+export SGS_AI_MODEL="gpt-4o-mini"   # 可选
+./run-game.sh
+```
+
+不配也能玩：拿不到模型输出时 AI 会**静默回落规则 BOT**，牌桌顶部给一行提示。
+
+设计上三条硬规矩：
+
+| 规矩 | 原因 |
+| --- | --- |
+| LLM 只在**枚举出的编号候选**里选 | 结构上不可能出非法动作；提示词短、解析稳 |
+| 观察层**只给该玩家可知的信息** | 别人手牌只给张数、未亮身份显示「未知」，否则身份局等于开图作弊 |
+| 任何异常都回落 BOT | 超时/解析失败/动作非法——联网的东西一定会失败，游戏一次都不能卡死 |
+
+主线程不等网络：请求丢给后台线程跑 curl，UI 每帧 poll。
+
+> 为什么是 curl 而不是 `socket.http`：LÖVE 内置的 LuaSocket **没有 luasec**
+> （`ssl.https` 直接 require 失败），而 LLM 接口一律 HTTPS。系统 curl 支持 TLS，
+> `io.popen` 实测可用。
+
+```
+src/core/ai/view.lua      观察层（信息隐藏）
+src/core/ai/actions.lua   合法动作枚举（复用 canUseCardOn 等引擎校验）
+src/core/ai/prompt.lua    提示词
+src/core/ai/parse.lua     解析 + 校验（编号越界/数量不符一律拒）
+src/core/ai/agent.lua     响应源：异步状态机 + 降级到 BOT
+src/core/ai/transport.lua 传输层接口（mock / 同步 curl）
+src/ui/ai_transport.lua   LÖVE 实现：love.thread + curl，不阻塞主线程
+```
+
+未接真实模型跑过——链路是用 mock 全量验证的（46 项），真机待验。
+
 ## 表现层（音效与动效）
 
 引擎 `emit` 出 `useCard / damage / skill / death` 四个事件，UI 挂上去做表现：
@@ -69,6 +109,20 @@ Standard.PRESET = "extended"   -- 切回混堆；默认 "standard"
 | 阵亡 | 阵亡台词（按武将拼音）+ 横幅 |
 
 > 动效是自己实现的：原版 `skins/defaultSkin.animation.json` 在这个皮肤里是空的。
+
+**演示节奏**：引擎是同步推进的，一次 `driver:advance()` 可能跑完十几个 BOT 行动，
+直接播会让十几条语音和特效在同一帧一起触发、全部重叠。
+所以表现事件先进 `presentQueue`，再由 `update` 按节奏逐条播放：
+
+| 事件 | 间隔 |
+| --- | --- |
+| 出牌 | 0.42s |
+| 发动技能 | 0.62s（台词最长） |
+| 受伤 | 0.34s |
+| 阵亡 | 0.85s |
+
+队列排空前**不推进引擎、不接受玩家操作**（提示「对手行动中…」），
+避免「状态已推进、画面没跟上」的错位。
 > **音频与视觉是两件事**——横幅不依赖台词是否播放成功，
 > 否则没台词的技能（如被动技【马术】）和无音频环境下会完全没有反馈。
 
@@ -139,7 +193,8 @@ assets/       资源：image/  audio/  skins/  font/（自带，无需原项目�
 ```
 
 **术语**：`BOT` = 规则驱动的脚本对手（`src/core/bot.lua`，无学习/推理/搜索）；
-`AI` 留给将来由 LLM 驱动的玩家。详见 DESIGN.md「五、开发约定 0」。
+`AI` = 由 LLM 驱动的玩家（`src/core/ai/`）。两者是**并列**的响应源，
+详见 DESIGN.md「五、开发约定 0」与下面的「AI 玩家」一节。
 
 ## 路线图
 
@@ -151,6 +206,7 @@ assets/       资源：image/  audio/  skins/  font/（自带，无需原项目�
 | C | 完整 UI（皮肤/布局/音频/动效） | ✅（待实机验证观感） |
 | D | LuaSocket 网络服务端 + 多人 | 🚧 进行中（联机/重连/观战/聊天/UI 联调已完成，缺多房间大厅） |
 | E | 标准版对标补齐（濒死救援/主公技/武器/花色表） | ✅ 完成，见 `AUDIT-标准版对标.md` 与 `PLAN-标准版补齐.md` |
+| F | LLM 驱动的 AI 玩家 | ✅ 链路完成（mock 验证 46 项），待接真实模型实机验证 |
 
 **E 阶段背景**：对照「基础版武将与卡牌全表」「身份局游玩说明」两份文档审计后，
 发现角色/牌型/规则上的缺口，审计结论见 `AUDIT-标准版对标.md`，

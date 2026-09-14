@@ -46,6 +46,24 @@ function Player:init(name, general, seat, is_human)
   self.skip_draw = false            -- 兵粮寸断：跳过摸牌阶段
 end
 
+-- ===== 谁在操作这个座位 =====
+--
+-- 三态：human（UI 点击）/ bot（规则脚本）/ ai（LLM）。
+-- 新增 controller 而不是复用 is_human，是因为二者语义不同：
+--   is_human = 「这是不是人类座位」（决定 UI 要不要显示手牌、要不要响应点击）
+--   controller = 「这一手由谁做决定」
+-- AI 托管人类位时两个都要为真：既显示手牌，又由 AI 决策。
+function Player:controlMode()
+  if self.controller then return self.controller end
+  return self.is_human and "human" or "bot"
+end
+
+-- 把座位交给某个响应源。is_human 不动——「谁看得到手牌」与「谁做决定」是两回事
+function Player:setControl(mode)
+  self.controller = mode
+  return self
+end
+
 -- ===== 手牌 =====
 
 function Player:cardCount()

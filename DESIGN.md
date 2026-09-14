@@ -17,6 +17,7 @@
 │   room.lua     协程房间循环（阻塞语义核心）    │
 │   standard.lua 标准包：杀/闪/桃 起步          │
 │   bot.lua      基础 BOT：规则驱动的脚本对手（非机器学习/LLM）│
+│   ai/          LLM 驱动的玩家（观察/动作/提示词/解析/降级）│
 ├─────────────────────────────────────────────┤
 │ src/sgs/       sgs.* 兼容 API 层             │  长出后直接吃 diy/ 社区扩展
 └─────────────────────────────────────────────┘
@@ -32,7 +33,8 @@ tools/           便携 LÖVE（love.app，gitignore）
 
 - 协程内：`self:askForCard(...)` 直觉上的阻塞调用，内部 `coroutine.yield(请求)`
 - 协程外（驱动器）：`room:step(response)` 唤醒并注入响应，取回下一个请求
-- 请求路由：人类玩家 → UI 事件等待；BOT → 同步计算；网络对局 → socket 消息（阶段 D）
+- 请求路由：人类玩家 → UI 事件等待；BOT → 同步计算；AI → 异步（可返回 thinking）；
+  网络对局 → socket 消息（阶段 D）
 
 ### 2. sgs.* 兼容层是社区内容的生命线
 
@@ -269,6 +271,45 @@ Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
 
 仍未实现：阵法技、明置/暗置武将、鸡肋、FilterSkill 全局生效。
 
+## 四·七、AI 玩家（`src/core/ai/`，LLM 驱动）
+
+与 BOT **并列**的第三种响应源。接入点只有 `Driver`——规则引擎一行都没改：
+座位标成 `"ai"` 后，它的请求会被转给 `Agent`，Agent 拿不到结果时静默回落 BOT。
+
+| 文件 | 职责 |
+| --- | --- |
+| `view.lua` | 观察层：**信息隐藏**（别人手牌只给张数、未亮身份显示「未知」） |
+| `actions.lua` | 合法动作枚举，复用 `canUseCardOn` / `viewAsCandidates` / `maxCards` |
+| `prompt.lua` | 提示词：状态 + 候选编号 + 输出格式 |
+| `parse.lua` | 解析与校验：越界/数量不符/类型混杂一律拒绝 |
+| `agent.lua` | 响应源：异步状态机（thinking / ready）+ 降级 |
+| `transport.lua` | 传输层接口（mock / 同步 curl），纯 Lua |
+| `src/ui/ai_transport.lua` | LÖVE 实现：love.thread + curl，主线程不阻塞 |
+
+三条硬规矩：
+
+1. **LLM 只在枚举出的编号候选里选**，不自由生成动作。
+   结构上杜绝非法响应（距离/次数/鸡肋/不存在目标），提示词与输出都很短。
+2. **观察层必须信息隐藏**。少了这层 AI 就是开图作弊，身份局里一眼看得出来，
+   而且调试时你分不清它是「推理出来的」还是「看见的」。
+3. **任何异常都回落 BOT**：超时、解析失败、动作非法、未配置接口。
+   联网的东西一定会失败，游戏一次都不能卡死。
+
+请求类型共 8 种，AI 全部要能答：`askForUseCard` / `askForCard` /
+`askForDiscard` / `askForChooseCard` / `askForDiscardFrom` /
+`askForSkillInvoke` / `askForChoice` / `askForGuanxing`。
+其中 `askForCard`（出闪/出桃/无懈）**默认不问 LLM**——一次往返 1~3 秒，
+每次被杀都卡一下，观感会非常糟；`Agent.ask_all = true` 可强制全问（测试用）。
+
+> **为什么用 curl 而不是 socket.http**：LÖVE 内置的 LuaSocket 3.0 没有 luasec，
+> `ssl.https` 直接 require 失败，而 LLM 接口一律 HTTPS。系统 curl 支持 TLS，
+> `io.popen` 实测可用。代价是阻塞，所以真正跑在 `love.thread` 的 worker 里。
+
+已知限制：
+- 尚未用真实模型跑过（链路靠 mock 验证，46 项全过）
+- 每步一次完整请求，没有对话历史复用，token 消耗偏大
+- 弃牌等「多选」请求靠编号数组，LLM 偶尔给错数量 → 直接回落 BOT
+
 ## 五、开发约定
 
 ### 0. 术语：BOT ≠ AI（务必分清）
@@ -276,7 +317,7 @@ Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
 | 词 | 指代 | 位置 |
 | --- | --- | --- |
 | **BOT** | 规则驱动的脚本对手。无学习、无推理、无搜索，给定种子行为可复现 | `src/core/bot.lua` |
-| **AI** | 由大语言模型（LLM）驱动的玩家，规划中 | 尚未实现 |
+| **AI** | 由大语言模型（LLM）驱动的玩家 | `src/core/ai/`（传输层的 LÖVE 实现在 `src/ui/ai_transport.lua`） |
 | `sgs.ai_*` | **原版**的 bot 提示表，名字沿用原版 API 不能改；本引擎 BOT 不消费 | `src/compat/sgs.lua` |
 
 历史包袱：游戏行业长期把电脑对手统称 "AI"，本项目早期的 `ai.lua`、

@@ -15,9 +15,10 @@ local current_scene = nil
 local startGame, startNet, backToMenu
 local startNetScene
 
-startGame = function(mode, size)
+-- ai_mode: "off" / "others" / "all"，由菜单上的 AI 托管按钮决定
+startGame = function(mode, size, ai_mode)
   local RoomScene = require "src.ui.scene_room"
-  current_scene = RoomScene.create(backToMenu, mode, size)
+  current_scene = RoomScene.create(backToMenu, mode, size, ai_mode)
 end
 
 backToMenu = function()
@@ -87,7 +88,7 @@ function love.load()
     return
   end
 
-  local mods = is_test and { "tests.test_game", "tests.test_ui" }
+  local mods = is_test and { "tests.test_game", "tests.test_ui", "tests.test_ai" }
     or is_soak and { "tests.test_soak" }
     or is_net and { "tests.test_net" } or nil
   if mods then
@@ -106,6 +107,12 @@ function love.load()
     startGame() -- 无头/GUI 泛化验证：跳过菜单直达牌桌
   else
     backToMenu()
+  end
+end
+
+function love.keypressed(key)
+  if current_scene and current_scene.keypressed then
+    current_scene:keypressed(key)
   end
 end
 

@@ -25,6 +25,25 @@ function MenuScene:init(on_start, on_net)
     { x = 580, y = 450, w = 250, h = 56, text = "联机对战", net = true,
       desc = "连本地服务端 9527（先跑 ./tools/serve.sh）" },
   }
+
+  -- AI 托管：循环切换三档。牌桌里还能按数字键随时改单个座位。
+  self.ai_modes = {
+    { key = "off",    label = "关",     desc = "全部由人和规则 BOT 操作" },
+    { key = "others", label = "其他座位", desc = "除你以外的座位交给 LLM 决策" },
+    { key = "all",    label = "全部",   desc = "连你的座位也交给 AI（观战模式）" },
+  }
+  self.ai_index = 1
+  self.ai_button = {
+    x = 300, y = 528, w = 530, h = 46, ai_toggle = true,
+    text = "AI 托管：关", desc = "",
+  }
+  self:refreshAIButton()
+end
+
+function MenuScene:refreshAIButton()
+  local m = self.ai_modes[self.ai_index]
+  self.ai_button.text = "AI 托管：" .. m.label
+  self.ai_button.desc = m.desc .. "（需设置 SGS_AI_URL / SGS_AI_KEY）"
 end
 
 function MenuScene:draw()
@@ -51,6 +70,16 @@ function MenuScene:draw()
     love.graphics.printf(b.desc, b.x, b.y + b.h + 10, b.w, "center")
   end
 
+  local ab = self.ai_button
+  love.graphics.setColor(0.16, 0.30, 0.42)
+  love.graphics.rectangle("fill", ab.x, ab.y, ab.w, ab.h, 10, 10)
+  love.graphics.setColor(1, 1, 1)
+  love.graphics.setFont(self.font)
+  love.graphics.printf(ab.text, ab.x, ab.y + 12, ab.w, "center")
+  love.graphics.setColor(0.7, 0.72, 0.7)
+  love.graphics.setFont(self.font_sm)
+  love.graphics.printf(ab.desc, ab.x, ab.y + ab.h + 6, ab.w, "center")
+
   love.graphics.setColor(0.5, 0.55, 0.5)
   love.graphics.setFont(self.font_sm)
   love.graphics.printf("LÖVE 11.5 · 从 QSanguosha (C++/Qt) 迁移", 0, h - 40, w, "center")
@@ -58,12 +87,20 @@ end
 
 function MenuScene:mousepressed(x, y, button)
   if button ~= 1 then return end
+
+  local ab = self.ai_button
+  if x >= ab.x and x <= ab.x + ab.w and y >= ab.y and y <= ab.y + ab.h then
+    self.ai_index = (self.ai_index % #self.ai_modes) + 1
+    self:refreshAIButton()
+    return
+  end
+
   for _, b in ipairs(self.buttons) do
     if x >= b.x and x <= b.x + b.w and y >= b.y and y <= b.y + b.h then
       if b.net then
         if self.on_net then self.on_net() end
       else
-        self.on_start(b.mode, b.size)
+        self.on_start(b.mode, b.size, self.ai_modes[self.ai_index].key)
       end
       return
     end

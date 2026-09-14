@@ -156,6 +156,38 @@ check(scene.skin:skillSound("马术") == nil, "被动技【马术】原版就没
 check(scene.skin:sound("caocao") ~= nil, "阵亡台词应按武将拼音 key 解析（caocao）")
 
 
+print("\n--- 演示节奏（防止语音重叠）---")
+do
+  local sc = RoomScene.create(function() end)
+
+  -- 1) 事件应先入队，而不是立即播放
+  sc.room:emit("skill", { player = sc.human, skill = "奸雄" })
+  sc.room:emit("useCard", { card = nil, from = sc.human })
+  check(#sc.presentQueue >= 1, "表现事件应先入队（实得 " .. #sc.presentQueue .. "）")
+  check(sc:isPresenting(), "有未播事件时应处于演示中")
+
+  -- 2) 一次 update 只播一条，不会一股脑全放出来
+  local before = #sc.presentQueue
+  sc:update(2)
+  check(#sc.presentQueue == before - 1,
+    "一次 update 只应播一条（" .. before .. " -> " .. #sc.presentQueue .. "）")
+
+  -- 3) 演示期间不接受玩家操作，避免画面与状态错位
+  sc.room:emit("skill", { player = sc.human, skill = "奸雄" })
+  sc:mousepressed(200, 300, 1)
+  check((sc.msg or "") == "对手行动中…",
+    "演示中点击应被忽略（实得「" .. tostring(sc.msg) .. "」）")
+
+  -- 4) 队列排空后恢复可操作
+  for _ = 1, 20 do sc:update(2) end
+  check(not sc:isPresenting(), "队列排空后应恢复可操作")
+
+  -- 5) 不同事件的间隔：技能台词要留够时间，不能比出牌还短
+  local PRESENT = { useCard = 0.42, skill = 0.62, damage = 0.34, death = 0.85 }
+  check(PRESENT.skill > PRESENT.useCard, "技能间隔应长于出牌（台词更长）")
+  check(PRESENT.death > PRESENT.skill, "阵亡间隔应最长")
+end
+
 print("\n--- 联机牌桌（UI 联调）---")
 do
   -- 用内存通道把 Host 与联机界面接起来，验证「收到 req → 点牌 → 点人 → 应答」
@@ -233,6 +265,7 @@ do
   sc.effects = Effects.create()
   sc.audio = { playSkill = function() return false end, play = function() return false end }
   sc.room:emit("skill", { player = sc.human, skill = "马术" }) -- 被动技，无台词
+  sc:update(2) -- 事件入队，需要 update 才会播（演示队列）
   check(sc.effects.banner ~= nil,
     "无台词的技能发动也应显示横幅（实得 " .. tostring(sc.effects.banner) .. "）")
   check(#sc.effects.flashes == 1, "技能发动应在武将面板上闪一下")
@@ -241,6 +274,7 @@ do
   sc.effects = Effects.create()
   sc.audio = { playSkill = function() return true end, play = function() return true end }
   sc.room:emit("skill", { player = sc.human, skill = "奸雄" })
+  sc:update(2)
   check(sc.effects.banner ~= nil, "有台词的技能发动应显示横幅")
 
   -- 4) 横幅文案应带上技能名
@@ -328,6 +362,41 @@ do
   sc4.picked, sc4.dragging = slash4, slash4
   sc4:mousereleased(5, 5, 1)
   check(sc4.picked == slash4, "松手在空白处应保留已选中状态")
+end
+
+print()
+print("--- AI 托管接入 ---")
+do
+  package.loaded["src.ui.scene_room"] = nil
+  local RoomSceneAI = require "src.ui.scene_room"
+  -- 未设置 SGS_AI_URL/SGS_AI_KEY 时不该崩：Agent 会自动回落规则 BOT
+  local sc = RoomSceneAI.create(function() end, "identity", 5, "others")
+  check(sc.agent ~= nil, "开启 AI 托管后应创建 Agent")
+
+  local ai_seats = 0
+  for _, p in ipairs(sc.players) do
+    if p:controlMode() == "ai" then ai_seats = ai_seats + 1 end
+  end
+  check(ai_seats == 4, "非人类座位应全部交给 AI（实得 " .. ai_seats .. " 个）")
+  check(sc.players[1]:controlMode() == "human", "1 号位默认应由玩家自己操作")
+
+  local ok_u, err_u = pcall(function()
+    for _ = 1, 300 do sc:update(0.016) end
+  end)
+  check(ok_u, "AI 托管下连续 update 300 帧应无异常" .. (ok_u and "" or ("：" .. tostring(err_u))))
+  check(sc.room.turn_count > 0, "AI 托管下对局应有推进（第 " .. sc.room.turn_count .. " 轮）")
+
+  local ok_d, err_d = pcall(function() sc:draw() end)
+  check(ok_d, "AI 托管下 draw() 应无异常" .. (ok_d and "" or ("：" .. tostring(err_d))))
+
+  -- 数字键切换任意座位的控制权
+  local ok_k, err_k = pcall(function() sc:keypressed("1") end)
+  check(ok_k and sc.players[1]:controlMode() == "ai",
+    "按 1 应把 1 号位交给 AI" .. (ok_k and "" or ("：" .. tostring(err_k))))
+  sc:keypressed("1")
+  check(sc.players[1]:controlMode() == "human", "再按 1 应变回玩家操作")
+  sc:keypressed("9")
+  check(#sc.players == 5, "按不存在的座位号不应有影响")
 end
 
 print(string.format("\n===== UI: %d passed, %d failed =====", passes, failures))
