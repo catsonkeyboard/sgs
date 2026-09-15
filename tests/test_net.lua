@@ -43,6 +43,32 @@ do
   local half = string.sub(Protocol.encode({ type = "x" }), 1, 5)
   local h, hr = Protocol.takeFrame(half)
   check(h == nil, "半个包不应切出消息")
+
+  -- 【制衡】手牌 + 装备多选请求应完整下发候选与能力标志。
+  local fake_hand = { id = 9101, name = "slash", suit = 1, number = 7 }
+  local fake_equip = { id = 9102, name = "halberd", suit = 4, number = 12 }
+  local zreq = Protocol.makeRequest(8, {
+    type = "askForDiscard", player = { name = "孙权" }, n = 2,
+    any = true, include_equips = true, cards = { fake_hand, fake_equip },
+  }, function() return 1 end)
+  check(zreq.any and zreq.include_equips and #zreq.cards == 2,
+    "制衡协议应下发任意多选、装备候选及全部牌")
+end
+
+do -- 服务端应把制衡返回的装备 card_id 还原为本人装备对象
+  local Card = require "src.core.card"
+  local host = Host.create { count = 2 }
+  host:startGame(9)
+  local p = host.players[1]
+  local equip = Card.create(9103, "halberd", Card.Suit.Diamond, 12, Card.Type.Equip)
+  p.equips.weapon = equip
+  host.room.pending = {
+    type = "askForDiscard", player = p, n = 1,
+    any = true, include_equips = true, cards = { equip },
+  }
+  local resp = host:toResponse({ card_ids = { equip.id } })
+  check(type(resp) == "table" and #resp == 1 and resp[1] == equip,
+    "服务端应从装备区还原制衡的 card_ids")
 end
 
 print("\n--- 房间与座位 ---")
@@ -108,6 +134,8 @@ do
   local snap = host:snapshot()
   check(snap ~= nil and #snap.players == 5, "快照应含 5 名玩家（5 人局）")
   check(snap.over == true, "快照应标记结束")
+  check(type(snap.players[1].skills) == "table" and #snap.players[1].skills > 0,
+    "快照应包含公开的武将技能名，供客户端显示说明")
 
   -- 断线不应卡死：把人类座位摘掉后仍能推进到结束
   local host2 = Host.create { count = 8 }
@@ -126,13 +154,64 @@ do
   check(host2.room.game_over, "掉线后对局仍应跑完（guard=" .. g2 .. "）")
 end
 
+print("\n--- 联机 AI：空座交给 LLM（mock 传输层）---")
+
+do
+  -- 与单机同一套 Agent，mock 传输层不联网；1 号位真人（自动放弃），其余全 AI。
+  -- 验证：座位命名/控制权、Driver 的 "thinking" 状态不卡 tick、对局能结束。
+  local Agent = require "src.core.ai.agent"
+  local Transport = require "src.core.ai.transport"
+  local rng_state = 12345
+  local function rng(n)
+    rng_state = (rng_state * 1103515245 + 12345) % 2147483648
+    return rng_state % n + 1
+  end
+  local agent = Agent.create({
+    transport = Transport.mock {
+      responder = function(prompt)
+        local acts = prompt.actions or {}
+        if #acts == 0 then return '{"action":1}' end
+        local r = prompt.view and prompt.view.request
+        if r and r.type == "askForDiscard" and r.n and r.n > 1 then
+          local ids = {}
+          for i = 1, r.n do ids[#ids + 1] = acts[i] and acts[i].id or 1 end
+          return string.format('{"actions":[%s],"reason":"弃牌"}', table.concat(ids, ","))
+        end
+        return string.format('{"action":%d,"reason":"选它"}', acts[rng(#acts)].id)
+      end,
+    },
+  })
+  local host = Host.create { count = 5, ai_agent = agent, ai_seats = "empty" }
+  local s1, c1 = Channel.pair()
+  local cli = Client.create("甲", c1)
+  host:attach("甲", s1)
+  host:startGame(42)
+  check(host.room.players[1].name == "甲", "人类座位名字应保留")
+  check(host.room.players[2].name:find("^AI·") ~= nil,
+    "空座应由 AI 顶替（实得 " .. host.room.players[2].name .. "）")
+  check(host.room.players[2]:controlMode() == "ai", "空座座位应标记为 ai 控制")
+
+  cli.on_request = function() return false end
+  local guard, thinking = 0, 0
+  while not host.room.game_over and guard < 20000 do
+    guard = guard + 1
+    local st = host:tick()
+    if st == "waiting" then cli:flush() end
+    if st == "thinking" then thinking = thinking + 1 end
+    if st == "over" then break end
+  end
+  check(host.room.game_over, "AI 顶替空座的对局应能跑完（guard=" .. guard .. "）")
+  check(thinking > 0, "tick 应观察到 AI 思考状态（" .. thinking .. " 次）")
+  check(agent.stats.by_ai > 0, "LLM 确实做了决策（" .. agent.stats.by_ai .. " 次）")
+end
+
 print("\n--- 掉线重连 / 观战 / 聊天 ---")
 
 do
   local host = Host.create { count = 5 }
 
   -- 掉线：保留座位，宽限期内可重连
-  local a1, a2 = Channel.pair()
+  local a1 = Channel.pair()
   local seat, tok = host:attach("甲", a1)
   check(tok ~= nil, "占座应下发重连令牌")
   host:dropSeat(seat)
@@ -147,7 +226,7 @@ do
 
   -- 观战：不占座，但能收到广播
   local h2 = Host.create { count = 5 }
-  local s1, c1 = Channel.pair()
+  local s1 = Channel.pair()
   local sp_s, sp_c = Channel.pair()
   h2:attach("甲", s1)
   h2:addSpectator(sp_s, "看客")
@@ -233,7 +312,7 @@ do
   c:flush()
   check(#c.logs == 1, "客户端应累积日志")
   local answered = nil
-  c.on_request = function(_self, req) answered = req.id return false end
+  c.on_request = function(_, req) answered = req.id return false end
   srv:send { type = "req", id = 9, req = "askForSkillInvoke", skill = "苦肉" }
   c:flush()
   local resp = srv:recv()

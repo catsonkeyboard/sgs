@@ -15,10 +15,13 @@ local current_scene = nil
 local startGame, startNet, backToMenu
 local startNetScene
 
--- ai_mode: "off" / "others" / "all"，由菜单上的 AI 托管按钮决定
-startGame = function(mode, size, ai_mode)
+-- ai_mode: "off" / "others" / "all"，由菜单上的 AI 托管按钮决定；
+-- draft: 是否开局选将（文档开局流程：主公 5 选 1、其余 3 选 1），
+-- 由菜单上的「开局选将」开关决定
+startGame = function(mode, size, ai_mode, draft)
   local RoomScene = require "src.ui.scene_room"
-  current_scene = RoomScene.create(backToMenu, mode, size, ai_mode)
+  current_scene = RoomScene.create(backToMenu, mode, size, ai_mode,
+    { draft = draft ~= false })
 end
 
 backToMenu = function()

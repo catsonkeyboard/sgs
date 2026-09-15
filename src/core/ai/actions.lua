@@ -172,15 +172,20 @@ local function forCard(req, room)
   return out
 end
 
--- 弃牌：一张一个候选，AI 返回多个编号
-local function forDiscard(req, room)
+-- 弃牌：一张一个候选，AI 返回多个编号。
+-- any 模式（【制衡】类自选）：额外给「不弃」选项，可选 0..n 张。
+local function forDiscard(req, _)
   local me = req.player
   local out = {}
-  for _, c in ipairs(me.hand) do
+  -- 【制衡】的 req.cards 含手牌 + 装备；普通弃牌仍只枚举手牌。
+  for _, c in ipairs(req.cards or me.hand) do
     if not me:isJilei(c) then
       out[#out + 1] = { kind = "discard", desc = string.format("弃掉【%s】", cardLabel(c)),
         card = c, card_id = c.id }
     end
+  end
+  if req.any then
+    out[#out + 1] = { kind = "pass", desc = "不弃（结束选择，摸牌数为 0）" }
   end
   return out
 end
@@ -196,12 +201,24 @@ local function forChooseCard(req)
 end
 
 -- 过河拆桥：替对手挑一张弃掉
+-- 拆牌类（过河拆桥 / 寒冰剑 / 享乐 / 雌雄双股剑）：替 target 挑一张弃掉。
+-- 公开牌（装备/判定区，req.equip_judges）逐张列出；手牌不可见，
+-- 只给一个「随机弃一张暗牌」的候选——不给具体牌面，避免观察层信息泄露。
+-- 引擎按对象身份从对应区域移除（Room:askForDiscardFrom / takeCardAnyZone）。
 local function forDiscardFrom(req)
   local out = {}
-  for _, c in ipairs((req.target and req.target.hand) or {}) do
+  local t = req.target
+  if not t then return out end
+  for _, c in ipairs(req.equip_judges or {}) do
     out[#out + 1] = { kind = "choose",
-      desc = string.format("弃掉 %s 的【%s】", req.target.name, cardLabel(c)),
+      desc = string.format("弃掉 %s 的【%s】", t.name, c:zhName()),
       card = c, card_id = c.id }
+  end
+  if (req.hand_count or #t.hand) > 0 and t.hand[1] then
+    out[#out + 1] = { kind = "choose",
+      desc = string.format("随机弃掉 %s 的一张暗置手牌（其手牌 %d 张）",
+        t.name, (req.hand_count or #t.hand)),
+      card = t.hand[1], card_id = t.hand[1].id }
   end
   return out
 end
@@ -221,6 +238,56 @@ local function forChoice(req)
   return out
 end
 
+-- 【观星】一类重排牌堆顶：全排列最多 5!=120 种，逐个编号会把提示词撑爆，
+-- 也没必要——只枚举有代表性的子集：原序 / 倒序 / 每张单独沉底 / 全部沉底。
+-- up 的语义（【观星】结算处 `for i=#up,1,-1 do insert(drawPile, up[i]) end`）：
+-- **up[1] 是牌堆顶**（下一张就摸到），up[#up] 最深；down 整体沉入牌堆底，
+-- 本轮摸不到。short 是给人类 UI 按钮用的短标签（desc 太长塞不进按钮）。
+local function forGuanxing(req)
+  local cards = req.cards or {}
+  local out = {}
+  if #cards == 0 then return out end
+
+  -- 按「摸牌顺序（顶→底）」列出：up[1] 是牌堆顶（下一张就摸到），
+  -- 模型只需要知道先摸到什么
+  local function drawOrder(list)
+    local parts = {}
+    for i = 1, #list do parts[#parts + 1] = cardLabel(list[i]) end
+    return table.concat(parts, "、")
+  end
+
+  local function push(short, desc, up, down)
+    out[#out + 1] = { kind = "guanxing", short = short, desc = desc,
+      up = up, down = down }
+  end
+
+  push("原序放顶", "保持原序放牌堆顶（先摸到：" .. drawOrder(cards) .. "）",
+    cards, {})
+
+  if #cards >= 2 then
+    local rev = {}
+    for i = #cards, 1, -1 do rev[#rev + 1] = cards[i] end
+    push("倒序放顶", "倒序放牌堆顶（先摸到：" .. drawOrder(rev) .. "）", rev, {})
+  end
+
+  for i, c in ipairs(cards) do
+    local up2, down2 = {}, { c }
+    for j, d in ipairs(cards) do
+      if j ~= i then up2[#up2 + 1] = d end
+    end
+    push(string.format("沉底【%s】", c:zhName()),
+      string.format("把【%s】沉到牌堆底，其余原序放顶（先摸到：%s）",
+        c:zhName(), drawOrder(up2)),
+      up2, down2)
+  end
+
+  if #cards >= 2 then
+    push("全部沉底", "全部沉到牌堆底（你本轮一张也摸不到，全是废牌时才值得）",
+      {}, cards)
+  end
+  return out
+end
+
 local BUILDERS = {
   askForUseCard = forUseCard,
   askForCard = forCard,
@@ -229,6 +296,7 @@ local BUILDERS = {
   askForDiscardFrom = forDiscardFrom,
   askForSkillInvoke = forSkillInvoke,
   askForChoice = forChoice,
+  askForGuanxing = forGuanxing,
 }
 
 -- 统一出口：返回带连续编号的候选列表（编号即 LLM 要输出的东西）
@@ -248,6 +316,7 @@ Actions.LLM_WORTHY = {
   askForChooseCard = true,
   askForDiscardFrom = true,
   askForChoice = true,
+  askForGuanxing = true,
 }
 
 function Actions.worthAsking(req, opts)

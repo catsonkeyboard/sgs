@@ -68,6 +68,7 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 | `effects.lua` | 浮动伤害数字 + 出牌/阵亡横幅 |
 
 已接入的真实素材（全部按路径引用，缺则退回自绘）：
+
 - 卡牌图 `image/card/`（基本牌 snake_case、装备 CamelCase）
 - 武将头像 `image/generals/avatar/<key>.png`（按 general.key 拼音）
 - 体力勾玉 `image/system/magatamas/{0,3}.png`
@@ -100,6 +101,7 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 不征询。此前人类玩家的技能是和 BOT 一样自动触发的，玩家没有选择权。
 
 **待实机验证**（需要图形环境，headless 测不到）：
+
 - 音效是否真的播放、音量是否合适
 - 背景/框体的缩放与位置
 - 座位布局在 8 人局下的观感
@@ -135,6 +137,7 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 > 另：【名士】【随势】原版按国战条件判定，这里改用标准版/身份局阵营近似，代码内已注明。
 
 技能三类写法：
+
 - **触发技** `TriggerSkill:create(事件, 回调)` —— 回调返回 `true` 截断结算
 - **转化技** `singleViewAs(名, 目标牌名, 过滤)` —— 手牌当别的牌用/打出
 - **标记技** `markerSkill(名, {字段})` —— 只挂标记，由引擎在判定处查询
@@ -168,6 +171,7 @@ nil，UI 走内置默认值）。
 | `src/ui/audio.lua` | 按 audio.json 的键名播放；缺文件/缺 love.audio/headless 一律静默 |
 
 三条硬规则：
+
 1. **资源缺失时安全降级**，绝不抛错、绝不打断对局。
 2. **音频与图片都不参与规则判定**，只做表现。
 3. skin/audio 只给**路径**，加载由 UI 层按需做——core 与 skin 都不碰
@@ -181,11 +185,12 @@ nil，UI 走内置默认值）。
 | 文件 | 职责 |
 | --- | --- |
 | `sgs.lua` | `sgs` 全局：常量、Package/General、技能工厂、QVariant、`Sanguosha:cloneCard` |
-| `exppattern.lua` | ExpPattern 卡牌匹配（`.|club|.|hand` 这类 `filter_pattern`） |
+| `exppattern.lua` | ExpPattern 卡牌匹配（`. | club | . | hand` 这类 `filter_pattern`） |
 | `api.lua` | Room/Player/Card 的原版 API 别名 |
 | `loader.lua` | 扫描 `diy/*.lua`，沙箱执行，把 Package 注册进 Engine |
 
 三条硬规则：
+
 1. **别名一律经 `define()` 安装，禁止无意覆盖引擎已有方法**（见下）。
 2. **不做 `__index` 兜底**：未实现的方法照常报错，比静默返回 nil 好定位。
 3. **事件/频率常量直接复用引擎的字符串值**，`events = { sgs.Damaged }`
@@ -196,6 +201,10 @@ nil，UI 走内置默认值）。
 Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
 `LoadTranslationTable`/**SkillCard**（`CreateSkillCard` + `clone()` + subcards +
 `will_throw` + `on_use`）均可跑通。
+
+示例扩展的武将注册进引擎（测试直接 `getGeneral` 取用），但
+`Standard.DEMO_PACKAGES` 把这三个包挡在正常对局的随机武将池外——
+不然玩家开局会随机到「试炼武将」这类兼容层试作将；真正的社区扩展不受影响。
 
 引擎侧为技能牌留了出口：`Room:_useSkillCard`。技能牌没有卡牌定义，
 若走普通卡牌分派会落进「暂无结算规则」兜底，因此必须在分派前拦下。
@@ -374,10 +383,28 @@ export SGS_AI_REASONING=none     # 必须，见下表
 </details>
 
 已知限制：
+
 - 每步一次完整请求，没有 KV cache 复用；记忆越长 input 越大
 - 弃牌等「多选」请求靠编号数组，模型偶尔给错数量 → 触发重试
-- 【观星】目前只给「保持原序」一个选项，没让模型真的重排
 - 关掉思维链后模型推理深度下降，身份判断主要靠提示词里的历史信息
+
+### 【观星】：有界候选而非全排列
+
+重排牌堆顶的全排列最多 5!=120 种，逐个编号会把提示词撑爆。
+`actions.lua` 只枚举有代表性的子集：**原序 / 倒序 / 每张单独沉底 / 全部沉底**
+（5 张时 8 个候选），每个候选预构造好 `{up=…, down=…}`，选中即交给引擎。
+注意 up 的语义是 **up[1] 是牌堆顶**（下一张就摸到）。
+人类玩家的观星 UI 也复用同一套候选摆成按钮（没做拖拽重排界面）。
+
+### 联机对局的 AI（`SGS_NET_AI`）
+
+`Host` 接受 `ai_agent`（Agent 实例）后，空座（或 `ai_seats` 指定的座位）
+交给 LLM 而非规则 BOT；Driver 返回 `"thinking"` 时 tick 直接返回，
+下一帧接着问，与本地牌桌同一模式。服务端（`server.lua`）用
+`src/ui/ai_transport.lua` 的线程版传输层（serve.sh 在 love 下跑，
+`love.thread` 可用），不会阻塞整个服务端；无 love 环境退回 core 同步实现。
+环境变量 `SGS_NET_AI`：`1/on/all` = 全部空座，`"2,3"` = 指定座位（人来了人优先），
+`off/0` = 关（默认，回到规则 BOT）。
 
 ## 五、开发约定
 

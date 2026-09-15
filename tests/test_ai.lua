@@ -158,10 +158,99 @@ do
 end
 
 print()
+print("--- 观星：AI 重排牌堆顶 ---")
+
+do
+  -- 诸葛亮在座位 1：回合开始的第一个询问就是【观星】。
+  -- 注意座位要建成非人类（is_human=false）：人类座位的非锁定技会先弹
+  -- 「是否发动」征询，而 advanceToRequest 对非目标类型用 BOT 应答，
+  -- BOT 对技能征询答 nil（不发动），观星就永远不触发。
+  local engine = Engine.create()
+  Standard.setup(engine)
+  local pool = { "诸葛亮", "曹操", "孙权", "貂蝉", "吕布" }
+  local ps = {}
+  for i = 1, 5 do
+    local g = engine:getGeneral(pool[i]) or engine:getGeneral("白板武将")
+    table.insert(ps, Player.create("P" .. i, g, i, false))
+  end
+  local room = Room.create(engine, ps)
+  room.drawPile = Standard.buildDrawPile(42)
+  room.rng = Standard.makeRng(42)
+  room:setupRoles(Standard.makeRng(43))
+  ps[1]:setControl("ai")
+  room:start()
+
+  local agent = Agent.create({
+    transport = Transport.mock { responder = function() return '{"action":1}' end },
+  })
+  local req = advanceToRequest(room, agent, "askForGuanxing")
+  check(req ~= nil, "诸葛亮回合开始应弹出观星询问")
+  if req then
+    check(#req.cards == 5, "5 人局观星应看 5 张（实得 " .. #req.cards .. "）")
+
+    local acts = Actions.enumerate(req, room)
+    check(#acts >= #req.cards + 3, "观星应有有界候选集（实得 " .. #acts .. " 个）")
+    check(acts[1].kind == "guanxing" and #acts[1].down == 0,
+      "第一个候选应是『原序放顶』")
+
+    -- 不变量：每个候选都是这 5 张牌的一个划分（顶 + 底 = 全部，无重复）
+    local bad = 0
+    for _, a in ipairs(acts) do
+      local seen = {}
+      for _, c in ipairs(a.up) do
+        if seen[c] then bad = bad + 1 end
+        seen[c] = true
+      end
+      for _, c in ipairs(a.down) do
+        if seen[c] then bad = bad + 1 end
+        seen[c] = true
+      end
+      local total = 0
+      for _ in pairs(seen) do total = total + 1 end
+      if total ~= #req.cards then bad = bad + 1 end
+    end
+    check(bad == 0, "每个观星候选都是完整且不重复的划分（异常 " .. bad .. " 个）")
+
+    -- 解析：原序 → 直接把候选里的 up/down 交给引擎
+    local resp, err = Parse.response('{"action":1,"reason":"原序"}', req, room, acts)
+    check(err == nil and type(resp) == "table" and resp.up == acts[1].up,
+      "选『原序』应返回预构造的 up/down 表")
+
+    -- 解析：沉底某一张 → down 恰一张、up 少一张
+    local sink = nil
+    for _, a in ipairs(acts) do
+      if #a.down == 1 and #a.up == #req.cards - 1 then sink = a end
+    end
+    check(sink ~= nil, "应有『单张沉底』候选")
+    if sink then
+      local r2, e2 = Parse.response(string.format('{"action":%d}', sink.id), req, room, acts)
+      check(e2 == nil and #r2.down == 1 and #r2.up == #req.cards - 1,
+        "选『沉底』应正确带回 up/down")
+      check(r2.down[1] ~= nil and r2.up[1] ~= nil, "沉底候选应携带真实 Card 对象")
+    end
+
+    -- 机械兜底：观星返回 nil = 引擎保持原序的约定
+    local bare = Agent.create({})
+    local mresp, mst = bare:respond(req, room)
+    check(mst == "ready" and mresp == nil, "机械兜底对观星应返回 nil（保持原序）")
+
+    -- 引擎吃下重排：up[1] 是牌堆顶，摸牌阶段先摸到它（再摸 up[2]）
+    if resp then
+      local before = #ps[1].hand
+      room:step(resp)
+      local h = ps[1].hand
+      check(#h >= before + 2, "观星后应正常进入摸牌阶段")
+      check(h[#h - 1] == resp.up[1] and h[#h] == resp.up[2],
+        "应按重排后的顶序摸牌（先摸 up[1] 那张）")
+    end
+  end
+end
+
+print()
 print("--- 解析：各种脏输入 ---")
 
 do
-  local room, ps = makeRoom(3, { 1 })
+  local room = makeRoom(3, { 1 })
   local agent = Agent.create({ transport = Transport.mock { responder = function() return '{"action":1}' end } })
   local req = advanceToRequest(room, agent, "askForUseCard")
   if req then
@@ -277,10 +366,10 @@ do
   })
   local req = advanceToRequest(room, agent, "askForUseCard")
   if req then
-    local r1, s1 = agent:respond(req, room)
-    local r2, s2 = agent:respond(req, room)
-    local r3, s3 = agent:respond(req, room)
-    local r4, s4 = agent:respond(req, room)
+    local _, s1 = agent:respond(req, room)
+    local _, s2 = agent:respond(req, room)
+    local _, s3 = agent:respond(req, room)
+    local _, s4 = agent:respond(req, room)
     check(s1 == "thinking" and s2 == "thinking" and s3 == "thinking",
       "结果未回来时应持续返回 thinking")
     check(s4 == "ready", "结果回来后应返回 ready")
@@ -304,7 +393,7 @@ local function makePicker(seed)
       local pool = {}
       for _, a in ipairs(acts) do pool[#pool + 1] = a.id end
       local ids = {}
-      for i = 1, r.n do
+      for _ = 1, r.n do
         if #pool == 0 then break end
         local k = rng(#pool)
         ids[#ids + 1] = pool[k]

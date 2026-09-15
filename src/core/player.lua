@@ -93,6 +93,28 @@ function Player:takeCard(card)
   return nil
 end
 
+-- 从任意区域（手牌/装备区/判定区）按对象身份摘除一张牌。
+-- 返回来源区域名（"hand"/"equip"/"judge"），便于调用方区分日志与触发
+-- （如从装备区失去要触发【枭姬】，见 Room:_onEquipLost）。
+-- 【过河拆桥】【顺手牵羊】按文档可作用于三个区域的任一张牌，
+-- 之前 takeCard 只查手牌，拆装备/判定区会被静默忽略。
+function Player:takeCardAnyZone(card)
+  if self:takeCard(card) then return "hand" end
+  for _, slot in ipairs(Player.EQUIP_SLOTS) do
+    if self.equips[slot] == card then
+      self.equips[slot] = nil
+      return "equip"
+    end
+  end
+  for i, c in ipairs(self.judges) do
+    if c == card then
+      table.remove(self.judges, i)
+      return "judge"
+    end
+  end
+  return nil
+end
+
 -- 所有可见区域的总牌数（卡牌守恒校验用）
 -- 鸡肋：不能对该角色使用/打出某类牌。jilei 形如 { basic = true }。
 -- 原版是「按类别封禁」，本引擎按 ctype 判断，也支持按牌名精确封禁

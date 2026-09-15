@@ -323,29 +323,99 @@ function Room:lordSupply(p, card_name)
   return nil
 end
 
--- 弃牌阶段：弃 n 张；响应 Card 列表
-function Room:askForDiscard(player, n)
-  return coroutine.yield({ type = "askForDiscard", player = player, n = n })
+local function discardableCards(player, include_equips)
+  local cards = {}
+  for _, c in ipairs(player.hand or {}) do cards[#cards + 1] = c end
+  if include_equips then
+    for _, slot in ipairs(Player.EQUIP_SLOTS) do
+      local c = player.equips and player.equips[slot]
+      if c then cards[#cards + 1] = c end
+    end
+  end
+  return cards
 end
 
--- 从给定牌列表中选择一张（五谷丰登）；响应 Card
-function Room:askForChooseCard(player, cards, prompt)
+-- 弃牌阶段/技能代价：弃 n 张；响应 Card 列表。
+-- opts.include_equips 用于牌面只写「牌」而非「手牌」的场景（如贯石斧）。
+function Room:askForDiscard(player, n, prompt, opts)
+  opts = opts or {}
+  local req = { type = "askForDiscard", player = player, n = n, prompt = prompt }
+  if opts.include_equips then
+    req.include_equips = true
+    req.cards = discardableCards(player, true)
+  end
+  return coroutine.yield(req)
+end
+
+-- 自选任意张弃牌（【制衡】类）：0..全部手牌和装备，响应 Card 列表
+--（空表 = 不弃）。候选实体随请求下发，UI/BOT/AI/联机端统一据此枚举，
+-- 不把判定区算入「牌」（制衡只能弃手牌或装备区里的牌）。
+function Room:askForDiscardAny(player, max, prompt)
+  local cards = discardableCards(player, true)
   return coroutine.yield({
+    type = "askForDiscard", player = player,
+    n = math.min(max or #cards, #cards),
+    any = true, include_equips = true, cards = cards, prompt = prompt,
+  })
+end
+
+-- 从给定牌列表中选择一张（五谷丰登 / 顺手牵羊的公开牌）；响应 Card。
+-- opts 会并入请求（如顺手牵羊的 allow_pass：允许不选，由引擎改为随机拿手牌）
+function Room:askForChooseCard(player, cards, prompt, opts)
+  local req = {
     type = "askForChooseCard", player = player,
     cards = cards, prompt = prompt,
-  })
+  }
+  if type(opts) == "table" then
+    for k, v in pairs(opts) do req[k] = v end
+  end
+  return coroutine.yield(req)
 end
 
--- 令 source 玩家替 target 选择弃掉 n 张牌（过河拆桥）
-function Room:askForDiscardFrom(source, target, n)
-  local card = coroutine.yield({
-    type = "askForDiscardFrom", player = source, target = target, n = n,
-  })
-  if card and target:takeCard(card) then
-    self:log("%s 弃置 %s 的一张牌", target.name, card:zhName())
+-- 令 source 玩家替 target 选牌弃掉（过河拆桥 / 寒冰剑 / 享乐 / 雌雄双股剑）。
+-- 文档规则：过河拆桥可作用于目标的「手牌（随机）/ 装备 / 判定区任选区域」。
+-- 因此默认把装备区与判定区的**公开牌**随请求下发（req.equip_judges），
+-- 响应方也可以送 target.hand 里的暗牌；引擎按对象身份从对应区域移除。
+-- hand_only = true 时仅限手牌（【享乐】【雌雄双股剑】按牌面就是弃手牌，
+-- 且决定者是弃牌人自己——调用方应以 source == target 的形式传入）。
+-- n > 1（【寒冰剑】）时逐张询问；返回实际弃掉的牌列表（可能为空表）。
+function Room:askForDiscardFrom(source, target, n, hand_only)
+  local out = {}
+  for _ = 1, (n or 1) do
+    local equip_judges = {}
+    if not hand_only then
+      for _, slot in ipairs(Player.EQUIP_SLOTS) do
+        local c = target.equips[slot]
+        if c then equip_judges[#equip_judges + 1] = c end
+      end
+      for _, c in ipairs(target.judges) do equip_judges[#equip_judges + 1] = c end
+    end
+    if #target.hand == 0 and #equip_judges == 0 then break end
+    local card = coroutine.yield({
+      type = "askForDiscardFrom", player = source, target = target, n = 1,
+      hand_only = hand_only, equip_judges = equip_judges,
+      hand_count = #target.hand,
+    })
+    local zone = nil
+    if card then
+      if hand_only then
+        if target:takeCard(card) then zone = "hand" end
+      else
+        zone = target:takeCardAnyZone(card)
+      end
+    end
+    if not zone then break end
+    if zone == "equip" then self:_onEquipLost(target, card) end
+    if source == target then
+      self:log("%s 弃置【%s】", source.name, card:zhName())
+    else
+      self:log("%s 弃置 %s 的【%s】", source.name, target.name, card:zhName())
+    end
     table.insert(self.discardPile, card)
-    self:notifyHandEmpty(target)
+    table.insert(out, card)
+    if zone == "hand" then self:notifyHandEmpty(target) end
   end
+  return out
 end
 
 -- 该角色现在有没有可能打出【无懈可击】
@@ -359,40 +429,80 @@ function Room:canNullify(p)
       for _, c in ipairs(p.hand) do
         if s:filter(c) then return true end
       end
+      -- 「牌面不限手牌」的转化技（如【看破】黑色牌当无懈）：装备区也能出
+      if not s.hand_only then
+        for _, slot in ipairs(Player.EQUIP_SLOTS) do
+          local e = p.equips[slot]
+          if e and s:filter(e) then return true end
+        end
+      end
     end
   end
   return false
 end
 
 -- 询问所有角色是否使用【无懈可击】抵消当前锦囊
+-- 询问是否有人使用【无懈可击】，支持**嵌套对抗**：无懈可击本身也是锦囊，
+-- 可以再被一张【无懈可击】抵消（文档：「抵消一张锦囊牌的效果，或抵消另一张
+-- 【无懈可击】」）。一张一张地出，没人再出时按**奇偶**结算：
+-- 出了奇数张 → 原锦囊被抵消；偶数张（含 0）→ 原锦囊生效。
+-- 每轮只问**手里真有可能出无懈可击**的人（canNullify），
+-- 之前见谁都问，手里一张都没有也要弹一次「请打出或点不出」（用户实测反馈）。
 function Room:askForNullification(use)
-  -- 按座位顺序轮询是否有人使用【无懈可击】。
-  -- 只问**手里真有可能出无懈可击**的人：
-  -- 之前见谁都问，手里一张都没有也要弹一次「请打出【无懈可击】或点【不出】」，
-  -- 每张锦囊都白点一下（用户实测反馈）。
-  for _, p in ipairs(self:alivePlayers()) do
-    if self:canNullify(p) then
-      -- 文案：目标与使用者是同一人时（如对自己用【无中生有】），
-      -- 不要说成「X 对 X」——那看起来就像 bug（用户实测反馈）
-      local target = use.to[1]
-      local prompt
-      if target == use.from then
-        prompt = string.format("是否【无懈可击】抵消 %s 的【%s】？",
-          use.from.name, use.card:zhName())
-      else
-        prompt = string.format("是否【无懈可击】抵消 %s 对 %s 的【%s】？",
-          use.from.name, (target and target.name) or "-", use.card:zhName())
-      end
-      local null = self:askForCard(p, "nullification", prompt,
-        { ask_target = target, ask_from = use.from })
-      if null and p:takeCard(null) then
-        self:log("%s 使用【无懈可击】抵消了效果", p.name)
-        table.insert(self.discardPile, null)
-        return true
+  local target = use.to and use.to[1] or nil
+  local round = 0            -- 已出的无懈张数；round 0 = 询问抵消原锦囊
+  local last_player = nil    -- 上一张无懈是谁出的
+  -- 上限保险：全场无懈总量有限（标准 4 张 + 转化），正常到不了这里
+  while round < 8 do
+    local played = nil
+    for _, p in ipairs(self:alivePlayers()) do
+      if self:canNullify(p) then
+        local prompt
+        if round == 0 then
+          -- 文案：目标与使用者是同一人时（如对自己用【无中生有】），
+          -- 不要说成「X 对 X」——那看起来就像 bug（用户实测反馈）
+          if target == use.from then
+            prompt = string.format("是否【无懈可击】抵消 %s 的【%s】？",
+              use.from.name, use.card:zhName())
+          else
+            prompt = string.format("是否【无懈可击】抵消 %s 对 %s 的【%s】？",
+              use.from.name, (target and target.name) or "-", use.card:zhName())
+          end
+        else
+          local next_negated = ((round + 1) % 2) == 1
+          prompt = string.format("是否【无懈可击】抵消 %s 的【无懈可击】？（出牌后【%s】将%s）",
+            (last_player and last_player.name) or "?", use.card:zhName(),
+            next_negated and "失效" or "重新生效")
+        end
+        local null = self:askForCard(p, "nullification", prompt, {
+          ask_target = target,          -- 原锦囊的目标（BOT/AI 判断立场用）
+          ask_from = (round == 0) and use.from or last_player, -- 本轮要抵消的牌是谁出的
+          nullify_round = round + 1,    -- 1=抵消原锦囊；≥2=抵消另一张无懈
+        })
+        if null and p:takeCard(null) then
+          if round == 0 then
+            self:log("%s 使用【无懈可击】抵消【%s】的效果", p.name, use.card:zhName())
+          else
+            self:log("%s 使用【无懈可击】抵消 %s 的【无懈可击】", p.name,
+              (last_player and last_player.name) or "?")
+          end
+          table.insert(self.discardPile, null)
+          played = p
+          break -- 本轮有人出无懈 → 进入下一轮，询问是否再被抵消
+        end
       end
     end
+    if not played then
+      if round > 0 then
+        self:log("【%s】共被 %d 张【无懈可击】指向，最终%s", use.card:zhName(),
+          round, (round % 2) == 1 and "被抵消" or "生效")
+      end
+      return (round % 2) == 1
+    end
+    last_player = played
+    round = round + 1
   end
-  return false
+  return (round % 2) == 1
 end
 
 -- ===== 日志与事件 =====
@@ -608,20 +718,26 @@ function Room:notifyHandEmpty(p)
   end
 end
 
--- 让 p 从 choices 里选一项（如【反间】猜花色）；无响应时返回 nil。
+-- 让 p 从 choices 里选一项（如【反间】猜花色、【借刀】指定目标）；无响应时返回 nil。
 -- 兼容原版签名：choices 为 "a+b+c" 字符串时（diy 扩展惯用），
 -- 无应答就退回第一个选项，避免脚本卡在询问上。
-function Room:askForChoice(p, choices, prompt)
+-- opts 会并入请求（pick = enemy/ally/self 给 BOT 立场启发式；
+-- giveaway 标记送牌场景），人类 UI 不依赖这些标志。
+function Room:askForChoice(p, choices, prompt, opts)
   local list = choices
   if type(choices) == "string" then
     list = {}
     for w in string.gmatch(choices, "[^+]+") do table.insert(list, w) end
   end
+  local req = {
+    type = "askForChoice", player = p, choices = list, prompt = prompt,
+  }
+  if type(opts) == "table" then
+    for k, v in pairs(opts) do req[k] = v end
+  end
   local res = nil
   if coroutine.running() ~= nil then
-    res = coroutine.yield({
-      type = "askForChoice", player = p, choices = list, prompt = prompt,
-    })
+    res = coroutine.yield(req)
   end
   if res ~= nil then return res end
   if type(choices) == "string" then return list[1] end
@@ -642,17 +758,32 @@ function Room:isSavageImmune(p)
   return Generals.marker(p, "savage_immune", false) == true
 end
 
--- 找出能把某张手牌「当作」want_name 使用的转化技，返回 {skill, card} 列表
+-- 找出能把某张「自己的牌」当作 want_name 使用的转化技，返回 {skill, card} 列表。
+-- 默认候选 = 手牌 + 装备区（官方口径：装备区的牌也是「自己的牌」，
+-- 【武圣】可以把红色装备当【杀】、【国色】可把方块装备当【乐】）；
+-- 牌面写「手牌」的技能（倾国/双雄/丈八蛇矛/乱击）用 hand_only 关掉装备区。
 function Room:viewAsCandidates(p, want_name)
   local out = {}
   local skills = self:skillsOf(p) -- 含装备带来的转化技（【丈八蛇矛】）
+  -- 单牌转化技的候选源：手牌 +（非 hand_only 时）装备区
+  local function sources(skill)
+    local cards = {}
+    for _, c in ipairs(p.hand) do cards[#cards + 1] = c end
+    if not skill.hand_only then
+      for _, slot in ipairs(Player.EQUIP_SLOTS) do
+        local e = p.equips[slot]
+        if e then cards[#cards + 1] = e end
+      end
+    end
+    return cards
+  end
   for _, s in ipairs(skills) do
     -- 【急救】：只能在自己回合外发动
     if s.only_outside_turn and p.phase ~= "not_active" then
       -- 自己的回合内不可用
     elseif s.result_name == nil and s.view_as then
       -- DIY 扩展的动态转化技：结果牌名不固定（如【神偷】梅花→顺手牵羊），
-      -- 只能逐张试算看能变成什么
+      -- 只能逐张试算看能变成什么（动态技无法预知牌面区域约定，仍限手牌）
       for _, c in ipairs(p.hand) do
         -- 试算前同样要走过滤条件，否则任意牌都能「转化」
         if (not s.filter or s:filter(c, p)) then
@@ -665,7 +796,7 @@ function Room:viewAsCandidates(p, want_name)
     elseif s.result_name ~= want_name then
       -- 不匹配
     elseif s.n == 2 and s.filter_pair then
-      -- 双牌转化技（【乱击】两张同花色当【万箭齐发】）
+      -- 双牌转化技（【乱击】【丈八蛇矛】：牌面均写明「两张**手牌**」）
       for i = 1, #p.hand do
         for j = i + 1, #p.hand do
           if s:filter_pair(p.hand[i], p.hand[j], p) then
@@ -676,7 +807,7 @@ function Room:viewAsCandidates(p, want_name)
       end
     elseif s.filter then
       -- filter 需要知道持有者（【双雄】按本回合判定色过滤），故把 p 传进去
-      for _, c in ipairs(p.hand) do
+      for _, c in ipairs(sources(s)) do
         if s:filter(c, p) then table.insert(out, { skill = s, card = c }) end
       end
     end
@@ -784,7 +915,7 @@ function Room:_phase(p, name)
   self:trigger("EventPhaseEnd", p, { player = p, phase = name })
 end
 
-function Room:_phase_start(_p)
+function Room:_phase_start(_)
 end
 
 -- 判定阶段：结算判定区里的延时锦囊。
@@ -846,7 +977,7 @@ function Room:_phase_discard(p)
   self:notifyHandEmpty(p)
 end
 
-function Room:_phase_finish(_p)
+function Room:_phase_finish(_)
 end
 
 -- ===== 判定 =====
@@ -975,13 +1106,18 @@ function Room:_useCardInner(from, card, target)
   if target and target.is_human ~= nil then targets = { target } end
   targets = targets or {}
 
-  -- 转化技产生的虚拟牌：实体牌仍以 subcards 形式留在手中，需逐一取出
+  -- 转化技产生的虚拟牌：实体牌仍以 subcards 形式留在手中或装备区，需逐一取出
+  -- （【武圣】可以把装备区的红色装备当【杀】，取出时从装备区摘并触发【枭姬】）
   local is_virtual = card ~= nil and card.virtual == true
   if not card then return false end
   if is_virtual then
     local got = 0
     for _, sc in ipairs(card.subcards or {}) do
-      if from:takeCard(sc) then got = got + 1 end
+      local zone = from:takeCardAnyZone(sc)
+      if zone then
+        got = got + 1
+        if zone == "equip" then self:_onEquipLost(from, sc) end
+      end
     end
     -- phantom：技能凭空生成的牌（【神速】等），无实体来源，允许 subcards 为空
     if got == 0 and not card.phantom then
@@ -1062,10 +1198,19 @@ function Room:_useCardInner(from, card, target)
   return self:_useBasic(from, card, use.to)
 end
 
--- 退还：虚拟牌要把实体牌还给使用者
+-- 退还：虚拟牌要把实体牌还给使用者；来自装备区的要**回装备槽**
+-- （转化失败退还时不能把装备莫名变成手牌）
 function Room:_refund(p, card)
   if card.virtual then
-    for _, sc in ipairs(card.subcards or {}) do table.insert(p.hand, sc) end
+    for _, sc in ipairs(card.subcards or {}) do
+      local def = Cards.get(sc.name)
+      local slot = (sc.ctype == Card.Type.Equip) and def and def.equip or nil
+      if slot and p.equips[slot] == nil then
+        p.equips[slot] = sc
+      else
+        table.insert(p.hand, sc)
+      end
+    end
   else
     table.insert(p.hand, card)
   end
@@ -1113,33 +1258,51 @@ function Room:_useBasic(from, card, targets)
       self:_refund(from, card)
       return false
     end
-    from.slash_used = true
-    from.slash_count = from.slash_count + 1
-    self:_toDiscard(card)
-    self:_resolveSlash(from, target, card)
-
-    -- 【短兵】（锁定技）：此【杀】可额外指定一名距离 1 以内的角色
-    if Generals.marker(from, "slash_extra_target", false) then
-      for _, q in ipairs(self.players) do
-        if q ~= from and q ~= target and q.alive and self:distance(from, q) <= 1 then
-          self:log("%s 的【短兵】生效，【杀】额外指定 %s", from.name, q.name)
-          self:_resolveSlash(from, q, card)
-          break
+    -- 【方天画戟】：最后一张手牌为【杀】时，在任何目标开始结算前，
+    -- 由使用者再选至多两名目标。用集合排除主目标和此前追加目标，杜绝重复。
+    local slash_targets = { target }
+    local chosen = { [target] = true }
+    if from:hasEquip("halberd") and #from.hand == 0 then
+      local halberd_reach = self:attackRangeOf(from)
+      local probe = Card.create(-1, "slash", 1, 1, Card.Type.Basic)
+      for _ = 1, 2 do
+        local cands = {}
+        for _, q in ipairs(self.players) do
+          if q ~= from and not chosen[q] and q.alive
+            and self:distance(from, q) <= halberd_reach
+            and not self:_rejectsTarget(from, probe, q) then
+            cands[#cands + 1] = q
+          end
         end
+        if #cands == 0 then break end
+        local names = { "不追加" }
+        for _, q in ipairs(cands) do names[#names + 1] = q.name end
+        local pick = self:askForChoice(from, names,
+          "【方天画戟】：额外指定【杀】的目标（至多 2 名）")
+        if not pick or pick == "不追加" then break end
+        local extra = nil
+        for _, q in ipairs(cands) do if q.name == pick then extra = q break end end
+        if not extra then break end
+        chosen[extra] = true
+        slash_targets[#slash_targets + 1] = extra
+        self:log("%s 的【方天画戟】生效，【杀】额外指定 %s", from.name, extra.name)
       end
     end
 
-    -- 【方天画戟】：【杀】结算后若没有手牌，可额外指定至多 2 名角色
-    if from:hasEquip("halberd") and #from.hand == 0 then
-      local reach = self:attackRangeOf(from)
-      local extra = 0
+    from.slash_used = true
+    from.slash_count = from.slash_count + 1
+    self:_toDiscard(card)
+    for _, q in ipairs(slash_targets) do
+      if q.alive then self:_resolveSlash(from, q, card) end
+    end
+
+    -- 【短兵】（锁定技）：此【杀】可额外指定一名距离 1 以内且尚未指定的角色
+    if Generals.marker(from, "slash_extra_target", false) then
       for _, q in ipairs(self.players) do
-        if extra >= 2 then break end
-        if q ~= from and q ~= target and q.alive
-          and self:distance(from, q) <= reach then
-          extra = extra + 1
-          self:log("%s 的【方天画戟】生效，【杀】额外指定 %s", from.name, q.name)
+        if q ~= from and not chosen[q] and q.alive and self:distance(from, q) <= 1 then
+          self:log("%s 的【短兵】生效，【杀】额外指定 %s", from.name, q.name)
           self:_resolveSlash(from, q, card)
+          break
         end
       end
     end
@@ -1270,7 +1433,7 @@ end
 -- 玩家看到的就是点了没反应，回合还莫名结束。
 -- 典型触发：诸葛亮【空城】且手牌为空时，UI 认为可以出【杀】，引擎拒绝。
 -- 现在 canUseCardOn 与 _validateUse 共用同一份判定，二者永远一致。
-function Room:_rejectsTarget(from, card, to)
+function Room:_rejectsTarget(_, card, to)
   local def = Cards.get(card.name)
   if not def then return nil end
 
@@ -1365,6 +1528,25 @@ end
 
 -- ===== 杀的结算 =====
 
+-- 【八卦阵】/【八阵】：需要使用或打出【闪】时的判定，红色视为打出一张【闪】。
+-- 文档牌面：「你需要使用或打出【闪】时，可进行判定」——因此【杀】与
+-- 【万箭齐发】等一切「要闪」的场景都走这里，不再只在杀的结算里生效。
+-- attacker 带【青釭剑】时防具被无视，不判定。返回 true 表示视为已打出【闪】。
+function Room:armorDodgeCheck(p, attacker)
+  local auto_armor = Generals.marker(p, "auto_armor", nil)
+  local has_bagua = p:hasEquip("eight_diagram") ~= nil
+    or (auto_armor == "eight_diagram" and p:getArmor() == nil)
+  if not has_bagua then return false end
+  if attacker and attacker:hasEquip("qinggang_sword") then return false end
+  if #self.drawPile == 0 then return false end
+  local judge = table.remove(self.drawPile)
+  local red = judge:isRed()
+  table.insert(self.discardPile, judge)
+  self:log("%s 的【八卦阵】判定 %s %s", p.name, judge:suitString(),
+    red and "红色，视为打出【闪】" or "黑色，防具失效")
+  return red
+end
+
 function Room:_resolveSlash(from, to, card)
   local nature = "normal"
   if card.name == "fire_slash" then nature = "fire" end
@@ -1391,22 +1573,34 @@ function Room:_resolveSlash(from, to, card)
     return
   end
 
-  -- 【享乐】（锁定技）：体力大于 1 时成为【杀】的目标，使用者需弃一张牌，否则此【杀】无效
+  -- 【享乐】（锁定技）：体力大于 1 时成为【杀】的目标，使用者需弃一张手牌，
+  -- 否则此【杀】无效。决定者是弃牌人（from）自己，故 source == target。
   if Generals.marker(to, "xiangle", false) and to.hp > 1 and #from.hand > 0 then
     self:log("%s 的【享乐】生效：%s 需弃置一张牌，否则此【杀】无效", to.name, from.name)
-    local dumped = self:askForDiscardFrom(to, from, 1)
-    if not dumped then
+    local dumped = self:askForDiscardFrom(from, from, 1, true)
+    if #dumped == 0 then
       self:log("%s 未能弃牌，此【杀】无效", from.name)
       self:trigger("SlashMissed", to, { from = from, to = to })
       return
     end
   end
 
-  -- 【雌雄双股剑】：【杀】指定异性角色后，其须先弃 1 张手牌，否则你摸 1 张牌
+  -- 【雌雄双股剑】：【杀】指定异性角色后，其选择一项：弃 1 张手牌，或令你摸 1 张牌
   if from:hasEquip("double_sword") and to.female ~= from.female then
     if #to.hand > 0 then
-      self:askForDiscardFrom(from, to, 1)
-      self:log("%s 的【雌雄双股剑】令 %s 弃置一张手牌", from.name, to.name)
+      local opt_discard, opt_draw = "弃置一张手牌",
+        string.format("令 %s 摸一张牌", from.name)
+      local pick = self:askForChoice(to, { opt_discard, opt_draw },
+        "【雌雄双股剑】：选择一项") or opt_discard -- BOT 无响应时保守弃牌
+      if pick == opt_draw then
+        local c = table.remove(self.drawPile)
+        if c then
+          table.insert(from.hand, c)
+          self:log("%s 的【雌雄双股剑】生效：%s 选择让其摸一张牌", from.name, to.name)
+        end
+      else
+        self:askForDiscardFrom(to, to, 1, true)
+      end
     else
       local c = table.remove(self.drawPile)
       if c then
@@ -1448,20 +1642,10 @@ function Room:_resolveSlash(from, to, card)
     end
   end
 
-  -- 八卦阵：未打出【闪】时可判定，红色视为打出【闪】
-  -- 【八阵】：没装备防具时视为装备着【八卦阵】
-  local auto_armor = Generals.marker(to, "auto_armor", nil)
-  local has_bagua = to:hasEquip("eight_diagram") ~= nil
-    or (auto_armor == "eight_diagram" and to:getArmor() == nil)
-  if not dodged and has_bagua and not ignore_armor then
-    local judge = (#self.drawPile > 0) and table.remove(self.drawPile) or nil
-    if judge then
-      local red = judge:isRed()
-      table.insert(self.discardPile, judge)
-      self:log("%s 的【八卦阵】判定 %s %s", to.name, judge:suitString(),
-        red and "红色，视为打出【闪】" or "黑色，防具失效")
-      dodged = red
-    end
+  -- 八卦阵（含【八阵】视为装备）：未打出【闪】时判定，红色视为打出【闪】；
+  -- 【青釭剑】无视防具时不判定（armorDodgeCheck 内部判定）
+  if not dodged and self:armorDodgeCheck(to, from) then
+    dodged = true
   end
 
   -- 【青龙偃月刀】：目标出【闪】后，可对其再使用 1 张【杀】
@@ -1480,14 +1664,21 @@ function Room:_resolveSlash(from, to, card)
     end
   end
 
-  -- 【贯石斧】：【杀】被【闪】抵消时，可弃置两张牌令其依然造成伤害
-  if dodged and from:hasEquip("axe") and #from.hand >= 2 then
-    local dumped = self:askForDiscard(from, 2) or {}
-    local dropped = 0
+  -- 【贯石斧】：【杀】被【闪】抵消时，可弃置两张牌（手牌或装备）强制命中。
+  local axe_cards = dodged and from:hasEquip("axe") and discardableCards(from, true) or {}
+  if dodged and #axe_cards >= 2 then
+    local dumped = self:askForDiscard(from, 2,
+      "【贯石斧】：弃置两张牌令此【杀】依然造成伤害", { include_equips = true }) or {}
+    local dropped, seen = 0, {}
     for _, c in ipairs(dumped) do
-      if from:takeCard(c) then
-        table.insert(self.discardPile, c)
-        dropped = dropped + 1
+      if not seen[c] then
+        local zone = from:takeCardAnyZone(c)
+        if zone == "hand" or zone == "equip" then
+          seen[c] = true
+          if zone == "equip" then self:_onEquipLost(from, c) end
+          table.insert(self.discardPile, c)
+          dropped = dropped + 1
+        end
       end
     end
     if dropped >= 2 then
@@ -1504,13 +1695,15 @@ function Room:_resolveSlash(from, to, card)
   self:_slashHit(from, to, card, nature, ignore_armor)
 end
 
--- 从手牌取走一张牌（虚拟牌则取走它的实体来源牌）
+-- 从手牌或装备区取走一张牌作为转化来源（虚拟牌取走它的全部实体来源牌）
 function Room:_takeCardOrSubcards(p, card)
   if card.virtual then
     local subs = card.subcards or {}
     if #subs == 0 then return card.phantom == true end
     for _, sc in ipairs(subs) do
-      if not p:takeCard(sc) then return false end
+      local zone = p:takeCardAnyZone(sc)
+      if not zone then return false end
+      if zone == "equip" then self:_onEquipLost(p, sc) end
     end
     return true
   end
@@ -1518,7 +1711,7 @@ function Room:_takeCardOrSubcards(p, card)
 end
 
 -- 【杀】命中后的伤害与后续效果
-function Room:_slashHit(from, to, card, nature, ignore_armor)
+function Room:_slashHit(from, to, card, nature, _)
   self:trigger("SlashHit", to, { from = from, to = to, card = card })
 
   -- 寒冰剑：改为弃两张牌
@@ -1541,16 +1734,29 @@ function Room:_slashHit(from, to, card, nature, ignore_armor)
 
   self:damage(from, to, n, nature, card)
 
-  -- 麒麟弓：命中后弃目标一匹马
+  -- 麒麟弓：命中后可弃目标一匹坐骑（可选，多匹时可挑哪一匹）
   if from:hasEquip("kylin_bow") and to.alive then
+    local horses = {}
     for _, slot in ipairs { "offensive_horse", "defensive_horse" } do
-      local horse = to.equips[slot]
-      if horse then
-        to.equips[slot] = nil
-        self:_onEquipLost(to, horse)
-        table.insert(self.discardPile, horse)
-        self:log("%s 的【麒麟弓】击落 %s 的【%s】", from.name, to.name, horse:zhName())
-        break
+      local h = to.equips[slot]
+      if h then horses[#horses + 1] = { slot = slot, card = h } end
+    end
+    if #horses > 0 then
+      local opts = { "不发动" }
+      for _, h in ipairs(horses) do
+        opts[#opts + 1] = "弃置【" .. h.card:zhName() .. "】"
+      end
+      local pick = self:askForChoice(from, opts, "【麒麟弓】：是否弃置目标的坐骑？")
+      if pick ~= "不发动" and pick ~= nil then
+        for _, h in ipairs(horses) do
+          if pick == "弃置【" .. h.card:zhName() .. "】" then
+            to.equips[h.slot] = nil
+            self:_onEquipLost(to, h.card)
+            table.insert(self.discardPile, h.card)
+            self:log("%s 的【麒麟弓】击落 %s 的【%s】", from.name, to.name, h.card:zhName())
+            break
+          end
+        end
       end
     end
   end
@@ -1798,14 +2004,14 @@ function Room:_dyingSelfRescue(p)
   return false
 end
 
--- 其余角色救援：从濒死者开始按逆时针依次询问，救回即止（不会多弃桃）。
--- 返回 true 表示已被救回（体力回到 1 点以上）。
+-- 其余角色救援：从濒死者开始按**逆时针**（官方规则）依次询问，救回即止
+-- （不会多弃桃）。返回 true 表示已被救回（体力回到 1 点以上）。
 function Room:_dyingAskOthers(p)
   local n = #self.players
   local base = self:seatOf(p)
   if base == 0 then return p.hp > 0 end
   for i = 1, n - 1 do
-    local q = self.players[((base - 1 + i) % n) + 1]
+    local q = self.players[((base - 1 - i) % n) + 1]
     if q ~= p and q.alive then
       local peach = self:askForCard(q, "peach",
         string.format("%s 濒死，是否使用【桃】救援？", p.name), { dying = p })

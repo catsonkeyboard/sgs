@@ -67,6 +67,7 @@ end
 local EXPECTED_COUNT = {
   askForUseCard = 1, askForCard = 1, askForChooseCard = 1,
   askForDiscardFrom = 1, askForSkillInvoke = 1, askForChoice = 1,
+  askForGuanxing = 1,
 }
 
 -- 主入口：raw 是 LLM 原始字符串，actions 是 Actions.enumerate 的结果
@@ -86,10 +87,16 @@ function Parse.response(raw, req, room, actions)
     picked[#picked + 1] = a
   end
 
-  -- 数量校验：弃牌要正好 n 张，其余请求只能选一个
+  -- 数量校验：弃牌要正好 n 张（any 模式如【制衡】允许 0..n 张），
+  -- 其余请求只能选一个
   if req.type == "askForDiscard" then
-    if #picked ~= (req.n or 0) then
-      return nil, string.format("弃牌数量不符：需要 %d 张，给了 %d 个", req.n or 0, #picked)
+    local want_n = req.n or 0
+    if req.any then
+      if #picked > want_n then
+        return nil, string.format("弃牌数量超限：至多 %d 张，给了 %d 个", want_n, #picked)
+      end
+    elseif #picked ~= want_n then
+      return nil, string.format("弃牌数量不符：需要 %d 张，给了 %d 个", want_n, #picked)
     end
   else
     local want = EXPECTED_COUNT[req.type] or 1
@@ -153,6 +160,14 @@ function Parse.response(raw, req, room, actions)
 
   if kind == "invoke" or kind == "choice" then
     return picked[1].value, nil, extra
+  end
+
+  -- 观星：直接把候选里预构造的 up/down 顺序交给引擎
+  -- （room.lua 对非表响应的约定是保持原序，这里的表一定合法：
+  -- 元素就是刚从牌堆顶取出的那几张牌，只是顺序与顶底分配不同）
+  if kind == "guanxing" then
+    local a = picked[1]
+    return { up = a.up, down = a.down }, nil, extra
   end
 
   return nil, "未知动作类型：" .. tostring(kind)

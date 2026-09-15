@@ -539,11 +539,15 @@ define(Room, "askForCard", function(self, p, pattern, prompt, extra)
   return engineAskForCard(self, p, pattern, prompt, extra)
 end, true)
 
---   引擎：  room:askForDiscard(player, n)
+--   引擎：  room:askForDiscard(player, n, prompt, opts)
 --   原版：  room:askForDiscard(player, reason, n, m, ...)
-define(Room, "askForDiscard", function(self, p, a, b)
-  local n = (type(a) == "number") and a or b -- a 是数字说明是引擎调用
-  return engineAskForDiscard(self, p, n or 1)
+-- 数字第 2 参表示核心调用，须保留 prompt/opts（贯石斧装备多选依赖）；
+-- 字符串第 2 参才是原版 reason，此时沿用兼容语义，只取数量 n。
+define(Room, "askForDiscard", function(self, p, a, b, c)
+  if type(a) == "number" then
+    return engineAskForDiscard(self, p, a, b, type(c) == "table" and c or nil)
+  end
+  return engineAskForDiscard(self, p, b or 1)
 end, true)
 
 define(Room, "askForUseCard", function(self, p, _pattern, _prompt)

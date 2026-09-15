@@ -10,6 +10,8 @@
 -- 座位模型：
 --   座位 1..N 固定；连上来的客户端占座（人类），空座由 BOT 顶替。
 --   Driver 遇到人类请求会返回 "human"，Host 就把请求发给对应通道并等待。
+--   传了 ai_agent 的话，空座（或 ai_seats 指定的座位）交给 LLM 决策：
+--   Driver 会返回 "thinking"，tick 不做特殊处理，下一帧接着问即可。
 local class = require "src.class"
 local Engine = require "src.core.engine"
 local Player = require "src.core.player"
@@ -27,6 +29,10 @@ function Host:init(opts)
   -- 最少几个**真人**准备后才开局。默认 2：否则第一个人一 ready 就开局，
   -- 后面连进来的人只能干等这一局打完（实测踩过）。想单人练手传 1。
   self.minStart = opts.minStart or 2
+  -- 联机 AI（可选）：Agent 实例；nil = 空座全走规则 BOT（原有行为）。
+  -- ai_seats = "empty"（默认，全部空座）或 {2,3}（指定座位，人来了人优先）。
+  self.ai_agent = opts.ai_agent
+  self.ai_seats = opts.ai_seats or "empty"
   self.seat_count = self.count
   self.seats = {}
   for i = 1, self.count do
@@ -184,7 +190,7 @@ function Host:flushOver()
   }
 end
 
--- 建局：有客户端的座位是人类，其余由 BOT 顶上
+-- 建局：有客户端的座位是人类；其余由 AI（若接入）或 BOT 顶上
 function Host:startGame(seed)
   local engine = Engine.create()
   Standard.setup(engine)
@@ -192,13 +198,26 @@ function Host:startGame(seed)
   local Standard2 = require "src.core.standard"
   local picks = Standard2.pickGenerals(engine, Standard2.makeRng((seed or 1) + 7), self.count)
 
+  -- 指定座位模式时先建集合；"empty"（默认）表示全部空座都给 AI
+  local ai_set = nil
+  if type(self.ai_seats) == "table" then
+    ai_set = {}
+    for _, n in ipairs(self.ai_seats) do ai_set[n] = true end
+  end
+
   local players = {}
   for i = 1, self.count do
     local s = self.seats[i]
     local g = picks[i] or engine:getGeneral("白板武将")
     local is_human = s.channel ~= nil
-    local p = Player.create(is_human and (s.name or ("玩家" .. i)) or ("BOT·" .. g.name),
+    -- 人来了人优先：AI 只接空座（或指定且无人的座位）
+    local is_ai = self.ai_agent ~= nil and not is_human
+      and (ai_set == nil or ai_set[i] == true)
+    local p = Player.create(
+      is_human and (s.name or ("玩家" .. i))
+        or ((is_ai and "AI·" or "BOT·") .. g.name),
       g, i, is_human)
+    if is_ai then p:setControl("ai") end
     table.insert(players, p)
   end
   self.players = players
@@ -207,7 +226,7 @@ function Host:startGame(seed)
   self.room.rng = Standard.makeRng(seed or 1)
   if self.count >= 4 then self.room:setupRoles(Standard.makeRng((seed or 1) + 1)) end
   self.room:start()
-  self.driver = Driver.create(self.room, Bot.make())
+  self.driver = Driver.create(self.room, Bot.make(), self.ai_agent)
   self.seatOfPlayer = function(p)
     for i, q in ipairs(players) do if q == p then return i end end
     return nil
@@ -315,6 +334,10 @@ function Host:tick()
     end
     return "waiting"
   end
+  -- AI 思考中：Driver 在 advance 里轮询 Agent，没结果就返回 "thinking"。
+  -- 与本地牌桌同一模式：本 tick 什么都不做，下一帧接着问，主循环不阻塞
+  -- （前提是 Agent 用线程版传输层；见 server.lua 的构建逻辑）。
+  if st == "thinking" then return "thinking" end
   return st -- "over"
 end
 
@@ -332,13 +355,26 @@ function Host:toResponse(msg)
   if msg.target_seat then
     target = self.players[msg.target_seat]
   end
-  -- 按 card id 定位牌
+  -- 按 card id 定位牌。一般查应答者自己的手牌；
+  -- 拆牌类请求选的是 **target** 的牌（手牌/装备/判定区任一区域）
+  local function findByZone(q, id)
+    for _, c in ipairs(q.hand) do if c.id == id then return c end end
+    for _, slot in ipairs(Player.EQUIP_SLOTS) do
+      local e = q.equips[slot]
+      if e and e.id == id then return e end
+    end
+    for _, c in ipairs(q.judges) do if c.id == id then return c end end
+    return nil
+  end
   local function findCard(id)
     for _, c in ipairs(p.hand) do if c.id == id then return c end end
     return nil
   end
   if msg.card_id then
     local c = findCard(msg.card_id)
+    if not c and req.type == "askForDiscardFrom" and req.target then
+      c = findByZone(req.target, msg.card_id)
+    end
     if c then
       return target and { card = c, target = target } or c
     end
@@ -347,6 +383,10 @@ function Host:toResponse(msg)
     local out = {}
     for _, id in ipairs(msg.card_ids) do
       local c = findCard(id)
+      -- 【制衡】可同时选择本人手牌与装备区；其他多选请求仍只认手牌。
+      if not c and req.type == "askForDiscard" and req.include_equips then
+        c = findByZone(p, id)
+      end
       if c then table.insert(out, c) end
     end
     return out
@@ -360,10 +400,22 @@ function Host:snapshot()
   local r = self.room
   local players = {}
   for i, p in ipairs(self.players or {}) do
+    -- 技能名是公开的武将信息，随快照下发供联机牌桌点击武将后展示说明。
+    -- 去掉「·重置/·记录」等内部后缀并去重，避免同一技能显示多次。
+    local skills, seen = {}, {}
+    for _, skill in ipairs((p.general and p.general.skills) or {}) do
+      local name = tostring(skill.zh or skill.name or "未知技能")
+      name = name:match("^(.-)·") or name
+      if not seen[name] then
+        seen[name] = true
+        skills[#skills + 1] = name
+      end
+    end
     table.insert(players, {
       seat = i, name = p.name, hp = p.hp, max_hp = p.max_hp, alive = p.alive,
       hand = #p.hand,
       general = p.general and p.general.name or nil,
+      skills = skills,
       role = (p.role_revealed or not p.alive) and p.role or nil,
     })
   end

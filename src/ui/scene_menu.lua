@@ -38,12 +38,27 @@ function MenuScene:init(on_start, on_net)
     text = "AI 托管：关", desc = "",
   }
   self:refreshAIButton()
+
+  -- 开局选将（文档开局流程：主公 5 选 1、其余 3 选 1）；关 = 沿用随机分将
+  self.draft_on = true
+  self.draft_button = {
+    x = 300, y = 580, w = 530, h = 42, draft_toggle = true,
+    text = "开局选将：开", desc = "",
+  }
+  self:refreshDraftButton()
 end
 
 function MenuScene:refreshAIButton()
   local m = self.ai_modes[self.ai_index]
   self.ai_button.text = "AI 托管：" .. m.label
   self.ai_button.desc = m.desc .. "（需设置 SGS_AI_URL / SGS_AI_KEY）"
+end
+
+function MenuScene:refreshDraftButton()
+  self.draft_button.text = "开局选将：" .. (self.draft_on and "开" or "关")
+  self.draft_button.desc = self.draft_on
+    and "主公 5 选 1、其余 3 选 1（文档开局流程）"
+    or "随机分将（跳过选将直接开局）"
 end
 
 function MenuScene:draw()
@@ -80,6 +95,16 @@ function MenuScene:draw()
   love.graphics.setFont(self.font_sm)
   love.graphics.printf(ab.desc, ab.x, ab.y + ab.h + 6, ab.w, "center")
 
+  local db = self.draft_button
+  love.graphics.setColor(0.16, 0.30, 0.42)
+  love.graphics.rectangle("fill", db.x, db.y, db.w, db.h, 10, 10)
+  love.graphics.setColor(1, 1, 1)
+  love.graphics.setFont(self.font)
+  love.graphics.printf(db.text, db.x, db.y + 10, db.w, "center")
+  love.graphics.setColor(0.7, 0.72, 0.7)
+  love.graphics.setFont(self.font_sm)
+  love.graphics.printf(db.desc, db.x, db.y + db.h + 6, db.w, "center")
+
   love.graphics.setColor(0.5, 0.55, 0.5)
   love.graphics.setFont(self.font_sm)
   love.graphics.printf("LÖVE 11.5 · 从 QSanguosha (C++/Qt) 迁移", 0, h - 40, w, "center")
@@ -95,12 +120,20 @@ function MenuScene:mousepressed(x, y, button)
     return
   end
 
+  local db = self.draft_button
+  if x >= db.x and x <= db.x + db.w and y >= db.y and y <= db.y + db.h then
+    self.draft_on = not self.draft_on
+    self:refreshDraftButton()
+    return
+  end
+
   for _, b in ipairs(self.buttons) do
     if x >= b.x and x <= b.x + b.w and y >= b.y and y <= b.y + b.h then
       if b.net then
         if self.on_net then self.on_net() end
       else
-        self.on_start(b.mode, b.size, self.ai_modes[self.ai_index].key)
+        self.on_start(b.mode, b.size, self.ai_modes[self.ai_index].key,
+          self.draft_on)
       end
       return
     end

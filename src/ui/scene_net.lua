@@ -10,6 +10,7 @@ local Layout = require "src.ui.layout"
 local Skin = require "src.ui.skin"
 local Effects = require "src.ui.effects"
 local Audio = require "src.ui.audio"
+local SkillDesc = require "src.ui.skill_desc"
 
 local CARD_W, CARD_H = 92, 128
 
@@ -38,6 +39,7 @@ function NetScene:init(on_exit, client, name)
   self.seat = nil
   self.picked = nil
   self.buttons = {}
+  self.skillPopup = nil
 
   client:hello()
   client:ready(true)
@@ -173,6 +175,29 @@ function NetScene:panelAt(x, y)
   return nil
 end
 
+-- 联机精简面板没有本地大头像资源，武将名所在区域即作为头像/武将信息点击区。
+function NetScene:avatarRect(index)
+  local a = self.layout.anchors[index]
+  if not a then return nil end
+  return { x = a[1] + 6, y = a[2] + 40, w = self.panelW - 12, h = 25 }
+end
+
+function NetScene:avatarAt(x, y)
+  for i, p in ipairs(self.snap and self.snap.players or {}) do
+    local r = self:avatarRect(i)
+    if r and x >= r.x and x <= r.x + r.w and y >= r.y and y <= r.y + r.h then
+      return p, i
+    end
+  end
+  return nil
+end
+
+function NetScene:openSkillPopup(p)
+  if not (p and p.general) then return false end
+  self.skillPopup = SkillDesc.open(p.name, p.general, SkillDesc.entriesFromNames(p.skills))
+  return true
+end
+
 -- 退出：断开连接并回菜单
 function NetScene:_exitGame()
   if self.client and self.client.channel then
@@ -182,6 +207,10 @@ function NetScene:_exitGame()
 end
 
 function NetScene:keypressed(key)
+  if self.skillPopup then
+    if key == "escape" then self.skillPopup = nil end
+    return
+  end
   if key ~= "escape" then return end
   if self.confirmExit then
     self.confirmExit = false
@@ -194,6 +223,12 @@ end
 
 function NetScene:mousepressed(x, y, button)
   if button ~= 1 then return end
+  if self.skillPopup then
+    if SkillDesc.shouldClose(self.skillPopup, x, y) then self.skillPopup = nil end
+    return
+  end
+  local p = self:avatarAt(x, y)
+  if p and self:openSkillPopup(p) then return end
   if self.confirmExit then
     local hitConfirm = false
     for _, b in ipairs(self.buttons) do
@@ -293,6 +328,8 @@ function NetScene:draw()
   -- 动效
   local w, h = love.graphics.getDimensions()
   self.effects:draw(w, h, self.font, self.font_mid)
+
+  SkillDesc.draw(self.skillPopup, self.font, self.font_mid, self.font_sm)
 end
 
 function NetScene:drawPanel(p, x, y, isSelf)
@@ -311,8 +348,12 @@ function NetScene:drawPanel(p, x, y, isSelf)
       tostring(p.hp), tostring(p.max_hp), tostring(p.hand)), x + 8, y + 26)
   end
   if p.general then
+    if self.skillPopup and self.skillPopup.player_name == p.name then
+      love.graphics.setColor(0.95, 0.72, 0.22)
+      love.graphics.rectangle("line", x + 5, y + 40, self.panelW - 10, 25, 4, 4)
+    end
     love.graphics.setColor(0.85, 0.9, 0.85)
-    love.graphics.print(tostring(p.general), x + 8, y + 46)
+    love.graphics.print(tostring(p.general) .. "（点击查看技能）", x + 8, y + 46)
   end
   if p.role then
     love.graphics.setColor(0.95, 0.85, 0.4)

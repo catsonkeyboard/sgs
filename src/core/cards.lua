@@ -15,6 +15,7 @@
 --   effect(room, use)  use = {from=, card=, to={...}}
 --   judge(room, player, card)  延时锦囊判定结果 -> true 表示生效
 local Card = require "src.core.card"
+local Player = require "src.core.player" -- 【顺手牵羊】要枚举装备区/判定区
 
 local Cards = { defs = {} }
 local T = Card.Type
@@ -46,12 +47,6 @@ function Cards.isDelayed(name)
   return d ~= nil and d.delayed == true
 end
 
--- 通用：从目标手里随机取一张牌（用于过河拆桥等）
-local function randomCardOf(p)
-  if #p.hand == 0 then return nil end
-  return p.hand[math.random(#p.hand)]
-end
-
 -- ==================== 基本牌 ====================
 -- 结算逻辑在 Room:_useBasic（与武器/防具/伤害管线耦合较深），
 -- 这里只登记元数据，供牌堆构建与统一查询使用。
@@ -71,7 +66,10 @@ Cards.define("duel", {
     local a, b = use.from, use.to[1]
     if not (a and b) then return end
     room:log("%s 对 %s 使用【决斗】", a.name, b.name)
-    local attacker, defender = b, a -- 由目标先出杀
+    -- 文档：「由**目标**开始，双方轮流打出【杀】」——即 b 先出。
+    -- 旧代码初始化为 (b, a)，实际让使用者先出（注释与实现相反，对标时被注释误导）；
+    -- 修正为 attacker=a（当前占优方）、defender=b（当前被问方，从目标开始）。
+    local attacker, defender = a, b
     while true do
       -- 【无双】（锁定技）：吕布发起的决斗，对方每次需打出两张【杀】
       -- 这里不 require generals（会造成循环依赖），直接查技能字段
@@ -120,12 +118,36 @@ Cards.define("snatch", {
   effect = function(room, use)
     local from, to = use.from, use.to[1]
     if not to then return end
-    if #to.hand == 0 then room:log("%s 没有手牌可顺", to.name) return end
-    local card = randomCardOf(to)
-    to:takeCard(card)
+    -- 文档规则：获得目标的一张牌，手牌（随机）/装备/判定区任选区域。
+    -- 公开牌（装备/判定区）摆出来让使用者挑；不选或只有手牌则随机抽一张暗牌。
+    local publics = {}
+    for _, slot in ipairs(Player.EQUIP_SLOTS) do
+      local c = to.equips[slot]
+      if c then publics[#publics + 1] = c end
+    end
+    for _, c in ipairs(to.judges) do publics[#publics + 1] = c end
+    local card = nil
+    if #publics > 0 then
+      card = room:askForChooseCard(from, publics,
+        "顺手牵羊：选择获得一张牌（不选则随机拿一张手牌）",
+        { allow_pass = true })
+    end
+    if not card and #to.hand > 0 then
+      card = to.hand[room:random(#to.hand)]
+    end
+    if not card then
+      room:log("%s 没有可顺的牌", to.name)
+      return
+    end
+    local zone = to:takeCardAnyZone(card)
+    if not zone then
+      room:log("%s 没有可顺的牌", to.name)
+      return
+    end
+    if zone == "equip" then room:_onEquipLost(to, card) end
     table.insert(from.hand, card)
-    room:log("%s 顺走 %s 的一张手牌", from.name, to.name)
-    room:notifyHandEmpty(to)
+    room:log("%s 顺走 %s 的【%s】", from.name, to.name, card:zhName())
+    if zone == "hand" then room:notifyHandEmpty(to) end
   end,
 })
 
@@ -184,6 +206,8 @@ Cards.define("archery_attack", {
           if dodge and p:takeCard(dodge) then
             room:throwCard(p, dodge)
             room:notifyHandEmpty(p)
+          elseif room:armorDodgeCheck(p, from) then
+            -- 八卦阵判定红色：视为打出【闪】，不受伤害（日志在 helper 里）
           else
             room:damage(from, p, 1)
           end
@@ -207,14 +231,24 @@ Cards.define("amazing_grace", {
   zh = "五谷丰登", target = "all", nullifiable = true,
   effect = function(room, use)
     local players = room:alivePlayers()
+    -- 文档：「由你开始依次选一张获得」——从使用者起按出牌顺序轮，
+    -- 而不是从座位 1 开始
+    local order = {}
+    local start = 1
+    for i, p in ipairs(players) do
+      if p == use.from then start = i break end
+    end
+    for i = 1, #players do
+      order[#order + 1] = players[((start - 1 + i - 1) % #players) + 1]
+    end
     room:log("%s 使用【五谷丰登】", use.from.name)
     local revealed = {}
-    for _ = 1, #players do
+    for _ = 1, #order do
       if #room.drawPile == 0 then break end
       table.insert(revealed, table.remove(room.drawPile))
     end
     if #revealed == 0 then return end
-    for _, p in ipairs(players) do
+    for _, p in ipairs(order) do
       if #revealed == 0 then break end
       local picked = room:askForChooseCard(p, revealed, "五谷丰登：选择一张牌收入手牌")
       if not picked then picked = revealed[1] end -- 未选择则取第一张，避免丢牌
@@ -235,31 +269,56 @@ Cards.define("collateral", {
     if not to then return end
     room:log("%s 对 %s 使用【借刀杀人】", from.name, to.name)
     local weapon = to.equips and to.equips.weapon
-    if weapon then
-      local victim = nil
-      for _, q in ipairs(room:alivePlayers()) do
-        if q ~= to and room:distance(to, q) <= (weapon.range or 1) then victim = q break end
-      end
-      if victim then
-        local slash = room:askForCard(to, "slash",
-          string.format("借刀杀人：对 %s 使用【杀】，否则武器归 %s", victim.name, from.name))
-        if slash and to:takeCard(slash) then
-          room:throwCard(to, slash)
-          local dodge = room:askForCard(victim, "dodge", "请打出【闪】")
-          if dodge and victim:takeCard(dodge) then
-            room:throwCard(victim, dodge)
-          else
-            room:damage(to, victim, 1)
-          end
-          return
-        end
+    if not weapon then return end -- 无武器：无事发生
+
+    -- 文档：「令一名装备区有武器的角色对其攻击范围内、**你指定的**另一名
+    -- 角色使用【杀】」。候选 = 武器持有者攻击范围内（不含其本人）的存活角色，
+    -- 且需是合法的【杀】目标（空城诸葛亮等会被 _rejectsTarget 过滤）。
+    -- 注意用 attackRangeOf（读武器定义的 range）：旧代码读 weapon.range
+    -- （Card 对象上根本没有这个字段）永远取到 1，是范围判定的 bug。
+    local range = room:attackRangeOf(to)
+    local probe = Card.create(-1, "slash", 1, 1, Card.Type.Basic)
+    local candidates = {}
+    for _, q in ipairs(room:alivePlayers()) do
+      if q ~= to and room:distance(to, q) <= range
+        and not room:_rejectsTarget(to, probe, q) then
+        table.insert(candidates, q)
       end
     end
-    if weapon then
-      to.equips.weapon = nil
-      table.insert(from.hand, weapon)
-      room:log("%s 获得 %s 的武器", from.name, to.name)
+    if #candidates == 0 then
+      -- 范围内无人可指定：借刀落空，武器不转移（修复：原来照样拿走武器）
+      room:log("%s 的攻击范围内没有可指定的目标，【借刀杀人】落空", to.name)
+      return
     end
+
+    -- 使用者指定目标：走 askForChoice（候选是玩家名，UI/AI 通用）；
+    -- BOT 有专门的候选策略（见 bot.lua），无响应时由引擎取首个候选兑底
+    local names = {}
+    for _, q in ipairs(candidates) do table.insert(names, q.name) end
+    local picked = room:askForChoice(from, names,
+      string.format("借刀杀人：指定 %s 的【杀】的目标（其攻击范围 %d）", to.name, range))
+    local victim = nil
+    for _, q in ipairs(candidates) do
+      if q.name == picked then victim = q break end
+    end
+    if not victim then victim = candidates[1] end
+
+    local slash = room:askForCard(to, "slash",
+      string.format("借刀杀人：对 %s 使用【杀】，否则武器归 %s", victim.name, from.name))
+    if slash and to:takeCard(slash) then
+      room:throwCard(to, slash)
+      room:notifyHandEmpty(to)
+      -- 视为持有者对指定目标使用【杀】：走完整杀结算，
+      -- 持有者的武器/防具/技能交互（青龙刀、麒麟弓、无双…）全部生效；
+      -- 不计入出牌次数（直接 _resolveSlash，不走 useCard 的次数校验）
+      room:_resolveSlash(to, victim, slash)
+      return
+    end
+    -- 不出杀：武器交给使用者；失去装备要触发【枭姬】等技能
+    to.equips.weapon = nil
+    room:_onEquipLost(to, weapon)
+    table.insert(from.hand, weapon)
+    room:log("%s 未出【杀】，%s 获得其武器【%s】", to.name, from.name, weapon:zhName())
   end,
 })
 
@@ -312,7 +371,7 @@ Cards.define("indulgence", {
       hit and "非红桃，跳过出牌阶段" or "红桃，无效")
     return hit
   end,
-  on_judged = function(room, player, hit)
+  on_judged = function(_, player, hit)
     if hit then player.skip_play = true end
   end,
 })
@@ -325,7 +384,7 @@ Cards.define("supply_shortage", {
       hit and "非梅花，跳过摸牌阶段" or "梅花，无效")
     return hit
   end,
-  on_judged = function(room, player, hit)
+  on_judged = function(_, player, hit)
     if hit then player.skip_draw = true end
   end,
 })
@@ -418,7 +477,7 @@ Cards.define("defensive_horse", {
 local sk = require "src.core.skill"
 Cards.spearSkill = (function()
   local s = sk.ViewAsSkill.create("丈八蛇矛",
-    { zh = "丈八蛇矛", result_name = "slash", n = 2 })
+    { zh = "丈八蛇矛", result_name = "slash", n = 2, hand_only = true }) -- 牌面：两张**手牌**当【杀】
   function s:filter_pair(a, b) return a ~= b end
   function s:view_as(cards)
     if #cards ~= 2 then return nil end

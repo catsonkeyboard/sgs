@@ -7,3 +7,6 @@ tools/*.zip
 # clone 之后 ./run-tests.sh 会因为找不到它而失败。
 *.zip
 .DS_Store
+
+# 本地 agent 会话日志（任务输出等），不应入库
+.pi/

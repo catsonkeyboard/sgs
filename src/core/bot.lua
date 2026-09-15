@@ -237,10 +237,18 @@ function Bot.make()
     elseif req.type == "askForCard" then
       local wanted = req.card_name
 
-      -- 【无懈可击】只在「别人的牌作用在自己身上」时才用，避免无谓消耗
+      -- 【无懈可击】：第一张只在自己成为目标时用（保守）；
+      -- 嵌套轮（nullify_round >= 2，抵消的是另一张无懈）：上一张无懈是
+      -- 敌人出的就再无懈——奇偶交替，最后一无懈决定锦囊命运
       if wanted == "nullification" then
         local target = req.ask_target
         local source = req.ask_from
+        if (req.nullify_round or 1) >= 2 then
+          if source and source ~= p and isEnemy(p, source, room) then
+            return findByName(p, "nullification")
+          end
+          return nil
+        end
         if not target or target ~= p then return nil end
         if source == p then return nil end
         return findByName(p, "nullification")
@@ -283,34 +291,123 @@ function Bot.make()
       local order = { dodge = 1, slash = 2, fire_slash = 2, thunder_slash = 2,
         peach = 3, analeptic = 3, nullification = 4 }
       local sorted = {}
-      for _, c in ipairs(p.hand) do table.insert(sorted, c) end
+      -- req.cards 在【制衡】等场景含手牌 + 装备；普通弃牌请求仍只用手牌。
+      for _, c in ipairs(req.cards or p.hand) do table.insert(sorted, c) end
       table.sort(sorted, function(a, b)
         return (order[a.name] or 2.5) < (order[b.name] or 2.5)
       end)
+      if req.any then
+        -- 【制衡】类自选弃牌：只换打不出去的废牌（闪/无懈），留一张保命，
+        -- 至多 3 张（与旧版策略一致，避免把整手牌换光）
+        local junk = {}
+        for _, c in ipairs(sorted) do
+          if c.name == "dodge" or c.name == "nullification" then
+            table.insert(junk, c)
+          end
+        end
+        local n = math.min(#junk - 1, 3)
+        local out = {}
+        for i = 1, math.max(n, 0) do table.insert(out, junk[i]) end
+        return out
+      end
       local out = {}
       for i = 1, math.min(req.n, #sorted) do table.insert(out, sorted[i]) end
       return out
 
-    -------------------------------------------------- 五谷丰登：选一张
+    -------------------------------------------------- 五谷丰登/送牌：选一张
     elseif req.type == "askForChooseCard" then
       local list = req.cards or {}
       if #list == 0 then return nil end
       local prefer = { peach = 5, analeptic = 4, nullification = 4,
         ex_nihilo = 4, slash = 3, dodge = 3 }
-      local best, best_score = list[1], -1
+      -- giveaway = 送出去的牌（反间/离间/青囊/流离/鬼才的代价）：挑最不值钱的；
+      -- 默认（五谷/顺手牵羊）挑最值钱的
+      local best, best_score = nil, nil
       for _, c in ipairs(list) do
         local s = prefer[c.name] or 1
         local def = Cards.get(c.name)
         if def and def.ctype == Card.Type.Equip then s = 4 end
-        if s > best_score then best, best_score = c, s end
+        if best_score == nil
+          or (req.giveaway and s < best_score)
+          or (not req.giveaway and s > best_score) then
+          best, best_score = c, s
+        end
       end
-      return best
+      return best or list[1]
 
-    -------------------------------------------------- 过河拆桥：替对手挑一张弃掉
+    -------------------------------------------------- 选项：玩家名或花色
+    elseif req.type == "askForChoice" then
+      local byName = {}
+      for _, q in ipairs(room.players) do byName[q.name] = q end
+      local any_player = false
+      for _, nm in ipairs(req.choices or {}) do
+        if byName[nm] then any_player = true break end
+      end
+      if any_player then
+        -- 收牌场景（【遗计】分牌）：优先留给自己
+        if req.pick == "self" and byName[p.name] then return p.name end
+        -- 候选是玩家名：按 req.pick 决定立场
+        --   enemy（默认，借刀/反间/离间/流离）：敌方里最好打的（残血+少牌优先）
+        --   ally（青囊/结姻）：自己人里最缺血的
+        local best, best_score = nil, nil
+        for _, nm in ipairs(req.choices) do
+          local q = byName[nm]
+          if q and q.alive then
+            local score
+            if req.pick == "ally" then
+              score = (not isEnemy(p, q, room)) and (q.hp * 2 + #q.hand) or 999
+            else
+              score = isEnemy(p, q, room) and (q.hp * 2 + #q.hand) or 999
+            end
+            if best_score == nil or score < best_score then best, best_score = nm, score end
+          end
+        end
+        return best or (req.choices and req.choices[1]) or nil
+      end
+      -- 非玩家选择（如【反间】猜花色）：若含「不发动/不追加」这类放弃项，
+      -- 取第一个非放弃项（保守发动，保持旧自动行为——麒麟弓照旧击落、
+      -- 画戟照旧追加）；纯文本选项（猜花色）交由引擎兑底
+      local list = req.choices or {}
+      local pass_words = { ["不发动"] = true, ["不追加"] = true, ["不弃"] = true }
+      local has_pass, first_act = false, nil
+      for _, v in ipairs(list) do
+        if pass_words[v] then has_pass = true
+        elseif first_act == nil then first_act = v end
+      end
+      if has_pass and first_act then return first_act end
+      return nil
+
+    -------------------------------------------------- 拆牌类：替 target 挑一张弃掉
+    -- （过河拆桥 / 寒冰剑拆任意区域；享乐 / 雌雄双股剑仅限弃牌人自己的手牌）
     elseif req.type == "askForDiscardFrom" then
       local t = req.target
-      if not t or #t.hand == 0 then return nil end
+      if not t then return nil end
       local key = { peach = 3, analeptic = 3, nullification = 3, slash = 2, dodge = 1 }
+      -- 弃自己的牌（【享乐】【雌雄双股剑】）：丢最不值钱的，把关键牌留在手里
+      if t == p then
+        local worst, worst_score = nil, nil
+        for _, c in ipairs(t.hand) do
+          local s = key[c.name] or 1
+          if worst_score == nil or s < worst_score then worst, worst_score = c, s end
+        end
+        return worst
+      end
+      -- 对手的公开牌（装备/判定区）：先拆威胁最大的装备；
+      -- 判定区不碰——拆敌人的【乐不思蜀】/【闪电】等于帮他解套
+      if not req.hand_only then
+        local order = { weapon = 1, armor = 2, offensive_horse = 3, defensive_horse = 3 }
+        local best, best_rank = nil, 99
+        for _, c in ipairs(req.equip_judges or {}) do
+          local rank = 50
+          for slot, e in pairs(t.equips) do
+            if e == c and order[slot] then rank = order[slot] break end
+          end
+          if rank < best_rank then best, best_rank = c, rank end
+        end
+        if best then return best end
+      end
+      -- 手牌：拆桥语义是「随机」，BOT 近似为挑最值钱的弃
+      if #t.hand == 0 then return nil end
       local best, best_score = t.hand[1], -1
       for _, c in ipairs(t.hand) do
         local s = key[c.name] or 1

@@ -99,6 +99,59 @@ if ok_pa then
     .. tostring(hit and hit.name) .. "）")
 end
 
+-- 点击武将头像应打开技能说明；Esc 和弹层外点击都能关闭，且不触发退场确认。
+do
+  local target = nil
+  for _, p in ipairs(scene.players) do
+    if p.general and #(p.general.skills or {}) > 0 then target = p break end
+  end
+  check(target ~= nil, "测试局中应至少有一名带技能的武将")
+  if target then
+    local r = scene:avatarRect(target)
+    check(scene:avatarAt(r.x + r.w / 2, r.y + r.h / 2) == target,
+      "武将头像中心应命中对应角色")
+    scene:mousepressed(r.x + r.w / 2, r.y + r.h / 2, 1)
+    check(scene.skillPopup and scene.skillPopup.general_name == target.general.name,
+      "点击武将头像应打开该武将的技能说明")
+    check(scene.skillPopup and #scene.skillPopup.entries > 0
+      and scene.skillPopup.entries[1].desc ~= "该技能暂无详细说明。",
+      "技能弹层应包含技能名与有效说明")
+    local okPopup = pcall(function() scene:draw() end)
+    check(okPopup, "技能说明弹层绘制不应报错")
+    scene:keypressed("escape")
+    check(scene.skillPopup == nil and not scene.confirmExit,
+      "技能弹层打开时 Esc 应只关闭弹层")
+    scene:mousepressed(r.x + 2, r.y + 2, 1)
+    scene:mousepressed(0, 0, 1)
+    check(scene.skillPopup == nil, "点击技能弹层外区域应关闭弹层")
+  end
+end
+
+-- 【制衡】装备多选：本人面板里的装备必须可命中、选中并随响应返回。
+do
+  local Card = require "src.core.card"
+  local eq = Card.create(9901, "halberd", Card.Suit.Diamond, 12, Card.Type.Equip)
+  local old_eq = scene.human.equips.weapon
+  local old_pending, old_buttons = scene.room.pending, scene.buttons
+  local old_queue, old_selected = scene.presentQueue, scene.selected
+  scene.human.equips.weapon = eq
+  scene.room.pending = {
+    type = "askForDiscard", player = scene.human, n = 1,
+    any = true, include_equips = true, cards = { eq },
+  }
+  scene.buttons, scene.presentQueue, scene.selected = {}, {}, {}
+  local pa = scene:anchorOf(scene.human)
+  local got, slot = scene:equipCardAt(pa[1] + 12 + 25, pa[2] + 72 + 13)
+  check(got == eq and slot == "weapon", "点击本人装备框应命中装备牌")
+  scene:mousepressed(pa[1] + 12 + 25, pa[2] + 72 + 13, 1)
+  local selected = scene:selectedCards()
+  check(scene.selected[eq] and #selected == 1 and selected[1] == eq,
+    "制衡应允许在装备框中选中装备牌")
+  scene.human.equips.weapon = old_eq
+  scene.room.pending, scene.buttons = old_pending, old_buttons
+  scene.presentQueue, scene.selected = old_queue, old_selected
+end
+
 -- 布局回归：面板必须整体落在画布内，且互不重叠。
 -- 之前布局按皮肤里的 157 宽排版、绘制却画 210 宽，
 -- 右侧面板（963+210=1173）超出 1130 被裁掉，顶上两块还互相压住。
@@ -218,6 +271,21 @@ do
   sc:poll()
   check(sc.seat == seat, "界面应知道自己的座位（实得 " .. tostring(sc.seat) .. "）")
   check(sc.snap ~= nil, "界面应拿到服务端快照")
+  check(sc.snap and sc.snap.players[1] and type(sc.snap.players[1].skills) == "table",
+    "联机快照应下发公开的武将技能名")
+
+  -- 联机面板点击武将信息区也应打开同一技能说明弹层。
+  if sc.snap and sc.snap.players[1] and sc.snap.players[1].general then
+    local ar = sc:avatarRect(1)
+    sc:mousepressed(ar.x + 4, ar.y + 4, 1)
+    check(sc.skillPopup and sc.skillPopup.general_name == sc.snap.players[1].general,
+      "联机牌桌点击武将信息应打开技能说明")
+    local popupDraw = pcall(function() sc:draw() end)
+    check(popupDraw, "联机技能说明弹层绘制不应报错")
+    sc:keypressed("escape")
+    check(sc.skillPopup == nil, "联机技能说明弹层应可用 Esc 关闭")
+  end
+
   -- 把服务端已产生的 req 送过去（真实场景走 socket）
   local pending = srvCh:recv()
   while pending do
@@ -286,7 +354,6 @@ end
 print("\n--- 拖拽出牌 ---")
 do
   local Card = require "src.core.card"
-  local Cards = require "src.core.cards"
 
   -- 构造一个可控局面：人类手上一张【杀】，当前请求为 askForUseCard
   --
@@ -343,7 +410,6 @@ do
   -- 1) 按下卡牌应进入「已选中 + 拖拽中」
   local sc, slash = setupDrag()
   if sc then -- 拿不到出牌阶段就整体跳过（见 setupDrag 注释）
-  local req = sc.room.pending
   local idx = #sc.human.hand
   local cx, cy = sc:handCardRect(idx)
   sc:mousepressed(cx + 5, cy + 5, 1)
@@ -488,6 +554,74 @@ do
   sc2:keypressed("1")
   check(sc2.players[1]:controlMode() == "ai",
     "数字键切换 AI 托管仍应可用（实得 " .. sc2.players[1]:controlMode() .. "）")
+end
+
+print("\n--- 开局选将（opt-in：draft 流程）---")
+
+do
+  -- 未启用选将（默认）：老流程直接开局，不该出现选将阶段
+  local sc = RoomScene.create(function() end, "identity", 5, "off", { seed = 42 })
+  check(sc.draft == nil, "未启用选将时应直接开局")
+  check(sc.driver ~= nil, "未启用选将时驱动器应就绪")
+
+  -- 启用选将：房间未开局、候选数量与身份匹配；选定后正常开局
+  local sd = RoomScene.create(function() end, "identity", 5, "off",
+    { seed = 42, draft = true })
+  check(sd.draft ~= nil, "启用选将时应停留在选将阶段")
+  check(sd.driver == nil, "选将未完成前不应创建驱动器")
+  local want = (sd.human.role == "lord") and 5 or 3
+  check(sd.draft.candidates and #sd.draft.candidates == want,
+    string.format("候选应为主公 5 张 / 其余 3 张（实得 %d）",
+      sd.draft.candidates and #sd.draft.candidates or -1))
+
+  -- 每张候选都应能命中内置头像资源；drawDraft 应实际绘制每张头像。
+  local all_avatar_assets = true
+  for _, g in ipairs(sd.draft.candidates or {}) do
+    if not sd.skin:generalImage(g.key) then all_avatar_assets = false break end
+  end
+  check(all_avatar_assets, "选将候选应都有可加载的武将头像资源")
+  local fake = {
+    getWidth = function() return 134 end,
+    getHeight = function() return 134 end,
+  }
+  local old_general_image, old_draw = sd.generalImage, love.graphics.draw
+  local avatar_draws = 0
+  sd.generalImage = function() return fake end
+  love.graphics.draw = function(img)
+    if img == fake then avatar_draws = avatar_draws + 1 end
+  end
+  local ok_draft, err_draft = pcall(function() sd:drawDraft() end)
+  sd.generalImage, love.graphics.draw = old_general_image, old_draw
+  check(ok_draft, "带头像的选将画面绘制不应报错"
+    .. (ok_draft and "" or ("：" .. tostring(err_draft))))
+  check(avatar_draws == want,
+    string.format("选将画面应绘制每张候选头像（%d/%d）", avatar_draws, want))
+
+  -- 选将阶段 update 不应崩（驱动器尚未就绪）
+  sd:update(0.016)
+  -- 同种子下 BOT 座位已「秒选」，名字与新武将一致
+  local named = true
+  for i, p in ipairs(sd.players) do
+    if i > 1 and p.name ~= "BOT·" .. p.general.name then named = false end
+  end
+  check(named, "BOT 座位应已从各自候选池选定")
+  -- 选定第一张候选 → 进入对局
+  local pick = sd.draft.candidates[1]
+  sd:pickGeneral(pick)
+  check(sd.draft == nil, "选将完成后应进入对局")
+  check(sd.driver ~= nil, "选将完成后驱动器应就绪")
+  check(sd.human.general == pick, "应落到玩家自己选定的武将")
+  check(sd.human.max_hp == pick.max_hp + ((sd.human.role == "lord") and 1 or 0),
+    "主公体力上限 +1 应重算")
+  -- 座位 1（真人）先手：beginPlay 内 advance 会推到首个出牌询问，
+  -- 真人已过摸牌阶段（起始 4 + 摸 2）；其余座位仍是起始 4 张
+  check(#sd.human.hand == 6,
+    "真人先手：起始 4 + 首回合摸 2（实得 " .. #sd.human.hand .. "）")
+  local dealt = true
+  for i, p in ipairs(sd.players) do
+    if i > 1 and #p.hand ~= 4 then dealt = false end
+  end
+  check(dealt, "其余座位应为起始 4 张手牌")
 end
 
 print(string.format("\n===== UI: %d passed, %d failed =====", passes, failures))

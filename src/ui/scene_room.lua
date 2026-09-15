@@ -23,10 +23,12 @@ local PRESENT_DELAY = {
 }
 local Bot = require "src.core.bot"
 local Agent = require "src.core.ai.agent"
+local Actions = require "src.core.ai.actions"
 local Skin = require "src.ui.skin"
 local Audio = require "src.ui.audio"
 local Layout = require "src.ui.layout"
 local Effects = require "src.ui.effects"
+local SkillDesc = require "src.ui.skill_desc"
 
 local RoomScene = class("RoomScene")
 
@@ -34,12 +36,6 @@ local CARD_W, CARD_H = 62, 86
 local EQ_W, EQ_H = 50, 26
 local JUDGE_S = 20
 local PANEL_W, PANEL_H = 210, 104
-
--- 座位锚点：1=自己（下），2=下家（左），3=对家（上），4=上家（右）
-local ANCHORS_4 = {
-  [1] = { 40, 440 }, [2] = { 40, 168 }, [3] = { 460, 24 }, [4] = { 880, 168 },
-}
-local ANCHORS_2 = { [1] = { 40, 440 }, [2] = { 40, 24 } }
 
 -- ai_mode: "off"（无人托管）/ "others"（除你以外的座位）/ "all"（全托管，含你自己）
 -- opts.seed: 固定发牌与身份的种子。测试必须传，否则每次开局局面都不同，
@@ -91,14 +87,130 @@ function RoomScene:init(on_exit, mode, size, ai_mode, opts)
   if mode == "identity" then
     self.room:setupRoles(Standard.makeRng(seed + 1))
   end
+
+  -- 字体与回调提前初始化：选将阶段就要用；其余对局初始化在 beginPlay
+  self.font = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 15)
+  self.font_mid = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 20)
+  self.font_sm = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 12)
+  self.on_exit = on_exit
+  self.ai_mode = ai_mode or "off"
+
+  -- ===== 开局选将（opt-in：opts.draft；默认仍走随机分将的老流程）=====
+  -- 文档开局流程：身份分配 → 主公从 5 张候选里选 1、其余各从 3 张里选 1（暗置）
+  -- → 同时亮出。本桌只有一名真人：真人从自己的候选池里挑，BOT 座位「秒选」
+  -- （从各自候选池按种子取一张，候选池互不重复，等价于同时亮出）。
+  if (opts and opts.draft) and mode == "identity" then
+    local lord = self.room:getLord()
+    local pools = Standard.dealCandidates(engine, Standard.makeRng(seed + 13),
+      #players, lord and lord.seat or nil)
+    for i, p in ipairs(players) do
+      if p.is_human then
+        self.draft = { candidates = pools[i], rects = nil }
+      else
+        self:_applyGeneral(p, pools[i][((seed + i * 31) % #pools[i]) + 1])
+      end
+    end
+  end
+  if not self.draft then self:beginPlay() end
+end
+
+-- 把选定的武将落到玩家身上（体力上限按「主公 +1」重算）
+function RoomScene:_applyGeneral(p, g)
+  p.general = g
+  p.max_hp = g.max_hp + ((p.role == "lord") and 1 or 0)
+  p.hp = p.max_hp
+  p.kingdom = g.kingdom
+  p.female = g.female or false
+  if not p.is_human then p.name = "BOT·" .. g.name end
+end
+
+-- 选将完成 → 进入对局
+function RoomScene:pickGeneral(g)
+  if not self.draft then return end
+  self:_applyGeneral(self.human, g)
+  self.draft = nil
+  self:beginPlay()
+end
+
+-- 开局选将画面（覆盖牌桌渲染；点选后 pickGeneral → beginPlay）
+function RoomScene:drawDraft()
+  local w = love.graphics.getDimensions()
+  love.graphics.clear(0.10, 0.16, 0.10)
+  local lord = self.human.role == "lord"
+  love.graphics.setColor(1, 0.95, 0.8)
+  love.graphics.setFont(self.font_mid)
+  love.graphics.printf(lord and "你是主公 —— 从 5 张武将牌中选择一位（体力上限 +1）"
+    or "从 3 张武将牌中选择你的武将", 0, 96, w, "center")
+  love.graphics.setColor(0.75, 0.8, 0.75)
+  love.graphics.setFont(self.font_sm)
+  love.graphics.printf("其余座位已各领 3 张候选并选定 · 点击卡片确认", 0, 132, w, "center")
+
+  local list = self.draft.candidates
+  local bw, bh, gap = 168, 286, 22
+  local total = #list * bw + (#list - 1) * gap
+  local x0 = (w - total) / 2
+  self.draft.rects = {}
+  local KZ = { wei = "魏", shu = "蜀", wu = "吴", qun = "群" }
+  for i, g in ipairs(list) do
+    local x, y = x0 + (i - 1) * (bw + gap), 170
+    self.draft.rects[i] = { x = x, y = y, w = bw, h = bh, g = g }
+    love.graphics.setColor(0.16, 0.30, 0.42)
+    love.graphics.rectangle("fill", x, y, bw, bh, 10, 10)
+    love.graphics.setColor(0.62, 0.72, 0.82)
+    love.graphics.rectangle("line", x, y, bw, bh, 10, 10)
+
+    love.graphics.setColor(1, 1, 1)
+    love.graphics.setFont(self.font_mid)
+    love.graphics.printf(g.name, x, y + 12, bw, "center")
+    love.graphics.setFont(self.font)
+    love.graphics.printf(string.format("%s · %d 血", KZ[g.kingdom] or g.kingdom, g.max_hp),
+      x, y + 43, bw, "center")
+
+    -- 候选牌直接复用牌桌头像缓存与 Skin.generalImage，不重复加载图片。
+    local avatar = self:generalImage(g)
+    local ax, ay, aw, ah = x + 18, y + 70, bw - 36, 132
+    if avatar then
+      love.graphics.setColor(1, 1, 1)
+      love.graphics.draw(avatar, ax, ay, 0, aw / avatar:getWidth(), ah / avatar:getHeight())
+    else
+      love.graphics.setColor(0.10, 0.18, 0.24)
+      love.graphics.rectangle("fill", ax, ay, aw, ah, 6, 6)
+      love.graphics.setColor(0.62, 0.68, 0.68)
+      love.graphics.setFont(self.font_sm)
+      love.graphics.printf("暂无头像", ax, ay + 56, aw, "center")
+    end
+    love.graphics.setColor(0.72, 0.62, 0.34)
+    love.graphics.rectangle("line", ax, ay, aw, ah, 6, 6)
+
+    love.graphics.setFont(self.font_sm)
+    love.graphics.setColor(0.94, 0.90, 0.76)
+    local shown, sy, seen = 0, y + 216, {}
+    for _, sk_ in ipairs(g.skills or {}) do
+      if shown >= 3 then break end
+      local n = sk_.zh or sk_.name
+      n = type(n) == "string" and (n:match("^(.-)·") or n) or nil
+      if n and not seen[n] then
+        seen[n] = true
+        love.graphics.printf((sk_.lord and "[主公技] " or "") .. n, x + 6, sy,
+          bw - 12, "center")
+        sy = sy + 21
+        shown = shown + 1
+      end
+    end
+  end
+end
+
+-- 对局初始化（原 init 的后半段）：未启用选将时在 init 里直接调用
+function RoomScene:beginPlay()
   self.room:start()
 
   -- ===== AI 响应源 =====
   -- 座位标成 "ai" 后，Driver 会把它的请求转给 Agent；Agent 拿不到模型输出时
-  -- 会静默回落规则 BOT，所以**没配接口也不会卡死**，只是打得像 BOT。
-  -- agent 始终创建（传输层可以为空，空就等于一直用规则 BOT），
+  -- 先重试、再机械兜底（**不回落规则 BOT**），所以没配接口也不会卡死，
+  -- 只是那几手变得很保守（不出牌、不响应）。
+  -- agent 始终创建（传输层可以为空，空就等于一直机械兜底），
   -- 这样牌桌上按数字键随时能把任意座位切给 AI，不用回菜单重开。
-  self.ai_mode = ai_mode or "off"
+  -- self.ai_mode 已在 init 里提前赋值（选将阶段可能用到），这里不再重置
   self.ai_error = nil
   local transport = nil
   if self.ai_mode ~= "off" then
@@ -109,19 +221,19 @@ function RoomScene:init(on_exit, mode, size, ai_mode, opts)
       self.ai_error = "无法加载 AI 传输层：" .. tostring(mod)
     end
     if self.ai_mode == "others" then
-      for _, p in ipairs(players) do
+      for _, p in ipairs(self.players) do
         if not p.is_human then p:setControl("ai") end
       end
     elseif self.ai_mode == "all" then
-      for _, p in ipairs(players) do p:setControl("ai") end
-    end
+      for _, p in ipairs(self.players) do p:setControl("ai") end
+      end
   end
   self.agent = Agent.create({
     transport = transport,
     -- 用 love.timer 而不是 os.time：os.time 只有秒级精度，超时判断会差一整秒
     clock = love.timer and love.timer.getTime or nil,
     on_error = function(reason)
-      print(string.format("[AI] 回落规则 BOT：%s", tostring(reason)))
+      print(string.format("[AI] 机械兜底：%s", tostring(reason)))
     end,
   })
 
@@ -131,16 +243,12 @@ function RoomScene:init(on_exit, mode, size, ai_mode, opts)
   -- 布局：优先按原版 layout.json 的间距参数推导（自适应人数），
   -- 缺少配置时 Layout 内部会退回与原来一致的固定锚点。
   -- 面板尺寸必须传给布局：排版与绘制用同一个宽度，否则右侧会被画布裁掉。
-  self.layout = Layout.create(self.skin, #players, PANEL_W, PANEL_H)
+  self.layout = Layout.create(self.skin, #self.players, PANEL_W, PANEL_H)
   self.anchors = self.layout.anchors
   self.panelW, self.panelH = self.layout:panelSize()
   self.effects = Effects.create()
   self:bindPresentationHooks()
 
-  self.on_exit = on_exit
-  self.font = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 15)
-  self.font_mid = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 20)
-  self.font_sm = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 12)
   self.msg = ""
   self.buttons = {}
   -- 演示队列：BOT 的每次出牌/发动技能/受伤/阵亡先入队，再按节奏逐个播放。
@@ -152,6 +260,7 @@ function RoomScene:init(on_exit, mode, size, ai_mode, opts)
   self.selected = {}   -- 弃牌多选
   self.revealed = nil  -- askForChooseCard 候选
   self.picked = nil    -- 已选中、等待指定目标的卡牌
+  self.skillPopup = nil -- 点击武将头像后显示的技能说明
 end
 
 -- ===== 布局 =====
@@ -172,6 +281,25 @@ function RoomScene:cardAt(x, y)
   return nil
 end
 
+-- 本人面板上的装备命中检测。【制衡】允许手牌与装备混合多选；装备沿用
+-- drawPlayerPanel 的紧凑排列方式，只为当前真人玩家开放点击。
+function RoomScene:equipCardAt(x, y)
+  local a = self:anchorOf(self.human)
+  if not a then return nil end
+  local idx = 0
+  for _, slot in ipairs(Player.EQUIP_SLOTS) do
+    local c = self.human.equips[slot]
+    if c then
+      local ex, ey = a[1] + 12 + idx * (EQ_W + 4), a[2] + 72
+      if x >= ex and x <= ex + EQ_W and y >= ey and y <= ey + EQ_H then
+        return c, slot
+      end
+      idx = idx + 1
+    end
+  end
+  return nil
+end
+
 -- 注意：本文件里**只应有这一份** anchorOf 定义（返回 {x, y} 表）。
 -- 之前在文件开头还有一份返回两个数字的同名定义，被这份覆盖，
 -- 导致 panelAt 里 `local px, py = self:anchorOf(p)` 拿到 (table, nil)
@@ -187,10 +315,37 @@ function RoomScene:panelAt(x, y)
   return nil
 end
 
+function RoomScene:avatarRect(p)
+  local a = self:anchorOf(p)
+  if not a then return nil end
+  return { x = a[1] + 8, y = a[2] + 24, w = 44, h = 44 }
+end
+
+function RoomScene:avatarAt(x, y)
+  for _, p in ipairs(self.players or {}) do
+    local r = self:avatarRect(p)
+    if r and x >= r.x and x <= r.x + r.w and y >= r.y and y <= r.y + r.h then
+      return p
+    end
+  end
+  return nil
+end
+
+function RoomScene:openSkillPopup(p)
+  if not (p and p.general) then return false end
+  self.skillPopup = SkillDesc.open(p.name, p.general.name,
+    SkillDesc.entriesFromSkills(p.general.skills))
+  return true
+end
+
 function RoomScene:selectedCount()
   local n = 0
   for _, c in ipairs(self.human.hand) do
     if self.selected[c] then n = n + 1 end
+  end
+  for _, slot in ipairs(Player.EQUIP_SLOTS) do
+    local c = self.human.equips[slot]
+    if c and self.selected[c] then n = n + 1 end
   end
   return n
 end
@@ -199,6 +354,10 @@ function RoomScene:selectedCards()
   local out = {}
   for _, c in ipairs(self.human.hand) do
     if self.selected[c] then table.insert(out, c) end
+  end
+  for _, slot in ipairs(Player.EQUIP_SLOTS) do
+    local c = self.human.equips[slot]
+    if c and self.selected[c] then table.insert(out, c) end
   end
   return out
 end
@@ -255,37 +414,83 @@ function RoomScene:_refreshButtons()
       push("不出", function() self:_step(nil) end)
     elseif req.type == "askForDiscard" then
       local need, have = req.n, self:selectedCount()
-      if have == need then
-        push("确认弃牌", function() self:_step(self:selectedCards()) end)
-      end
-      push("自动弃牌", function()
-        local order = { dodge = 1, slash = 2, fire_slash = 2, thunder_slash = 2,
-          peach = 3, analeptic = 3, nullification = 4 }
-        local sorted = {}
-        for _, c in ipairs(self.human.hand) do table.insert(sorted, c) end
-        table.sort(sorted, function(a, b)
-          return (order[a.name] or 2.5) < (order[b.name] or 2.5)
+      if req.any then
+        -- 【制衡】类自选弃牌：任意张，随时可确认（空选 = 不发动）
+        push(string.format("确认弃牌（已选 %d 张）", have), function()
+          self:_step(self:selectedCards())
         end)
-        local out = {}
-        for i = 1, math.min(need, #sorted) do table.insert(out, sorted[i]) end
-        self:_step(out)
-      end)
+      else
+        if have == need then
+          push("确认弃牌", function() self:_step(self:selectedCards()) end)
+        end
+        push("自动弃牌", function()
+          local order = { dodge = 1, slash = 2, fire_slash = 2, thunder_slash = 2,
+            peach = 3, analeptic = 3, nullification = 4 }
+          local sorted = {}
+          for _, c in ipairs(self.human.hand) do table.insert(sorted, c) end
+          table.sort(sorted, function(a, b)
+            return (order[a.name] or 2.5) < (order[b.name] or 2.5)
+          end)
+          local out = {}
+          for i = 1, math.min(need, #sorted) do table.insert(out, sorted[i]) end
+          self:_step(out)
+        end)
+      end
     elseif req.type == "askForDiscardFrom" then
-      push("确定拆牌", function()
-        local t = req.target
-        self:_step((t and t.hand[1]) or nil)
-      end)
+      -- 公开牌（装备/判定区）逐张可拆；手牌不可见，只提供「随机拆一张」。
+      -- hand_only（【享乐】【雌雄双股剑】）：弃牌人自己选，可以拒绝并承担后果。
+      local t = req.target
+      local shown = 0
+      if t and not req.hand_only then
+        for _, c in ipairs(req.equip_judges or {}) do
+          local cc = c
+          push("拆【" .. cc:zhName() .. "】", function() self:_step(cc) end)
+          shown = shown + 1
+        end
+      end
+      if t and #t.hand > 0 then
+        push(req.hand_only and "弃一张手牌" or "随机拆一张手牌", function()
+          self:_step(t.hand[math.random(#t.hand)])
+        end)
+        shown = shown + 1
+      end
+      if req.hand_only or shown == 0 then
+        push("不弃", function() self:_step(nil) end)
+      end
+    elseif req.type == "askForChooseCard" and req.allow_pass then
+      -- 【顺手牵羊】：公开牌用场上方的选牌器点选；不想要时随机拿一张暗牌
+      push("随机拿一张手牌", function() self:_step(nil) end)
     elseif req.type == "askForSkillInvoke" then
       -- 主动技征询：玩家自己决定发不发动
       push("发动【" .. tostring(req.skill) .. "】", function() self:_step(true) end)
       push("不发动", function() self:_step(false) end)
     elseif req.type == "askForChoice" then
-      -- 【反间】猜花色等：没有选择界面时取第一项，不能把玩家晾在这
-      local first = req.choices and req.choices[1]
-      push(tostring(first or "确定"), function() self:_step(first) end)
+      -- 选项全部摆成按钮：【借刀杀人】指定目标（玩家名）、【反间】猜花色等。
+      -- 候选上限不超过 8（人数 / 花色数），摆得下。
+      local list = req.choices or {}
+      if #list == 0 then
+        push("确定", function() self:_step(nil) end)
+      else
+        for _, v in ipairs(list) do
+          local choice = v
+          push(tostring(choice), function() self:_step(choice) end)
+        end
+      end
     elseif req.type == "askForGuanxing" then
-      -- 【观星】：没有拖拽重排界面时保持原序
-      push("保持原序", function() self:_step(nil) end)
+      -- 【观星】：没有拖拽重排界面，但把 AI 同一套有界候选摆成按钮
+      -- （原序 / 倒序 / 每张单独沉底 / 全部沉底，见 actions.lua 的 forGuanxing），
+      -- 候选最多 2+5+1 = 8 个，摆得下。
+      local acts = Actions.enumerate(req, self.room)
+      if #acts == 0 then
+        push("保持原序", function() self:_step(nil) end)
+      else
+        for _, a in ipairs(acts) do
+          local act = a
+          push(act.short or act.desc, function()
+            self:_step({ up = act.up, down = act.down })
+          end)
+        end
+      end
     else
       -- 兜底：任何未预料到的请求都必须有一个「跳过」，
       -- 否则玩家会看到提示却没有可点的按钮 —— 表现就是「界面卡死」。
@@ -317,6 +522,8 @@ function RoomScene:_refreshButtons()
 end
 
 function RoomScene:update(dt)
+  -- 开局选将阶段：对局尚未开始，跳过一切推进
+  if self.draft then return end
   if self.effects and dt then self.effects:update(dt) end
 
   -- 演示队列：一次播一条，播完等它对应的间隔再播下一条。
@@ -358,6 +565,10 @@ function RoomScene:_exitGame()
 end
 
 function RoomScene:keypressed(key)
+  if self.skillPopup then
+    if key == "escape" then self.skillPopup = nil end
+    return
+  end
   -- Esc 退出（二次确认）。注意：整个文件只能有**一个** keypressed，
   -- 重复定义会整体覆盖，把下面的数字键托管切换一起弄丢（踩过）。
   if key == "escape" then
@@ -447,7 +658,27 @@ end
 
 function RoomScene:mousepressed(x, y, button)
   if button ~= 1 then return end
-  -- 演示进行中不接受操作：此时画面还在播上一段，
+  -- 开局选将：点候选卡片直接选定
+  if self.draft then
+    for _, r in ipairs(self.draft.rects or {}) do
+      if x >= r.x and x <= r.x + r.w and y >= r.y and y <= r.y + r.h then
+        self:pickGeneral(r.g)
+        return
+      end
+    end
+    return
+  end
+  -- 技能说明弹层优先接管点击：关闭按钮或弹层外区域关闭，弹层内部不穿透。
+  if self.skillPopup then
+    if SkillDesc.shouldClose(self.skillPopup, x, y) then self.skillPopup = nil end
+    return
+  end
+
+  -- 武将头像在任何对局阶段都可查看（包括等待对手、演示动画期间）。
+  local avatar_player = self:avatarAt(x, y)
+  if avatar_player and self:openSkillPopup(avatar_player) then return end
+
+  -- 演示进行中不接受牌局操作：此时画面还在播上一段，
   -- 让玩家出牌会出现「状态已推进、画面没跟上」的错位
   if self:isPresenting() then
     self.msg = "对手行动中…"
@@ -501,6 +732,9 @@ function RoomScene:mousepressed(x, y, button)
   end
 
   local card = self:cardAt(x, y)
+  if not card and req.type == "askForDiscard" and req.include_equips then
+    card = self:equipCardAt(x, y)
+  end
   if not card then return end
 
   if req.type == "askForUseCard" then
@@ -667,7 +901,6 @@ end
 
 -- 演示队列为空之前不接受玩家操作，避免状态与画面错位
 function RoomScene:playPresent(e)
-  local room = self.room
   local audio, fx = self.audio, self.effects
   local d = e.data
   if e.kind == "useCard" then
@@ -741,16 +974,17 @@ function RoomScene:kingdomIcon(p)
   return img
 end
 
--- 武将头像：按 general.key（拼音）在原版 image/generals/avatar 下找
-function RoomScene:generalAvatar(p)
-  if not (self.skin and p and p.general) then return nil end
+-- 武将头像：按 general.key（拼音）在原版 image/generals/avatar 下找。
+-- 接收武将对象，供选将卡与牌桌面板共用同一缓存。
+function RoomScene:generalImage(general)
+  if not (self.skin and general) then return nil end
   local cache = self.generalImages
   if not cache then return nil end
-  local key = p.general.key or p.general.name
+  local key = general.key or general.name
   if cache[key] ~= nil then return cache[key] or nil end
   local img = nil
   local rel = self.skin:generalImage(key)
-  if rel and love.graphics then
+  if rel and love.graphics and love.graphics.newImage then
     local path = self.skin:path(rel)
     if path then
       local ok, loaded = pcall(love.graphics.newImage, path)
@@ -761,6 +995,10 @@ function RoomScene:generalAvatar(p)
   return img
 end
 
+function RoomScene:generalAvatar(p)
+  return p and self:generalImage(p.general) or nil
+end
+
 function RoomScene:drawPlayerPanel(p, x, y, highlighted)
   love.graphics.setColor(highlighted and 0.18 or 0.12,
     highlighted and 0.30 or 0.16, highlighted and 0.18 or 0.12)
@@ -768,6 +1006,10 @@ function RoomScene:drawPlayerPanel(p, x, y, highlighted)
   if highlighted then
     love.graphics.setColor(0.95, 0.8, 0.25)
     love.graphics.rectangle("line", x, y, PANEL_W, PANEL_H, 8, 8)
+  end
+  if self.skillPopup and self.skillPopup.player_name == p.name then
+    love.graphics.setColor(0.95, 0.72, 0.22)
+    love.graphics.rectangle("line", x + 6, y + 22, 48, 48, 5, 5)
   end
 
   -- 势力图标（有资源就画，没有就不画，不占版面）
@@ -837,12 +1079,16 @@ function RoomScene:drawPlayerPanel(p, x, y, highlighted)
         love.graphics.rectangle("line", ex, y + 72, EQ_W, EQ_H, 3, 3)
         love.graphics.printf(c:zhName(), ex, y + 76, EQ_W, "center")
       end
+      if self.selected and self.selected[c] then
+        love.graphics.setColor(1, 0.82, 0.18)
+        love.graphics.rectangle("line", ex - 2, y + 70, EQ_W + 4, EQ_H + 4, 4, 4)
+      end
       idx = idx + 1
     end
   end
 
   -- 判定区
-  for i, c in ipairs(p.judges) do
+  for i, _ in ipairs(p.judges) do
     local jx = x + PANEL_W - 8 - i * (JUDGE_S + 4)
     love.graphics.setColor(0.5, 0.25, 0.15)
     love.graphics.rectangle("fill", jx, y + 72, JUDGE_S, JUDGE_S, 3, 3)
@@ -895,6 +1141,8 @@ function RoomScene:drawBackground()
 end
 
 function RoomScene:draw()
+  -- 开局选将阶段：覆盖牌桌渲染，只画选将画面
+  if self.draft then self:drawDraft() return end
   love.graphics.clear(0.09, 0.13, 0.09)
   local room = self.room
 
@@ -1019,11 +1267,15 @@ function RoomScene:draw()
       elseif req.type == "askForUseCard" then
         prompt = "你的出牌阶段：点手牌使用，或【结束出牌】"
       elseif req.type == "askForDiscard" then
-        prompt = string.format("弃牌阶段：已选 %d/%d 张", self:selectedCount(), req.n)
+        prompt = req.any
+          and string.format("制衡：已选 %d 张（可多选，空选 = 不发动，摸等量）",
+            self:selectedCount())
+          or string.format("弃牌阶段：已选 %d/%d 张", self:selectedCount(), req.n)
       elseif req.type == "askForChooseCard" then
         prompt = "点击展示牌，选择一张收入手中"
       elseif req.type == "askForDiscardFrom" then
-        prompt = "过河拆桥：点【确定拆牌】弃掉对手一张手牌"
+        prompt = req.hand_only and "选择弃掉一张手牌（或不弃）"
+          or "拆牌：点按钮弃掉对手一张牌（装备/判定区/随机手牌）"
       end
     elseif req then
       if self.driver_state == "thinking" and self.agent then
@@ -1092,6 +1344,9 @@ function RoomScene:draw()
     love.graphics.setColor(0.85, 0.9, 0.82)
     love.graphics.print(text, LOG_X, y)
   end
+
+  -- 必须最后绘制，确保技能说明覆盖牌桌、按钮和日志。
+  SkillDesc.draw(self.skillPopup, self.font, self.font_mid, self.font_sm)
 end
 
 return RoomScene

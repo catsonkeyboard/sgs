@@ -3,13 +3,15 @@
 -- 用法：./tools/serve.sh [端口] [座位数]
 --
 -- 流程：监听 → 客户端接入占座 → 全员 ready 后开局 → 驱动 Host:tick()
---       → 广播 log / state / over。空座由 BOT 顶替，所以 1 人也能开局试玩。
+--       → 广播 log / state / over。空座由 BOT 顶替，所以 1 人也能开局试玩；
+--       设 SGS_NET_AI 后空座改由 LLM 决策（配置见下方 buildAIAgent）。
 --
 -- TCP 通道的实现在 src/net/channel.lua（与客户端共用）。
 local class = require "src.class"
 local socket = require "socket"
 local Channel = require "src.net.channel"
 local Host = require "src.net.host"
+local Agent = require "src.core.ai.agent"
 
 local Server = class("Server")
 
@@ -17,9 +19,93 @@ local Server = class("Server")
 -- 可能解析成 IPv6，导致客户端连 127.0.0.1 直接失败（实测踩过）。
 local HOST = nil
 
+-- SGS_NET_AI 解析座位范围：返回 "empty"（全部空座）/ {座位号…} / nil（关）。
+-- 接受：空/0/off/false 关；1/on/true/all 全部空座；"2,3" 指定座位。
+local function parseAISeats(flag)
+  if flag == "" or flag == nil then return nil end
+  local n = tonumber(flag)
+  if n then return n > 0 and "empty" or nil end
+  flag = flag:lower()
+  if flag == "off" or flag == "false" or flag == "no" or flag == "0" then return nil end
+  if flag == "on" or flag == "true" or flag == "yes" or flag == "all" then return "empty" end
+  local seats = {}
+  for tok in flag:gmatch("[^,，%s]+") do
+    local s = tonumber(tok)
+    if s and s >= 1 then seats[#seats + 1] = math.floor(s) end
+  end
+  if #seats > 0 then return seats end
+  return "empty" -- 其它非空值一律当作「全部空座」
+end
+
+-- 联机 AI 的 Agent：优先用线程版传输层（love.thread 跑 curl，不阻塞 tick），
+-- 与本地单机共用同一套 SGS_AI_* 环境变量；无 love.thread 时退回 core 的
+-- 同步实现（每次请求会卡住服务端 1~3 秒，仅建议测试时用）。
+local function buildAIAgent()
+  local seats = parseAISeats(os.getenv("SGS_NET_AI") or "")
+  if not seats then return nil, nil end
+
+  local transport, err
+  local ok, mod = pcall(require, "src.ui.ai_transport")
+  if ok and love and love.thread then
+    transport, err = mod.fromEnv()
+  else
+    err = "无 love.thread（非 love 环境）"
+  end
+  if not transport then
+    -- 兑底：core 的同步 Curl/Proxy。serve.sh 是在 love 下跑的，正常到不了这里，
+    -- 但测试/嵌入场景可能没有 love，给一条能走通的路。
+    local T = require "src.core.ai.transport"
+    local mode = os.getenv("SGS_AI_TRANSPORT") or "curl"
+    local url = os.getenv("SGS_AI_URL")
+    local key = os.getenv("SGS_AI_KEY") or os.getenv("OPENAI_API_KEY")
+    local model = os.getenv("SGS_AI_MODEL") or "hy3"
+    local effort = os.getenv("SGS_AI_REASONING") or "none"
+    if mode == "proxy" then
+      transport = T.proxy {
+        url = os.getenv("SGS_AI_PROXY") or "http://127.0.0.1:8899",
+        protocol = os.getenv("SGS_AI_PROTOCOL") or "responses",
+        model = model, reasoning_effort = effort, timeout = 90,
+      }
+      err = nil
+    elseif url and url ~= "" and key and key ~= "" then
+      transport = T.curl {
+        url = url, api_key = key, model = model,
+        protocol = os.getenv("SGS_AI_PROTOCOL"),
+        reasoning_effort = effort, timeout = 60,
+      }
+      err = nil
+    end
+    if transport then
+      print("[服务端] 注意：AI 走同步传输层，每次请求会阻塞服务端几秒")
+    end
+  end
+  if not transport then
+    print(string.format("[服务端] SGS_NET_AI 已开但 AI 不可用：%s", tostring(err)))
+    print("            需配置 SGS_AI_URL + SGS_AI_KEY，或 SGS_AI_TRANSPORT=proxy + ./tools/ai_proxy.py")
+    return nil, nil
+  end
+
+  local agent = Agent.create({
+    transport = transport,
+    -- love 下用高精度时钟，否则退回 os.time（秒级，超时判断会粗一点）
+    clock = (love and love.timer and love.timer.getTime) or nil,
+    on_error = function(reason)
+      print(string.format("[AI] 机械兜底：%s", tostring(reason)))
+    end,
+  })
+  return agent, seats
+end
+
 function Server:init(port, count, minStart)
   self.port = port or 9527
-  self.host = Host.create { count = count or 5, minStart = minStart or 2 }
+  local ai_agent, ai_seats = buildAIAgent()
+  self.host = Host.create {
+    count = count or 5, minStart = minStart or 2,
+    ai_agent = ai_agent, ai_seats = ai_seats,
+  }
+  if ai_agent then
+    print("[服务端] 联机 AI 已开启：空座由 LLM 决策（SGS_NET_AI=" .. tostring(os.getenv("SGS_NET_AI")) .. "）")
+  end
   self.clients = {} -- channel -> seat
   self.specs = {}    -- 观战者 channel
   self.finished = false

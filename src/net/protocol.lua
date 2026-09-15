@@ -72,8 +72,25 @@ function Protocol.makeRequest(id, req, seatOf)
   if req.card_name then msg.card_name = req.card_name end
   if req.n then msg.n = req.n end
   if req.cards then msg.cards = Protocol.slimCards(req.cards) end
+  if req.choices then msg.choices = req.choices end -- 选项（玩家名/花色，字符串可直接序列化）
   if req.prompt then msg.prompt = req.prompt end
   if req.type == "askForSkillInvoke" then msg.skill = req.skill end
+  -- 拆牌类：把可选的公开牌（装备/判定区）与手牌张数一并下发，
+  -- 客户端据此渲染「拆装备 / 随机拆手牌」选项（应答时回传 card_id，
+  -- 服务端在 target 的三个区域里按 id 找回对象）
+  if req.type == "askForDiscardFrom" then
+    msg.equip_judges = Protocol.slimCards(req.equip_judges)
+    msg.hand_count = req.hand_count
+    if req.hand_only then msg.hand_only = true end
+  end
+  -- 弃牌请求可携带本人装备候选（制衡 / 贯石斧），响应统一回传 card_ids；
+  -- any 仅表示允许 0..n 张，普通技能代价仍须恰好 n 张。
+  if req.type == "askForDiscard" then
+    if req.any then msg.any = true end
+    if req.include_equips then msg.include_equips = true end
+  end
+  -- 选牌类：允许不选（【顺手牵羊】不选则随机拿一张手牌）
+  if req.allow_pass then msg.allow_pass = true end
   -- msg.hand 由 Host 单独补（只发给本人）
   return msg
 end

@@ -265,6 +265,51 @@ do
   check(bad == 0, "随机选将不应出现占位将（" .. table.concat(t, "/") .. "）")
 end
 
+do -- diy/ 示例武将默认不进随机池（正常对局看不到）；opts.demo = true 才参与（测试用）
+  local Loader = require "src.compat.loader"
+  local function picks(seed, n, opts)
+    local e = Engine.create()
+    Standard.setup(e)
+    Loader.loadDirectory(e, "diy")
+    local t = {}
+    for _, g in ipairs(Standard.pickGenerals(e, Standard.makeRng(seed), n, opts)) do
+      table.insert(t, g.name)
+    end
+    return t
+  end
+  local demos = { ["试炼武将"] = true, ["试作武将"] = true, ["时迁"] = true }
+
+  local leaked = {}
+  for seed = 1, 40 do
+    for _, nm in ipairs(picks(seed, 8)) do
+      if demos[nm] then table.insert(leaked, seed .. ":" .. nm) end
+    end
+  end
+  check(#leaked == 0,
+    "默认随机池不应出现 diy/ 示例武将（" .. table.concat(leaked, ",") .. "）")
+
+  local leak2 = 0
+  for seed = 1, 40 do
+    local e = Engine.create()
+    Standard.setup(e)
+    Loader.loadDirectory(e, "diy")
+    if demos[Standard.randomGeneral(e, Standard.makeRng(seed)).name] then
+      leak2 = leak2 + 1
+    end
+  end
+  check(leak2 == 0, "randomGeneral 默认也不应抽到 diy/ 示例武将（漏 " .. leak2 .. " 次）")
+
+  -- opts.demo = true 时示例将回到池里，测试想覆盖它们时有得抽
+  local seen = {}
+  for seed = 1, 40 do
+    for _, nm in ipairs(picks(seed, 8, { demo = true })) do
+      seen[nm] = true
+    end
+  end
+  check(seen["试炼武将"] and seen["试作武将"] and seen["时迁"],
+    "opts.demo = true 时随机池应能抽到 diy/ 示例武将")
+end
+
 print("\n--- 身份局 ---")
 
 -- 构造一个 n 人身份局（全部 BOT），可指定 seed（对局测试统一用 5 / 8 人）
@@ -562,7 +607,12 @@ do -- 司马懿·鬼才：判定生效前用手牌替换判定牌
   local spade = Card.create(2, "slash", Card.Suit.Spade, 9, Card.Type.Basic)
   give(ps[1], "peach", Card.Suit.Heart, 3) -- 红桃可让【乐不思蜀】失效
   local data = { player = ps[1], card = indulgence, judge_card = spade, reason = "indulgence" }
-  r:trigger("AskForRetrial", ps[1], data)
+  runInRoom(function()
+    r:trigger("AskForRetrial", ps[1], data)
+  end, function(req)
+    -- 新版鬼才让玩家选替换用手牌；测试选那张红桃
+    return (req and req.type == "askForChooseCard") and ps[1].hand[#ps[1].hand] or nil
+  end)
   check(data.judge_card.suit == Card.Suit.Heart,
     "【鬼才】应用红桃手牌替换掉会命中的判定牌")
 end
@@ -603,8 +653,13 @@ do -- 郭嘉·天妒 / 遗计
   r:trigger("FinishJudge", ps[1], { player = ps[1], judge_card = jcard, result = false })
   check(ps[1].hand[#ps[1].hand] == jcard, "【天妒】应获得判定牌")
   local n = #ps[1].hand
-  r:trigger("Damaged", ps[1], { from = ps[2], to = ps[1], n = 1 })
-  check(#ps[1].hand == n + 2, "【遗计】受到伤害后应摸两张牌")
+  runInRoom(function()
+    r:trigger("Damaged", ps[1], { from = ps[2], to = ps[1], n = 1 })
+  end, function(req)
+    -- 新版遗计逐张询问分给谁（askForChoice）；测试统一留给自己
+    return (req and req.type == "askForChoice") and ps[1].name or nil
+  end)
+  check(#ps[1].hand == n + 2, "【遗计】受到伤害后应获得两张牌（归自己）")
 end
 
 do -- 甄姬·倾国：黑色手牌当【闪】
@@ -730,7 +785,15 @@ do -- 孙权·制衡：弃置废牌换等量新牌
   give(ps[1], "dodge", Card.Suit.Club, 3)
   give(ps[1], "dodge", Card.Suit.Spade, 4)
   local before, dumped = #ps[1].hand, #r.discardPile
-  r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  runInRoom(function()
+    r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  end, function(req)
+    -- 新版制衡走 any 模式自选弃牌；测试换掉前两张废牌（与旧断言对齐）
+    if req and req.type == "askForDiscard" and req.any then
+      return { ps[1].hand[1], ps[1].hand[2] }
+    end
+    return nil
+  end)
   check(#r.discardPile == dumped + 2, "【制衡】应弃置 2 张废牌")
   check(#ps[1].hand == before, "【制衡】弃 2 摸 2，手牌数不变（" .. before .. " → " .. #ps[1].hand .. "）")
   check(ps[1].zhiheng_used, "【制衡】每回合限一次")
@@ -788,7 +851,14 @@ do -- 大乔·国色 / 流离
   give(ps[1], "dodge", Card.Suit.Heart, 2)
   local slash = give(ps[2], "slash", Card.Suit.Spade, 5)
   local use = { from = ps[2], card = slash, to = { ps[1] } }
-  r:trigger("TargetConfirming", ps[1], use)
+  runInRoom(function()
+    r:trigger("TargetConfirming", ps[1], use)
+  end, function(req)
+    -- 新版流离：先选弃牌代价（拿那张闪），再选转移目标（候选只有 P3）
+    if req and req.type == "askForChooseCard" then return ps[1].hand[1] end
+    if req and req.type == "askForChoice" then return ps[3].name end
+    return nil
+  end)
   check(use.to[1] == ps[3] or use.to[1] == ps[2],
     "【流离】应把【杀】转移给另一名角色（实际目标 " .. use.to[1].name .. "）")
   check(use.to[1] ~= ps[1], "【流离】转移后大乔不应再是目标")
@@ -947,13 +1017,19 @@ do -- 华佗·急救：回合外红色手牌当【桃】
   check(r:viewAsCard(ps[1], "peach", black) == nil, "【急救】黑色牌不应能当【桃】")
 end
 
-do -- 华佗·青囊：弃一张手牌令一名角色回复体力
+do -- 华佗·青囊：弃一张手牌令一名角色回复体力（新版：目标与代价均由华佗选）
   local r, ps = makeRoomWith({ "华佗", "白板武将" }, 52)
-  ps[2].hp = 1 -- 损失 3 点体力，满足「损失 2 点以上」的 BOT 策略
+  ps[2].hp = 1
   give(ps[1], "dodge", Card.Suit.Spade, 2)
-  r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  runInRoom(function()
+    r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  end, function(req)
+    if req and req.type == "askForChooseCard" then return ps[1].hand[1] end
+    if req and req.type == "askForChoice" then return ps[2].name end
+    return nil
+  end)
   check(ps[2].hp == 2, "【青囊】应令受伤角色回复 1 点体力（" .. ps[2].hp .. "）")
-  check(ps[1].qingnang_used, "【青囊】每回合限一次")
+  check(ps[1].qingnang_used, "【青囊】每阶段限一次")
 end
 
 do -- 吕布·无双：标记生效（杀需两张闪、决斗需两张杀）
@@ -2292,6 +2368,30 @@ do -- 贯石斧：弃两张牌强制命中
   check(#ps[1].hand == 0, "【贯石斧】应消耗两张手牌（剩 " .. #ps[1].hand .. "）")
 end
 
+do -- 贯石斧：牌面写「两张牌」，可弃装备（含贯石斧自身）
+  local r, ps = makeRoomWith({ "白板武将", "白板武将" }, 330)
+  local axe = equipCard(ps[1], "axe")
+  local armor = equipCard(ps[1], "eight_diagram")
+  give(ps[2], "dodge", Card.Suit.Heart, 2)
+  local hp, saw_equips = ps[2].hp, false
+  runInRoom(function()
+    r:useCard(ps[1], give(ps[1], "slash", Card.Suit.Spade, 8), ps[2])
+  end, function(req)
+    if req.type == "askForCard" and req.card_name == "dodge" then
+      return req.player.hand[1]
+    end
+    if req.type == "askForDiscard" then
+      if req.include_equips and req.cards and #req.cards == 2 then saw_equips = true end
+      return { axe, armor }
+    end
+    return nil
+  end)
+  check(saw_equips, "【贯石斧】弃牌请求应包含本人装备区")
+  check(ps[1].equips.weapon == nil and ps[1].equips.armor == nil,
+    "【贯石斧】应允许弃置武器自身和另一件装备")
+  check(ps[2].hp == hp - 1, "弃两件装备后【杀】仍应强制命中")
+end
+
 do -- 丈八蛇矛：两张手牌当杀
   local r, ps = makeRoomWith({ "白板武将", "白板武将" }, 34)
   equipCard(ps[1], "spear")
@@ -2304,12 +2404,20 @@ do -- 丈八蛇矛：两张手牌当杀
   check(made and made.name == "slash", "【丈八蛇矛】应转化出一张【杀】")
 end
 
-do -- 方天画戟：杀后无手牌可额外指定至多 2 人
+do -- 方天画戟：杀后无手牌可额外指定至多 2 人（新版：目标由使用者选定）
   local r, ps = makeRoomWith({ "白板武将", "白板武将", "白板武将", "白板武将" }, 35)
   equipCard(ps[1], "halberd")
   local hp2, hp3 = ps[2].hp, ps[3].hp
+  local appended = 0
   runInRoom(function()
     r:useCard(ps[1], give(ps[1], "slash", Card.Suit.Spade, 8), ps[2])
+  end, function(req)
+    if req and req.type == "askForChoice" then
+      appended = appended + 1
+      if appended == 1 then return ps[3].name end -- 追加 P3
+      return "不追加" -- 第二次不再追加
+    end
+    return nil -- 问闪一律不出
   end)
   check(#ps[1].hand == 0, "【方天画戟】发动前提：杀后没有手牌")
   check(ps[2].hp < hp2 and ps[3].hp < hp3,
@@ -2381,7 +2489,12 @@ do -- 鬼才：可对**他人**的判定改判（给敌人送判定）
   local indulgence = Card.create(1, "indulgence", Card.Suit.Spade, 6, Card.Type.Trick)
   local heart = Card.create(2, "dodge", Card.Suit.Heart, 2, Card.Type.Basic)
   local data = { player = ps[2], card = indulgence, judge_card = heart, reason = "indulgence" }
-  r:trigger("AskForRetrial", ps[2], data)
+  runInRoom(function()
+    r:trigger("AskForRetrial", ps[2], data)
+  end, function(req)
+    -- 新版鬼才由玩家选替换手牌；测试选那张黑桃（把敌人的乐改成生效）
+    return (req and req.type == "askForChooseCard") and spade or nil
+  end)
   check(data.judge_card == spade,
     "【鬼才】应能把敌人的判定改成生效（实得 " .. tostring(data.judge_card.name) .. "）")
 end
@@ -2417,6 +2530,13 @@ do -- 结姻：自己满血也能发动（只要求目标是已受伤男性）
   give(ps[1], "slash", Card.Suit.Spade, 6)
   runInRoom(function()
     r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  end, function(req)
+    -- 新版结姻：先弃两张手牌（多选），再选目标
+    if req and req.type == "askForDiscard" then
+      return { ps[1].hand[1], ps[1].hand[2] }
+    end
+    if req and req.type == "askForChoice" then return ps[2].name end
+    return nil
   end)
   check(ps[2].hp == 2, "【结姻】自己满血时也应能发动（目标 hp " .. ps[2].hp .. "）")
 end
@@ -2674,6 +2794,785 @@ do
     give(qs[1], "slash", Card.Suit.Spade, 7, Card.Type.Basic) -- 黑色牌
     check(r2:canNullify(qs[1]), "看破且有黑色牌应判为可抵消")
   end
+end
+
+print("\n--- 女将性别（雌雄剑/结姻/离间的目标判定依据）---")
+
+do
+  -- 文档：标准 25 将中女将 = 甄姬/黄月英/大乔/孙尚香/貂蝉
+  local want = { ["甄姬"] = true, ["黄月英"] = true, ["大乔"] = true,
+    ["孙尚香"] = true, ["貂蝉"] = true }
+  local badg = {}
+  for _, g in ipairs(Generals.all()) do
+    if want[g.name] and not g.female then table.insert(badg, g.name .. "应为女") end
+  end
+  local engine = Engine.create()
+  Standard.setup(engine)
+  local pz = Player.create("甄姬", engine:getGeneral("甄姬"), 1, false)
+  if not pz.female then table.insert(badg, "性别未传到 Player") end
+  check(#badg == 0, "标准版女将性别应正确（差异: " .. table.concat(badg, "；") .. "）")
+end
+
+print("\n--- 拆牌三区域（过河拆桥/顺手牵羊可拆装备与判定区）---")
+
+do -- takeCardAnyZone：手牌/装备区/判定区三个区域
+  local engine = Engine.create()
+  Standard.setup(engine)
+  local p = Player.create("甲", engine:getGeneral("白板武将"), 1, false)
+  local h = give(p, "slash", Card.Suit.Spade, 7)
+  local w = Card.create(2001, "crossbow", Card.Suit.Club, 1, Card.Type.Equip)
+  p.equips.weapon = w
+  local j = Card.create(2002, "indulgence", Card.Suit.Spade, 6, Card.Type.Trick)
+  table.insert(p.judges, j)
+  check(p:takeCardAnyZone(w) == "equip", "应能从装备区摘牌")
+  check(p.equips.weapon == nil, "装备槽应已空")
+  check(p:takeCardAnyZone(j) == "judge", "应能从判定区摘牌")
+  check(#p.judges == 0, "判定区应已空")
+  check(p:takeCardAnyZone(h) == "hand", "应能从手牌摘牌")
+  check(#p.hand == 0, "手牌应已空")
+end
+
+do -- 过河拆桥：请求携带公开牌候选，可拆装备
+  local r, ps = makeRoomWith({ "白板武将", "白板武将" })
+  local weapon = Card.create(2003, "crossbow", Card.Suit.Club, 1, Card.Type.Equip)
+  ps[2].equips.weapon = weapon
+  give(ps[2], "dodge", Card.Suit.Heart, 2)
+  local co = coroutine.create(function()
+    return r:askForDiscardFrom(ps[1], ps[2], 1)
+  end)
+  local _, req = coroutine.resume(co)
+  check(req and req.type == "askForDiscardFrom", "拆牌应产生 askForDiscardFrom 请求")
+  local has_weapon = false
+  for _, c in ipairs((req and req.equip_judges) or {}) do
+    if c == weapon then has_weapon = true break end
+  end
+  check(has_weapon, "装备区八卦阵/连弩等公开牌应出现在候选里")
+  check((req and req.hand_count) == 1, "请求应携带手牌张数")
+  local _, out = coroutine.resume(co, weapon)
+  check(ps[2].equips.weapon == nil, "拆装备后武器槽应已空")
+  check(out and out[1] == weapon, "应返回弃掉的装备列表")
+  local discarded = false
+  for _, c in ipairs(r.discardPile) do if c == weapon then discarded = true break end end
+  check(discarded, "被拆的装备应进入弃牌堆")
+end
+
+do -- 顺手牵羊：可顺装备，失去装备触发【枭姬】；无公开牌时随机拿手牌
+  local r, ps = makeRoomWith({ "白板武将", "孙尚香" })
+  local armor = Card.create(2004, "eight_diagram", Card.Suit.Spade, 2, Card.Type.Equip)
+  ps[2].equips.armor = armor
+  local before = #ps[2].hand
+  local co = coroutine.create(function()
+    local Cards2 = require "src.core.cards"
+    return Cards2.get("snatch").effect(r,
+      { from = ps[1], card = nil, to = { ps[2] } })
+  end)
+  local _, req = coroutine.resume(co)
+  check(req and req.type == "askForChooseCard" and req.cards[1] == armor,
+    "顺手牵羊应把公开装备摆出来选")
+  coroutine.resume(co, armor)
+  check(ps[2].equips.armor == nil, "被顺的防具应离开装备区")
+  check(ps[1].hand[1] == armor, "装备应进入使用者手牌")
+  check(#ps[2].hand == before + 2, "孙尚香【枭姬】应在失去装备时摸两张")
+
+  -- 无公开牌且无手牌：不产出请求，直接无牌可顺
+  local r2, qs = makeRoomWith({ "白板武将", "白板武将" })
+  local co2 = coroutine.create(function()
+    local Cards2 = require "src.core.cards"
+    return Cards2.get("snatch").effect(r2,
+      { from = qs[1], card = nil, to = { qs[2] } })
+  end)
+  local _, req2 = coroutine.resume(co2)
+  check(req2 == nil and coroutine.status(co2) == "dead", "无牌可顺时不应产出请求")
+
+  -- 只有手牌：不问选牌，直接随机抽一张暗牌
+  local r3, ss = makeRoomWith({ "白板武将", "白板武将" })
+  give(ss[2], "slash", Card.Suit.Club, 7)
+  local co3 = coroutine.create(function()
+    local Cards2 = require "src.core.cards"
+    return Cards2.get("snatch").effect(r3,
+      { from = ss[1], card = nil, to = { ss[2] } })
+  end)
+  local _, req3 = coroutine.resume(co3)
+  check(req3 == nil and coroutine.status(co3) == "dead", "只有暗牌时不应产出选牌请求")
+  check(#ss[1].hand == 1 and #ss[2].hand == 0, "应随机拿走一张暗牌")
+end
+
+print("\n--- 八卦阵覆盖「需要打出闪」的全场景（万箭齐发）---")
+
+do
+  local Cards2 = require "src.core.cards"
+  -- 判定红色：视为打出闪，不受伤害
+  local r, ps = makeRoomWith({ "白板武将", "白板武将" })
+  local bagua = Card.create(2005, "eight_diagram", Card.Suit.Spade, 2, Card.Type.Equip)
+  ps[2].equips.armor = bagua
+  ps[2].hand = {} -- 没有闪，只能靠八卦阵
+  local red = Card.create(2006, "peach", Card.Suit.Heart, 9)
+  table.insert(r.drawPile, red) -- 牌堆顶 = 尾部
+  local co = coroutine.create(function()
+    return Cards2.get("archery_attack").effect(r,
+      { from = ps[1], card = nil, to = { ps[2] } })
+  end)
+  local _, req = coroutine.resume(co)
+  check(req and req.card_name == "dodge", "万箭应先问【闪】")
+  coroutine.resume(co, nil) -- 不出闪
+  check(ps[2].hp == ps[2].max_hp, "八卦阵判定红色应视为打出闪，免受万箭伤害")
+
+  -- 判定黑色：防具失效，受到 1 点伤害
+  local r2, qs = makeRoomWith({ "白板武将", "白板武将" })
+  local bagua2 = Card.create(2007, "eight_diagram", Card.Suit.Spade, 2, Card.Type.Equip)
+  qs[2].equips.armor = bagua2
+  qs[2].hand = {}
+  local black = Card.create(2008, "slash", Card.Suit.Spade, 8)
+  table.insert(r2.drawPile, black)
+  local co2 = coroutine.create(function()
+    return Cards2.get("archery_attack").effect(r2,
+      { from = qs[1], card = nil, to = { qs[2] } })
+  end)
+  local _, _req2 = coroutine.resume(co2)
+  check(_req2 and _req2.card_name == "dodge", "判定前仍应先问【闪】")
+  coroutine.resume(co2, nil)
+  check(qs[2].hp == qs[2].max_hp - 1, "八卦阵判定黑色应失效，万箭造成 1 点伤害")
+
+  -- 无八卦阵：不受影响，照常受伤
+  local r3, ss = makeRoomWith({ "白板武将", "白板武将" })
+  ss[2].hand = {}
+  local co3 = coroutine.create(function()
+    return Cards2.get("archery_attack").effect(r3,
+      { from = ss[1], card = nil, to = { ss[2] } })
+  end)
+  local _, req3 = coroutine.resume(co3)
+  check(req3 and req3.card_name == "dodge", "无防具时万箭仍应问【闪】")
+  coroutine.resume(co3, nil)
+  check(ss[2].hp == ss[2].max_hp - 1, "无八卦阵不出闪应受 1 点伤害")
+end
+
+print("\n--- 无懈可击嵌套（可抵消另一张无懈）---")
+
+do
+  local function nullUse(r, players)
+    local target_card = Card.create(9000 + #r.discardPile, "ex_nihilo",
+      Card.Suit.Heart, 7, Card.Type.Trick)
+    return { from = players[3], card = target_card, to = { players[3] } }
+  end
+
+  -- 单张无懈：原锦囊被抵消
+  do
+    local r, ps = makeRoomWith({ "白板武将", "白板武将", "白板武将" })
+    local n1 = give(ps[1], "nullification", Card.Suit.Spade, 12, Card.Type.Trick)
+    local co = coroutine.create(function() return r:askForNullification(nullUse(r, ps)) end)
+    local _, req1 = coroutine.resume(co)
+    check(req1 and req1.card_name == "nullification" and req1.nullify_round == 1,
+      "第一轮应询问是否抵消原锦囊")
+    local ok, ret = coroutine.resume(co, n1)
+    check(ok and ret == true, "一张无懈应抵消原锦囊")
+  end
+
+  -- 两张无懈嵌套：无懈抵消无懈，原锦囊重新生效
+  do
+    local r, ps = makeRoomWith({ "白板武将", "白板武将", "白板武将" })
+    local n1 = give(ps[1], "nullification", Card.Suit.Spade, 12, Card.Type.Trick)
+    -- 第二张只是让 P1 在后续轮次仍能被 canNullify 问到（响应时选择不出）
+    give(ps[1], "nullification", Card.Suit.Club, 12, Card.Type.Trick)
+    local n3 = give(ps[2], "nullification", Card.Suit.Heart, 12, Card.Type.Trick)
+    local co = coroutine.create(function() return r:askForNullification(nullUse(r, ps)) end)
+    local _, req1 = coroutine.resume(co)
+    check(req1.player == ps[1], "座位顺序先问 P1")
+    local _, req2 = coroutine.resume(co, n1)   -- P1 出第一张
+    check(req2 and req2.nullify_round == 2 and req2.player == ps[1]
+      and req2.ask_from == ps[1], "第二轮应询问是否抵消那张无懈（可拒绝抵消自己的）")
+    local _, req3 = coroutine.resume(co, nil)  -- P1 不抵消自己的
+    check(req3 and req3.nullify_round == 2 and req3.player == ps[2],
+      "应轮到 P2 决定是否再无懈")
+    coroutine.resume(co, n3)   -- P2 出第二张 → 进入第三轮
+    -- 第三轮又从 P1 问起（还剩一张无懈）：选择不出 → 无人再出，直接结算；
+    -- 结算结果就落在这一次 resume 的返回值上（协程已 dead）
+    local ok, ret = coroutine.resume(co, nil)
+    check(ok and ret == false, "两张无懈奇偶相抵，原锦囊应重新生效")
+    check(coroutine.status(co) == "dead", "无人再出时应结束询问")
+  end
+end
+
+do -- BOT 嵌套无懈策略：敌人出的无懈才跟
+  local r, ps = makeRoomWith({ "曹操", "张飞", "刘备", "华佗" })
+  r.identity_mode = true
+  ps[1].role, ps[2].role, ps[3].role, ps[4].role = "lord", "rebel", "loyalist", "rebel"
+  local bot = Bot.make()
+  local n = give(ps[2], "nullification", Card.Suit.Spade, 12, Card.Type.Trick)
+  check(bot({ type = "askForCard", player = ps[2], card_name = "nullification",
+    nullify_round = 2, ask_from = ps[3], ask_target = ps[1] }, r) == n,
+    "BOT：忠臣（敌人）的保护性无懈应被反贼再无懈")
+  check(bot({ type = "askForCard", player = ps[2], card_name = "nullification",
+    nullify_round = 2, ask_from = ps[4], ask_target = ps[1] }, r) == nil,
+    "BOT：同伴（反贼）出的无懈不应再无懈")
+  check(bot({ type = "askForCard", player = ps[2], card_name = "nullification",
+    ask_from = ps[1], ask_target = ps[2] }, r) == n,
+    "BOT：第一轮仍是锦囊目标为自己时才出无懈")
+end
+
+print("\n--- 借刀杀人（使用者指定目标 / 拒绝则失武器 / 范围内无人则落空）---")
+
+do -- 使用者指定目标，持有者出杀 → 对指定目标结算
+  local Cards2 = require "src.core.cards"
+  local r, ps = makeRoomWith({ "白板武将", "白板武将", "白板武将" })
+  local weapon = Card.create(3001, "crossbow", Card.Suit.Club, 1, Card.Type.Equip)
+  ps[2].equips.weapon = weapon
+  local slash = give(ps[2], "slash", Card.Suit.Spade, 7)
+  local co = coroutine.create(function()
+    return Cards2.get("collateral").effect(r, { from = ps[1], card = nil, to = { ps[2] } })
+  end)
+  local _, req1 = coroutine.resume(co)
+  check(req1 and req1.type == "askForChoice" and req1.player == ps[1],
+    "借刀应先让**使用者**指定目标")
+  local names = {}
+  for _, nm in ipairs((req1 and req1.choices) or {}) do names[nm] = true end
+  check(names[ps[1].name] and names[ps[3].name] and not names[ps[2].name],
+    "候选应含范围内角色且不含武器持有者")
+  local _, req2 = coroutine.resume(co, ps[3].name)  -- 指定 ps[3]
+  check(req2 and req2.card_name == "slash" and req2.player == ps[2],
+    "持有者应被要求出杀")
+  local _, req3 = coroutine.resume(co, slash)
+  check(req3 and req3.card_name == "dodge" and req3.player == ps[3],
+    "杀应作用于**指定的**目标而非自动选第一个")
+  coroutine.resume(co, nil) -- 不出闪
+  check(ps[3].hp == ps[3].max_hp - 1, "不出闪应受 1 点伤害")
+  check(ps[2].equips.weapon == weapon, "出了杀武器不应转移")
+end
+
+do -- 拒绝出杀：武器转给使用者，孙尚香【枭姬】因失去装备摸两张
+  local Cards2 = require "src.core.cards"
+  local r, ps = makeRoomWith({ "白板武将", "孙尚香", "白板武将" })
+  local weapon = Card.create(3002, "kylin_bow", Card.Suit.Heart, 5, Card.Type.Equip)
+  ps[2].equips.weapon = weapon -- 麒麟弓范围 5，两人都能被指定
+  local co = coroutine.create(function()
+    return Cards2.get("collateral").effect(r, { from = ps[1], card = nil, to = { ps[2] } })
+  end)
+  local _, req1 = coroutine.resume(co)
+  check(req1 and req1.type == "askForChoice", "应先让使用者指定目标")
+  -- 指定 ps[3] 后，下一次 yield 就是持有者的出杀询问
+  local _, req2 = coroutine.resume(co, ps[3].name)
+  check(req2 and req2.card_name == "slash" and req2.player == ps[2],
+    "持有者应被要求出杀")
+  coroutine.resume(co, nil) -- 拒绝出杀
+  check(ps[2].equips.weapon == nil and ps[1].hand[1] == weapon,
+    "拒出杀武器应转给使用者")
+  check(#ps[2].hand == 2, "孙尚香失去武器应触发【枭姬】摸两张")
+end
+
+do -- 范围内无可指定目标（空城）：落空，武器不转移
+  local Cards2 = require "src.core.cards"
+  local r, ps = makeRoomWith({ "诸葛亮", "白板武将", "诸葛亮" })
+  -- 两名诸葛亮都无手牌：【空城】生效，不能被【杀】指定
+  local weapon = Card.create(3003, "crossbow", Card.Suit.Club, 1, Card.Type.Equip)
+  ps[2].equips.weapon = weapon
+  local co = coroutine.create(function()
+    return Cards2.get("collateral").effect(r, { from = ps[1], card = nil, to = { ps[2] } })
+  end)
+  local _, req1 = coroutine.resume(co)
+  check(req1 == nil and coroutine.status(co) == "dead", "无可指定目标时不应产出请求")
+  check(ps[2].equips.weapon == weapon and #ps[1].hand == 0,
+    "落空时武器不应转移（修复：原来照样拿走武器）")
+end
+
+do -- BOT 的借刀目标策略：候选是玩家名时挑敌方残血
+  local r, ps = makeRoomWith({ "曹操", "张飞", "刘备", "华佗" })
+  r.identity_mode = true
+  ps[1].role, ps[2].role, ps[3].role, ps[4].role = "lord", "rebel", "loyalist", "rebel"
+  ps[3].hp = 1 -- 刘备残血，是张飞的优先集火对象
+  local bot = Bot.make()
+  local picked = bot({ type = "askForChoice", player = ps[2],
+    choices = { ps[1].name, ps[3].name, ps[4].name } }, r)
+  check(picked == ps[3].name, "BOT 应挑敌方残血（刘备）而非主公或同伴（实际选 "
+    .. tostring(picked) .. "）")
+end
+
+print("\n--- 转化技可用装备区的牌（武圣红色装备当杀）---")
+
+do -- 武圣：装备区的红色装备可当【杀】，结算后进弃牌堆并触发失去装备
+  local r, ps = makeRoomWith({ "关羽", "白板武将" })
+  local horse = Card.create(4001, "offensive_horse", Card.Suit.Heart, 5, Card.Type.Equip) -- 赤兔 ♥5 红色
+  ps[1].equips.offensive_horse = horse
+  ps[1].hand = {}
+  local cands = r:viewAsCandidates(ps[1], "slash")
+  local hit = false
+  for _, item in ipairs(cands) do
+    if item.card == horse then hit = true break end
+  end
+  check(hit, "【武圣】应能转化装备区的红色坐骑")
+  local made = r:viewAsCard(ps[1], "slash", horse)
+  check(made ~= nil and made.virtual, "应生成虚拟【杀】")
+  local co = coroutine.create(function()
+    return r:useCard(ps[1], made, ps[2])
+  end)
+  local _, req = coroutine.resume(co) -- 目标被问【闪】
+  check(req and req.card_name == "dodge", "目标应被询问【闪】")
+  coroutine.resume(co, nil) -- 不出闪
+  check(ps[2].hp == ps[2].max_hp - 1, "不出闪应受 1 点伤害")
+  check(ps[1].equips.offensive_horse == nil, "被转化的坐骑应离开装备区")
+  local discarded = false
+  for _, c in ipairs(r.discardPile) do if c == horse then discarded = true break end end
+  check(discarded, "被转化的坐骑应进弃牌堆")
+end
+
+do -- 倾国：牌面写「手牌」，黑色装备不能当【闪】（对照：黑色手牌可以）
+  local r, ps = makeRoomWith({ "甄姬", "白板武将" })
+  local bagua = Card.create(4002, "eight_diagram", Card.Suit.Spade, 2, Card.Type.Equip)
+  ps[1].equips.armor = bagua
+  ps[1].hand = {}
+  check(#r:viewAsCandidates(ps[1], "dodge") == 0, "【倾国】只认手牌，黑色装备不应被转化")
+  give(ps[1], "slash", Card.Suit.Spade, 8)
+  check(#r:viewAsCandidates(ps[1], "dodge") == 1, "黑色手牌应可被【倾国】转化")
+end
+
+do -- 退还：转化失败时装备回到装备槽而不是变成手牌
+  local r, ps = makeRoomWith({ "关羽", "白板武将", "白板武将", "白板武将" })
+  local horse = Card.create(4003, "offensive_horse", Card.Suit.Heart, 5, Card.Type.Equip)
+  ps[1].equips.offensive_horse = horse
+  ps[1].hand = {}
+  -- 赤兔还装在身上：对家座位距离 2，进攻马 -1 后为 1；
+  -- 使用时坐骑先被消耗（takeCardAnyZone），距离回到 2 → 超出范围 1 → 退还
+  check(r:distance(ps[1], ps[3]) == 1, "装备进攻马后到对家距离应为 1")
+  local made = r:viewAsCard(ps[1], "slash", horse)
+  local ok = r:useCard(ps[1], made, ps[3])
+  check(not ok, "超出攻击范围的使用应被拒绝（坐骑消耗后距离回到 2）")
+  check(ps[1].equips.offensive_horse == horse, "退还的坐骑应回到装备槽")
+  check(#ps[1].hand == 0, "退还不应把装备变成手牌")
+end
+
+print("\n--- 开局选将候选池（主公 5 张、其余 3 张）---")
+
+do
+  local engine = Engine.create()
+  Standard.setup(engine)
+  local pools = Standard.dealCandidates(engine, Standard.makeRng(7), 5, 2)
+  check(#pools[2] == 5, "主公候选应为 5 张")
+  local ok3 = true
+  for seat = 1, 5 do
+    if seat ~= 2 and #pools[seat] ~= 3 then ok3 = false end
+  end
+  check(ok3, "其余座位候选应为 3 张")
+  local seen, dup = {}, false
+  for seat = 1, 5 do
+    for _, g in ipairs(pools[seat]) do
+      if seen[g.name] then dup = true end
+      seen[g.name] = true
+    end
+  end
+  check(not dup, "候选池内武将不应重复")
+  local ph = false
+  for seat = 1, 5 do
+    for _, g in ipairs(pools[seat]) do
+      if Standard.PLACEHOLDERS[g.name] then ph = true end
+    end
+  end
+  check(not ph, "候选不应含占位将")
+  local pools2 = Standard.dealCandidates(engine, Standard.makeRng(7), 5, 2)
+  local same = true
+  for seat = 1, 5 do
+    for i, g in ipairs(pools[seat]) do
+      if pools2[seat][i] ~= g then same = false end
+    end
+  end
+  check(same, "同种子候选池应可复现")
+end
+
+print("\n--- 遗计：看牌顶两张逐张分人，每点伤害一次 ---")
+
+do
+  local r, ps = makeRoomWith({ "郭嘉", "白板武将" })
+  local before = #r.drawPile
+  local co = coroutine.create(function()
+    return r:damage(ps[2], ps[1], 2) -- 2 点伤害 → 两次共 4 张
+  end)
+  -- 逐张应答：每次询问都留给自己，直到协程结束
+  local asks = 0
+  while coroutine.status(co) ~= "dead" do
+    local ok, out = coroutine.resume(co, asks > 0 and ps[1].name or nil)
+    if not ok then error(out, 0) end
+    if coroutine.status(co) ~= "dead" then
+      asks = asks + 1
+      check(out and out.type == "askForChoice" and out.player == ps[1]
+        and out.pick == "self",
+        string.format("第 %d 张应询问郭嘉分给谁（pick=self）", asks))
+    end
+  end
+  check(asks == 4, "2 点伤害应产生 4 次分牌询问（实得 " .. asks .. "）")
+  check(#ps[1].hand == 4, "2 点伤害应分得 4 张（实得 " .. #ps[1].hand .. "）")
+  check(before - #r.drawPile == 4, "牌堆应减少 4 张（卡牌守恒）")
+end
+
+print("\n--- 制衡：任意张自选（any 模式）---")
+
+do
+  local r, ps = makeRoomWith({ "孙权", "白板武将" })
+  local c1 = give(ps[1], "dodge", Card.Suit.Heart, 2)
+  local c2 = give(ps[1], "nullification", Card.Suit.Spade, 12, Card.Type.Trick)
+  local c3 = give(ps[1], "slash", Card.Suit.Spade, 7)
+  local co = coroutine.create(function()
+    return r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  end)
+  local _, req = coroutine.resume(co)
+  check(req and req.type == "askForDiscard" and req.any == true,
+    "制衡应走 any 模式的自选弃牌")
+  local _, fin = coroutine.resume(co, { c1, c2 })
+  check(fin == false, "制衡触发不应截断阶段")
+  check(#ps[1].hand == 3, "弃 2 摸 2 后应剩 3 张（实得 " .. #ps[1].hand .. "）")
+  check(ps[1].hand[1] == c3, "留下的应是未选的【杀】")
+  check(ps[1].zhiheng_used == true, "本阶段限一次标记应置位")
+  local discarded = 0
+  for _, c in ipairs(r.discardPile) do
+    if c == c1 or c == c2 then discarded = discarded + 1 end
+  end
+  check(discarded == 2, "弃掉的两张应进弃牌堆")
+end
+
+do -- 只有装备也能制衡，并按失去装备流程结算
+  local r, ps = makeRoomWith({ "孙权", "白板武将" })
+  local armor = equipCard(ps[1], "eight_diagram")
+  local co = coroutine.create(function()
+    return r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  end)
+  local _, req = coroutine.resume(co)
+  check(req and req.any and req.include_equips and req.n == 1,
+    "制衡候选应包含装备区（仅一件装备时 n=1）")
+  check(req and #req.cards == 1 and req.cards[1] == armor,
+    "制衡请求应下发装备候选")
+  coroutine.resume(co, { armor })
+  check(ps[1].equips.armor == nil, "制衡选中的装备应离开装备区")
+  check(#ps[1].hand == 1, "弃一件装备后应摸一张牌")
+  check(r.discardPile[#r.discardPile] == armor, "被制衡的装备应进入弃牌堆")
+end
+
+print("\n--- 五谷丰登：由使用者开始依次选 ---")
+
+do
+  local Cards2 = require "src.core.cards"
+  local r, ps = makeRoomWith({ "白板武将", "白板武将", "白板武将" })
+  local co = coroutine.create(function()
+    return Cards2.get("amazing_grace").effect(r, { from = ps[2], card = nil, to = {} })
+  end)
+  local _, req1 = coroutine.resume(co)
+  check(req1 and req1.type == "askForChooseCard" and req1.player == ps[2],
+    "五谷应由**使用者**先选（而非座位 1）")
+  local _, req2 = coroutine.resume(co, nil)
+  check(req2 and req2.player == ps[3], "第二位应为使用者的下家")
+  local _, req3 = coroutine.resume(co, nil)
+  check(req3 and req3.player == ps[1], "第三位应轮回到座位 1")
+  coroutine.resume(co, nil)
+  check(#ps[1].hand == 1 and #ps[2].hand == 1 and #ps[3].hand == 1,
+    "三人应各得一张")
+end
+
+print("\n--- 反间：目标与送牌均由周瑜选定 ---")
+
+do
+  local r, ps = makeRoomWith({ "周瑜", "白板武将", "白板武将" })
+  local heart_slash = give(ps[1], "slash", Card.Suit.Heart, 10) -- 红桃杀
+  local co = coroutine.create(function()
+    return r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  end)
+  local _, req1 = coroutine.resume(co)
+  check(req1 and req1.type == "askForChoice" and req1.pick == "enemy",
+    "反间应先由周瑜选目标")
+  local _, req2 = coroutine.resume(co, ps[3].name) -- 选 P3
+  check(req2 and req2.type == "askForChooseCard" and req2.giveaway == true,
+    "送哪张牌应由周瑜选（giveaway）")
+  local _, req3 = coroutine.resume(co, heart_slash)
+  check(req3 and req3.type == "askForChoice" and req3.player == ps[3],
+    "目标应被要求猜花色")
+  coroutine.resume(co, "黑桃") -- 猜错（实为红桃）
+  check(ps[3].hp == ps[3].max_hp - 1, "猜错花色应受 1 点伤害")
+  check(#ps[3].hand == 1 and ps[3].hand[1] == heart_slash,
+    "无论猜对猜错都获得那张手牌")
+end
+
+print("\n--- 离间：弃牌与两名男性及方向均由貂蝉选定 ---")
+
+do
+  local r, ps = makeRoomWith({ "貂蝉", "吕布", "白板武将", "关羽" })
+  local cost = give(ps[1], "dodge", Card.Suit.Heart, 2)
+  local co = coroutine.create(function()
+    return r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  end)
+  local _, req1 = coroutine.resume(co)
+  check(req1 and req1.type == "askForChooseCard" and req1.giveaway == true,
+    "离间应先选弃置的手牌")
+  local _, req2 = coroutine.resume(co, cost)
+  check(req2 and req2.type == "askForChoice",
+    "应选使用决斗的男性角色")
+  local _, req3 = coroutine.resume(co, ps[4].name) -- 关羽出杀
+  check(req3 and req3.type == "askForChoice",
+    "应选决斗的目标（不含已选者）")
+  local names3 = {}
+  for _, nm in ipairs(req3.choices or {}) do names3[nm] = true end
+  check(not names3[ps[4].name], "目标候选不应含已选的出杀者")
+  local _, req4 = coroutine.resume(co, ps[2].name) -- 对吕布决斗
+  check(req4 and req4.card_name == "slash" and req4.player == ps[2],
+    "决斗应由目标（吕布）先出杀")
+  coroutine.resume(co, nil) -- 吕布不出杀 → 受 1 伤
+  check(ps[2].hp == ps[2].max_hp - 1, "吕布不出杀应受 1 点伤害")
+  check(#ps[1].hand == 0, "弃牌代价应已入弃牌堆")
+end
+
+print("\n--- 结姻：弃哪两张与目标均由孙尚香选定 ---")
+
+do
+  local r, ps = makeRoomWith({ "孙尚香", "关羽", "白板武将" })
+  ps[2].hp = ps[2].max_hp - 1
+  local c1 = give(ps[1], "slash", Card.Suit.Spade, 7)
+  local c2 = give(ps[1], "dodge", Card.Suit.Heart, 2)
+  local co = coroutine.create(function()
+    return r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  end)
+  local _, req1 = coroutine.resume(co)
+  check(req1 and req1.type == "askForDiscard" and req1.n == 2,
+    "结姻应先弃两张手牌（多选）")
+  local _, req2 = coroutine.resume(co, { c1, c2 })
+  check(req2 and req2.type == "askForChoice" and req2.pick == "ally",
+    "结姻目标应由孙尚香选（ally）")
+  local names2 = {}
+  for _, nm in ipairs(req2.choices or {}) do names2[nm] = true end
+  check(names2[ps[2].name] and not names2[ps[3].name],
+    "候选应仅含已受伤男性（关羽）")
+  coroutine.resume(co, ps[2].name)
+  check(ps[2].hp == ps[2].max_hp, "目标应回复 1 点体力")
+  check(#ps[1].hand == 0, "两张代价应已弃置")
+end
+
+print("\n--- 流离：弃牌与转移目标均由大乔选定 ---")
+
+do
+  local r, ps = makeRoomWith({ "白板武将", "大乔", "白板武将" })
+  local slash = give(ps[1], "slash", Card.Suit.Spade, 7)
+  local cost = give(ps[2], "dodge", Card.Suit.Heart, 2)
+  local co = coroutine.create(function()
+    return r:useCard(ps[1], slash, ps[2])
+  end)
+  local _, req1 = coroutine.resume(co)
+  check(req1 and req1.type == "askForChooseCard" and req1.giveaway == true
+    and req1.player == ps[2], "流离应先由大乔选弃牌代价")
+  local _, req2 = coroutine.resume(co, cost)
+  check(req2 and req2.type == "askForChoice" and req2.player == ps[2],
+    "转移目标应由大乔选")
+  local names2 = {}
+  for _, nm in ipairs(req2.choices or {}) do names2[nm] = true end
+  check(names2[ps[3].name] and not names2[ps[1].name],
+    "候选应含范围内角色且不含出杀者")
+  local _, req3 = coroutine.resume(co, ps[3].name)
+  check(req3 and req3.card_name == "dodge" and req3.player == ps[3],
+    "转移后的杀应向新目标问闪")
+  coroutine.resume(co, nil)
+  check(ps[3].hp == ps[3].max_hp - 1 and ps[2].hp == ps[2].max_hp,
+    "伤害应落在转移目标身上，大乔免伤")
+  check(#ps[2].hand == 0, "弃牌代价应已消耗")
+end
+
+print("\n--- 青囊：只损 1 体力也能发动，目标与代价由华佗选定 ---")
+
+do
+  local r, ps = makeRoomWith({ "华佗", "关羽", "白板武将" })
+  ps[2].hp = ps[2].max_hp - 1 -- 只损 1 点（旧版阈值 ≥2 不触发）
+  local cost = give(ps[1], "slash", Card.Suit.Spade, 7)
+  local co = coroutine.create(function()
+    return r:trigger("EventPhaseStart", ps[1], { player = ps[1], phase = "play" })
+  end)
+  local _, req1 = coroutine.resume(co)
+  check(req1 and req1.type == "askForChooseCard" and req1.giveaway == true,
+    "青囊应先选弃置的手牌")
+  local _, req2 = coroutine.resume(co, cost)
+  check(req2 and req2.type == "askForChoice" and req2.pick == "ally",
+    "目标应由华佗选（ally，含只损 1 体力的角色）")
+  coroutine.resume(co, ps[2].name)
+  check(ps[2].hp == ps[2].max_hp, "目标应回复 1 点体力")
+  check(#ps[1].hand == 0, "代价应已弃置")
+end
+
+print("\n--- 刚烈：伤害来源可选「弃两张或受伤」---")
+
+do
+  local r, ps = makeRoomWith({ "夏侯惇", "白板武将" })
+  give(ps[2], "slash", Card.Suit.Spade, 7)
+  give(ps[2], "dodge", Card.Suit.Heart, 2)
+  local black = Card.create(5001, "slash", Card.Suit.Spade, 7)
+  table.insert(r.drawPile, black) -- 判定非红桃 → 刚烈生效
+  local co = coroutine.create(function()
+    return r:damage(ps[2], ps[1], 1) -- 夏侯惇受到 1 点伤害（from=P2）
+  end)
+  local _, req1 = coroutine.resume(co)
+  check(req1 and req1.type == "askForChoice" and req1.player == ps[2],
+    "伤害来源应被要求选择（弃牌或受伤）")
+  local _, fin = coroutine.resume(co, "受到 1 点伤害")
+  check(fin == nil, "选择受伤后应结束")
+  check(ps[2].hp == ps[2].max_hp - 1, "选择受伤应受 1 点伤害")
+  check(#ps[2].hand == 2, "选择受伤不应弃牌")
+end
+
+print("\n--- 雌雄双股剑：目标可选「弃牌或让对方摸牌」---")
+
+do
+  local r, ps = makeRoomWith({ "关羽", "甄姬" })
+  local sword = Card.create(5002, "double_sword", Card.Suit.Spade, 2, Card.Type.Equip)
+  ps[1].equips.weapon = sword
+  local slash = give(ps[1], "slash", Card.Suit.Spade, 7)
+  give(ps[2], "dodge", Card.Suit.Heart, 2)
+  local co = coroutine.create(function()
+    return r:useCard(ps[1], slash, ps[2])
+  end)
+  local _, req1 = coroutine.resume(co)
+  check(req1 and req1.type == "askForChoice" and req1.player == ps[2],
+    "目标应可选择（弃牌或让使用者摸牌）")
+  local _, req2 = coroutine.resume(co, "令 " .. ps[1].name .. " 摸一张牌")
+  check(req2 and req2.card_name == "dodge", "选择摸牌后继续问闪")
+  coroutine.resume(co, nil)
+  check(#ps[1].hand == 1, "使用者应摸一张（实得 " .. #ps[1].hand .. "）")
+  check(#ps[2].hand == 1, "目标不应被弃牌")
+end
+
+print("\n--- 麒麟弓：可选是否弃马、弃哪匹 ---")
+
+do
+  local r, ps = makeRoomWith({ "白板武将", "白板武将" })
+  local bow = Card.create(5003, "kylin_bow", Card.Suit.Heart, 5, Card.Type.Equip)
+  ps[1].equips.weapon = bow
+  local horse = Card.create(5004, "offensive_horse", Card.Suit.Spade, 13, Card.Type.Equip)
+  ps[2].equips.offensive_horse = horse
+  local slash = give(ps[1], "slash", Card.Suit.Spade, 7)
+  local co = coroutine.create(function()
+    return r:useCard(ps[1], slash, ps[2])
+  end)
+  coroutine.resume(co) -- 问闪
+  local _, req2 = coroutine.resume(co, nil) -- 不出闪 → 命中
+  check(req2 and req2.type == "askForChoice" and req2.player == ps[1],
+    "命中后应询问是否弃马")
+  coroutine.resume(co, "不发动")
+  check(ps[2].equips.offensive_horse == horse, "选不发动马应保留")
+  check(ps[2].hp == ps[2].max_hp - 1, "伤害照常结算")
+
+  -- 第二局：选弃马
+  local r2, qs = makeRoomWith({ "白板武将", "白板武将" })
+  local bow2 = Card.create(5005, "kylin_bow", Card.Suit.Heart, 5, Card.Type.Equip)
+  qs[1].equips.weapon = bow2
+  local horse2 = Card.create(5006, "defensive_horse", Card.Suit.Club, 5, Card.Type.Equip)
+  qs[2].equips.defensive_horse = horse2
+  local slash2 = give(qs[1], "slash", Card.Suit.Spade, 8)
+  local co2 = coroutine.create(function()
+    return r2:useCard(qs[1], slash2, qs[2])
+  end)
+  coroutine.resume(co2)                  -- 问闪
+  coroutine.resume(co2, nil)             -- 命中 → 问弃马
+  coroutine.resume(co2, "弃置【" .. horse2:zhName() .. "】")
+  check(qs[2].equips.defensive_horse == nil,
+    "选弃置后马应离开装备区（实得 " .. tostring(qs[2].equips.defensive_horse) .. "）")
+end
+
+print("\n--- 方天画戟：追加目标由使用者选定 ---")
+
+do
+  local r, ps = makeRoomWith({ "白板武将", "白板武将", "白板武将", "白板武将" })
+  local halberd = Card.create(5007, "halberd", Card.Suit.Diamond, 12, Card.Type.Equip)
+  ps[1].equips.weapon = halberd
+  local slash = give(ps[1], "slash", Card.Suit.Spade, 7) -- 用完后手牌为 0
+  local co = coroutine.create(function()
+    return r:useCard(ps[1], slash, ps[2])
+  end)
+  local _, req1 = coroutine.resume(co)
+  check(req1 and req1.type == "askForChoice" and req1.player == ps[1],
+    "画戟应在主目标结算前由使用者选择追加目标")
+  local _, req2 = coroutine.resume(co, ps[3].name) -- 追加 P3
+  check(req2 and req2.type == "askForChoice", "有第四人时应允许第二次追加")
+  local names2 = {}
+  for _, name in ipairs(req2.choices or {}) do names2[name] = true end
+  check(not names2[ps[2].name] and not names2[ps[3].name] and names2[ps[4].name],
+    "第二次候选应排除主目标和已追加目标")
+  local _, dodge2 = coroutine.resume(co, ps[4].name) -- 再追加 P4，随后主目标问闪
+  check(dodge2 and dodge2.card_name == "dodge" and dodge2.player == ps[2],
+    "选完全部目标后才应结算主目标")
+  local _, dodge3 = coroutine.resume(co, nil)
+  check(dodge3 and dodge3.card_name == "dodge" and dodge3.player == ps[3],
+    "第一追加目标应被问闪")
+  local _, dodge4 = coroutine.resume(co, nil)
+  check(dodge4 and dodge4.card_name == "dodge" and dodge4.player == ps[4],
+    "第二追加目标应被问闪")
+  coroutine.resume(co, nil)
+  check(ps[2].hp == ps[2].max_hp - 1 and ps[3].hp == ps[3].max_hp - 1
+      and ps[4].hp == ps[4].max_hp - 1,
+    "三个互不重复的目标都应受伤")
+end
+
+print("\n--- 鬼才：替换哪张手牌由玩家选定 ---")
+
+do
+  local r, ps = makeRoomWith({ "司马懿", "白板武将" })
+  local heart = give(ps[1], "dodge", Card.Suit.Heart, 2) -- 能把乐改不生效
+  give(ps[1], "slash", Card.Suit.Spade, 7)
+  local judge_spade = Card.create(5008, "indulgence", Card.Suit.Spade, 6, Card.Type.Trick)
+  local data = { player = ps[1], reason = "indulgence", judge_card = judge_spade }
+  local co = coroutine.create(function()
+    return r:trigger("AskForRetrial", ps[1], data)
+  end)
+  local _, req1 = coroutine.resume(co)
+  check(req1 and req1.type == "askForChooseCard" and req1.giveaway == true,
+    "鬼才应让玩家选替换用的手牌（giveaway）")
+  check(req1 and #req1.cards == 1 and req1.cards[1] == heart,
+    "候选应只含能达成目的的牌（红桃）")
+  local ok, fin = coroutine.resume(co, heart)
+  check(ok and fin == true, "改判成功应截断管线")
+  check(data.judge_card == heart, "判定牌应被替换为所选手牌")
+end
+
+do -- 人类鬼才应看到全部手牌，即使某张不能改善当前判定
+  local r, ps = makeRoomWith({ "司马懿", "白板武将" })
+  ps[1].is_human = true
+  local heart = give(ps[1], "dodge", Card.Suit.Heart, 2)
+  local spade = give(ps[1], "slash", Card.Suit.Spade, 7)
+  local data = {
+    player = ps[1], reason = "indulgence",
+    judge_card = Card.create(5010, "indulgence", Card.Suit.Spade, 6, Card.Type.Trick),
+  }
+  local co = coroutine.create(function() return r:trigger("AskForRetrial", ps[1], data) end)
+  local _, invoke = coroutine.resume(co)
+  check(invoke and invoke.type == "askForSkillInvoke", "人类鬼才应先选择是否发动")
+  local _, choose = coroutine.resume(co, true)
+  check(choose and choose.type == "askForChooseCard" and #choose.cards == 2,
+    "人类发动鬼才后应看到全部手牌")
+  local seen = {}
+  for _, c in ipairs(choose.cards or {}) do seen[c] = true end
+  check(seen[heart] and seen[spade], "鬼才候选不得按引擎战略过滤")
+  coroutine.resume(co, spade)
+  check(data.judge_card == spade, "人类应可主动选择不能改善判定的手牌改判")
+end
+
+print("\n--- 救援：每回合限一次 ---")
+
+do
+  local r, ps = makeRoomWith({ "孙权", "周瑜" })
+  r.turn_count = 5
+  ps[1].role = "lord"
+  local function jiuyuan()
+    local data = { player = ps[1], from = ps[2], n = 1 }
+    r:trigger("AskForPeaches", ps[1], data)
+    return data.n
+  end
+  check(jiuyuan() == 2, "本回合第一次吴势力桃应 +1（回复 2）")
+  check(jiuyuan() == 1, "本回合第二次不应再 +1（每回合限一次）")
+  r.turn_count = 6
+  check(jiuyuan() == 2, "下一回合应恢复 +1")
+end
+
+print("\n--- 濒死救援：按逆时针依次询问 ---")
+
+do
+  local r, ps = makeRoomWith({ "白板武将", "白板武将", "白板武将", "白板武将", "白板武将" })
+  ps[3].hp = 0
+  for _, p in ipairs(ps) do give(p, "peach", Card.Suit.Heart, 3) end
+  local co = coroutine.create(function()
+    return r:_dyingAskOthers(ps[3])
+  end)
+  local _, req1 = coroutine.resume(co)
+  check(req1 and req1.card_name == "peach" and req1.player == ps[2],
+    "应从濒死者的**逆时针**下一位（座位 2）开始询问")
+  local ok, saved = coroutine.resume(co, ps[2].hand[1])
+  check(ok and saved == true, "出桃救回后应停止询问")
+  check(ps[3].hp == 1, "濒死者应回到 1 点体力")
 end
 
 print(string.format("\n===== 核心: %d passed, %d failed =====", passes, failures))

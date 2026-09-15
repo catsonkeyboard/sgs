@@ -137,6 +137,10 @@ local GENERALS = {
 
 Standard.PLACEHOLDERS = { ["白板武将"] = true, ["剑阁武将"] = true }
 
+-- diy/ 下三份示例扩展只用来验证 sgs.* 兼容层与测试（测试直接 getGeneral 取用），
+-- 不进正常对局的随机武将池；测试想从池里抽到它们时给选将函数传 opts.demo = true。
+Standard.DEMO_PACKAGES = { ask_demo = true, skillcard_demo = true, moligaloo = true }
+
 function Standard.setup(engine)
   for _, g in ipairs(GENERALS) do
     engine:registerGeneral(g)
@@ -148,29 +152,34 @@ function Standard.setup(engine)
   end
 end
 
--- 给玩家随机分配一个武将（不含白板/剑阁占位将）
--- 注意：从 engine.generals 取，而不是上面那张小表——否则新增武将（含 DIY 扩展）
+-- 随机池：全部注册武将去掉白板/剑阁占位将，默认再排除 diy/ 示例扩展的武将。
+-- 注意：从 engine.generals 取，而不是上面那张小表——否则新增武将（含真 DIY 扩展）
 -- 永远不会出现在随机局里。
-function Standard.randomGeneral(engine, rng)
+local function generalPool(engine, include_demo)
   local pool = {}
   for name, g in pairs(engine.generals or {}) do
-    if not Standard.PLACEHOLDERS[name] then table.insert(pool, g) end
+    if not Standard.PLACEHOLDERS[name]
+      and (include_demo or not Standard.DEMO_PACKAGES[g.package]) then
+      table.insert(pool, g)
+    end
   end
-  if #pool == 0 then return engine:getGeneral("白板武将") end
   table.sort(pool, function(a, b) return a.name < b.name end) -- 保证可复现
+  return pool
+end
+
+-- 给玩家随机分配一个武将（opts.demo = true 时包含 diy/ 示例将，测试用）
+function Standard.randomGeneral(engine, rng, opts)
+  local pool = generalPool(engine, opts and opts.demo)
+  if #pool == 0 then return engine:getGeneral("白板武将") end
   local idx = (rng or math.random)(#pool)
   return pool[idx]
 end
 
--- 给 n 个座位分配**互不重复**的武将。
+-- 给 n 个座位分配**互不重复**的武将（opts.demo = true 时包含 diy/ 示例将，测试用）。
 -- 以前是按固定名单取模分配（座位1永远张飞、座位5又回到张飞），
 -- 于是每局武将都一样、座位之间还会重复。
-function Standard.pickGenerals(engine, rng, n)
-  local pool = {}
-  for name, g in pairs(engine.generals or {}) do
-    if not Standard.PLACEHOLDERS[name] then table.insert(pool, g) end
-  end
-  table.sort(pool, function(a, b) return a.name < b.name end) -- 保证可复现
+function Standard.pickGenerals(engine, rng, n, opts)
+  local pool = generalPool(engine, opts and opts.demo)
   if #pool == 0 then
     local one = engine:getGeneral("白板武将")
     local out = {}
@@ -185,6 +194,32 @@ function Standard.pickGenerals(engine, rng, n)
   end
   local out = {}
   for i = 1, n do table.insert(out, pool[((i - 1) % #pool) + 1]) end
+  return out
+end
+
+-- 开局选将候选池（文档开局流程第 2 步）：主公 5 张、其余每人 3 张，互不重复。
+-- 默认不含占位将与 diy/ 示例将（opts.demo = true 包含，测试用）。
+-- 返回 { [座位号] = { general, ... } }；同一 rng 序列可复现。
+-- 池子不足时回卷取模（60 将远大于 5+3×7=26，正常不会触发）。
+function Standard.dealCandidates(engine, rng, n, lord_seat, opts)
+  local pool = generalPool(engine, opts and opts.demo)
+  local f = rng or math.random
+  for i = #pool, 2, -1 do
+    local j = f(i)
+    pool[i], pool[j] = pool[j], pool[i]
+  end
+  if #pool == 0 then pool = { engine:getGeneral("白板武将") } end
+  local out = {}
+  local idx = 1
+  for seat = 1, n do
+    local want = (seat == lord_seat) and 5 or 3
+    local list = {}
+    for _ = 1, want do
+      list[#list + 1] = pool[((idx - 1) % #pool) + 1]
+      idx = idx + 1
+    end
+    out[seat] = list
+  end
   return out
 end
 

@@ -224,7 +224,10 @@ function Agent:_mechanical(req, room, reason)
   end
 
   if req.type == "askForSkillInvoke" then return false end
+  if req.type == "askForGuanxing" then return nil end -- 观星：nil = 保持原序（引擎约定）
   if req.type == "askForDiscard" then
+    -- any 模式（制衡类自选）：机械兑底选**不弃**（空表）——最安全
+    if req.any then return {} end
     local out = {}
     for _, a in ipairs(actions) do
       if a.kind == "discard" and #out < (req.n or 0) then out[#out + 1] = a.card end
@@ -272,6 +275,12 @@ local function describeChoice(req, resp)
     return resp and ("拿了 " .. resp:zhName()) or "没拿"
   elseif req.type == "askForChoice" then
     return tostring(resp)
+  elseif req.type == "askForGuanxing" then
+    if resp == nil then return "观星：保持原序" end
+    local top = {}
+    for i = #(resp.up or {}), 1, -1 do top[#top + 1] = resp.up[i]:zhName() end
+    return "观星重排：顶=" .. (#top > 0 and table.concat(top, "") or "无")
+      .. string.format("（%d 张沉底）", #(resp.down or {}))
   end
   return "（已响应）"
 end

@@ -14,6 +14,7 @@
 --   no_target_empty  空手牌时不可被指定   savage_immune 免疫【南蛮入侵】
 local Card = require "src.core.card"
 local Cards = require "src.core.cards"
+local Player = require "src.core.player"
 local sk = require "src.core.skill"
 local TriggerSkill = sk.TriggerSkill
 local ViewAsSkill = sk.ViewAsSkill
@@ -29,7 +30,7 @@ local function phaseTrigger(name, phase, fn, opts, scope, event)
   -- event: 默认 EventPhaseStart；【固政】【礼让】是 EventPhaseEnd
   local s = TriggerSkill.create(name, event or TriggerEvent.EventPhaseStart, fn, opts)
   scope = scope or "self"
-  s.can_trigger = function(_s, _room, player, data)
+  s.can_trigger = function(_, _, player, data)
     if not data or data.phase ~= phase then return false end
     if scope == "self" and data.player ~= player then return false end
     if scope == "other" and data.player == player then return false end
@@ -40,9 +41,14 @@ end
 
 local Generals = {}
 
--- 构造单牌转化技：一张符合 filter 的手牌 → result_name
-local function singleViewAs(name, result_name, filter)
-  local s = ViewAsSkill.create(name, { zh = name, result_name = result_name, n = 1 })
+-- 构造单牌转化技：一张符合 filter 的牌 → result_name。
+-- opts.hand_only = true 时只认手牌（牌面写「手牌」的技能，如【倾国】）；
+-- 默认手牌 + 装备区都可被转化（牌面写「一张XX牌」的技能，如【武圣】）。
+local function singleViewAs(name, result_name, filter, opts)
+  local s = ViewAsSkill.create(name, {
+    zh = name, result_name = result_name, n = 1,
+    hand_only = opts and opts.hand_only,
+  })
   -- filter 统一按「方法」定义（冒号调用），原始谓词存 predicate；
   -- 否则静态检查会报「定义与调用语法不匹配」（点号/冒号错配踩过多次）。
   s.predicate = filter
@@ -70,7 +76,6 @@ end
 
 local isRed = function(c) return c:isRed() end
 local isBlack = function(c) return not c:isRed() end
-local isSpade = function(c) return c.suit == Card.Suit.Spade end
 local isClub = function(c) return c.suit == Card.Suit.Club end
 
 local EQUIP_SLOTS = { "weapon", "armor", "offensive_horse", "defensive_horse" }
@@ -125,6 +130,16 @@ local function firstInRange(p, room, range)
   return nil
 end
 
+-- 把候选玩家列表转成名字数组 + 名字→玩家映射（askForChoice 选人交互用）
+local function nameList(players)
+  local names, byName = {}, {}
+  for _, q in ipairs(players) do
+    names[#names + 1] = q.name
+    byName[q.name] = q
+  end
+  return names, byName
+end
+
 -- 凭空生成的虚拟牌（【神速】）：无实体来源，用完即消失
 local function phantomCard(name)
   local def = Cards.get(name)
@@ -159,7 +174,7 @@ Generals.SHU = {
       -- 两张或更多时回复 1 点体力（文档规则：每阶段一次，不是累计三张）
       singleViewAs("仁德", "rende", function() return true end),
       TriggerSkill.create("仁德·回血", TriggerEvent.CardUsed,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.from ~= player then return false end
           local card = data.card
           if not card or card.name ~= "rende" then return false end
@@ -173,7 +188,7 @@ Generals.SHU = {
           return false
         end, { zh = "仁德", internal = true }),
       TriggerSkill.create("仁德·重置", TriggerEvent.EventPhaseEnd,
-        function(_s, _room, player, data)
+        function(_, _, player, data)
           if data and data.phase == "play" and data.player == player then
             player.rende_count = 0
             player.rende_healed = false
@@ -187,7 +202,7 @@ Generals.SHU = {
       -- can_trigger 决定「值不值得问」：不是主公 / 手里有杀 / 没有同势力队友 /
       -- 出杀次数已用尽时一律不问，避免无意义的弹窗（见 Room:trigger 的注释）
       TriggerSkill.create("激将·出杀", TriggerEvent.EventPhaseStart,
-        function(_s, room, player, data)
+        function(_, room, player, _)
           local t = firstInRange(player, room, room:attackRangeOf(player))
           if not t then return false end
           local slash = room:lordSupply(player, "slash")
@@ -197,7 +212,7 @@ Generals.SHU = {
           return false
         end, {
           zh = "激将", frequency = Freq.Lord, internal = false,
-          can_trigger = function(_s, room, player, data)
+          can_trigger = function(_, room, player, data)
             if not (data and data.phase == "play" and data.player == player) then
               return false
             end
@@ -232,7 +247,7 @@ Generals.SHU = {
       -- 观星：准备阶段观看牌堆顶 X 张（X = 存活角色数且至多为 5），
       -- 任意分配回牌堆顶与牌堆底。无交互时保持原序（BOT / headless）。
       phaseTrigger("观星", "start",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "start" or data.player ~= player then
             return false
           end
@@ -269,7 +284,7 @@ Generals.SHU = {
       markerSkill("马术", { distance_mod = -1 }),
       -- 铁骑：使用【杀】指定目标后判定，红色则该【杀】不可被【闪】响应
       TriggerSkill.create("铁骑", TriggerEvent.TargetChosen,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.from ~= player or not data.card then return false end
           if data.card.name ~= "slash" and data.card.name ~= "fire_slash"
             and data.card.name ~= "thunder_slash" then return false end
@@ -288,12 +303,12 @@ Generals.SHU = {
     },
   },
   {
-    name = "黄月英", key = "huangyueying", max_hp = 3, kingdom = "shu",
+    name = "黄月英", key = "huangyueying", max_hp = 3, kingdom = "shu", female = true,
     skills = {
       markerSkill("奇才", { no_trick_range = true }),
       -- 集智：使用非延时锦囊牌后摸一张
       TriggerSkill.create("集智", TriggerEvent.CardUsed,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.from ~= player or not data.card then return false end
           local def = Cards.get(data.card.name)
           if not def or def.ctype ~= Card.Type.Trick then return false end
@@ -309,7 +324,7 @@ Generals.SHU = {
     skills = {
       -- 烈弓：目标手牌数不小于你的体力值时，此【杀】不可被【闪】响应
       TriggerSkill.create("烈弓", TriggerEvent.TargetChosen,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.from ~= player or not data.to then return false end
           if not data.card then return false end
           if not isSlashName(data.card.name) then return false end
@@ -329,7 +344,7 @@ Generals.SHU = {
     skills = {
       -- 狂骨：对距离 1 以内的角色造成 1 点伤害后，回复 1 点体力
       TriggerSkill.create("狂骨", TriggerEvent.Damaged,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.from ~= player or not data.to then return false end
           if room:distance(player, data.to) > 1 then return false end
           if player.hp >= player.max_hp then return false end
@@ -391,7 +406,7 @@ Generals.SHU = {
       -- 早期曾被误写成「固定回复 1 点体力」，导致孟获每回合回血正好抵消 BOT
       -- 每回合 1 点输出，形成打不死的死循环（压测卡满 300 回合）。
       TriggerSkill.create("再起", TriggerEvent.DrawNCards,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           -- DrawNCards 以「当前摸牌者」为主语广播，必须确认是自己的摸牌阶段
           if not data or data.player ~= player then return false end
           local x = player.max_hp - player.hp
@@ -426,7 +441,7 @@ Generals.SHU = {
       markerSkill("巨象", { savage_immune = true }),
       -- 烈刃：【杀】造成伤害后，可弃置一张手牌对其追加 1 点伤害
       TriggerSkill.create("烈刃", TriggerEvent.Damage,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.from ~= player or not data.to then return false end
           if not data.to.alive or #player.hand == 0 then return false end
           local c = player.hand[1]
@@ -445,7 +460,7 @@ Generals.SHU = {
       -- 淑慎：出牌阶段可弃置一张黑色手牌，令一名角色回复 1 点体力
       singleViewAs("淑慎", "shushen", isBlack),
       TriggerSkill.create("淑慎·治疗", TriggerEvent.CardUsed,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.from ~= player or not data.card then return false end
           if data.card.name ~= "shushen" then return false end
           local t = (data.to and data.to[1]) or player
@@ -463,7 +478,7 @@ Generals.SHU = {
 -- 裸衣 / 强袭等「每回合一次」的技能，用 TurnStart 重置标记
 local function resetFlag(name, opts)
   return TriggerSkill.create(name, TriggerEvent.TurnStart,
-    function(_s, _room, player, data)
+    function(_, _, player, data)
       if data and data.player == player then player[opts.flag] = false end
       return false
     end, { zh = opts.zh or name, internal = true })
@@ -475,7 +490,7 @@ Generals.WEI = {
     skills = {
       -- 奸雄：受到伤害后，获得造成伤害的那张牌
       TriggerSkill.create("奸雄", TriggerEvent.Damaged,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.to ~= player or not data.card then return false end
           local card = data.card
           -- 转化技的虚拟牌没有实体，取其来源实体牌；
@@ -496,7 +511,7 @@ Generals.WEI = {
     skills = {
       -- 反馈：受到伤害后，获得来源的一张牌
       TriggerSkill.create("反馈", TriggerEvent.Damaged,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.to ~= player or not data.from then return false end
           local src = data.from
           if src == player or not src.alive then return false end
@@ -508,35 +523,44 @@ Generals.WEI = {
           room:takeOneCard(player, src)
           return false
         end, { zh = "反馈" }),
-      -- 鬼才：判定牌生效前，可用一张手牌替换判定牌。
-      -- 文档：既能救己方的【乐不思蜀】，也能给对手「送」判定，
-      -- 因此不限于自己的判定——自己的判定改成不生效，敌人的判定改成生效。
+      -- 鬼才：任意角色的判定牌生效前，可用任意一张手牌替换。
+      -- 人类必须看到全部手牌，不把 BOT 的战略判断固化成规则限制；BOT 仍只在
+      -- 能改善己方或恶化敌方判定时发动，并只从能达到该结果的牌中选择。
       TriggerSkill.create("鬼才", TriggerEvent.AskForRetrial,
-        function(_s, room, player, data)
-          if not data or #player.hand == 0 then return false end
-          local hit = JUDGE_HIT[data.reason]
-          if not hit then return false end
-          local want
-          if data.player == player then
-            want = false -- 自己的判定：改到不生效
+        function(_, room, player, data)
+          if not data or not data.player or not data.judge_card or #player.hand == 0 then
+            return false
+          end
+          local cands = {}
+          if player.is_human then
+            for _, c in ipairs(player.hand) do cands[#cands + 1] = c end
           else
-            local hostile = false
-            for _, q in ipairs(foes(player, room)) do
-              if q == data.player then hostile = true break end
+            local hit = JUDGE_HIT[data.reason]
+            if not hit then return false end
+            local want
+            if data.player == player then
+              want = false -- 自己的判定：改到不生效
+            else
+              local hostile = false
+              for _, q in ipairs(foes(player, room)) do
+                if q == data.player then hostile = true break end
+              end
+              if not hostile then return false end
+              want = true -- 敌人的判定：改到生效
             end
-            if not hostile then return false end
-            want = true -- 敌人的判定：改到生效
-          end
-          for _, c in ipairs(player.hand) do
-            if hit(room, data.player, c) == want then
-              player:takeCard(c)
-              data.judge_card = c
-              room:log("%s 发动【鬼才】，以 %s 替换 %s 的判定牌",
-                player.name, c:displayName(), data.player.name)
-              return true
+            for _, c in ipairs(player.hand) do
+              if hit(room, data.player, c) == want then cands[#cands + 1] = c end
             end
           end
-          return false
+          if #cands == 0 then return false end
+          local c = room:askForChooseCard(player, cands,
+            string.format("【鬼才】：选择一张手牌替换 %s 的判定牌", data.player.name),
+            { giveaway = true }) or cands[1]
+          player:takeCard(c)
+          data.judge_card = c
+          room:log("%s 发动【鬼才】，以 %s 替换 %s 的判定牌",
+            player.name, c:displayName(), data.player.name)
+          return true
         end, { zh = "鬼才" }),
     },
   },
@@ -545,7 +569,7 @@ Generals.WEI = {
     skills = {
       -- 刚烈：受到伤害后判定，非红桃则来源弃两张牌，否则受到 1 点伤害
       TriggerSkill.create("刚烈", TriggerEvent.Damaged,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.to ~= player or not data.from then return false end
           local src = data.from
           if src == player or not src.alive then return false end
@@ -557,8 +581,21 @@ Generals.WEI = {
           table.insert(room.discardPile, j)
           if not hits then return false end
           if not src.alive then return false end
-          -- 对齐原版：手牌不足 2 张时不再询问，直接造成伤害
-          local dropped = (#src.hand >= 2) and (room:askForDiscard(src, 2) or {}) or {}
+          -- 文档：伤害来源选择一项——弃两张手牌，或受到 1 点伤害。
+          -- 手牌不足 2 张时只能受伤；BOT 无响应时保守弃牌。
+          local choose_discard = #src.hand >= 2
+          if choose_discard then
+            local opt_discard, opt_damage = "弃置两张手牌", "受到 1 点伤害"
+            local pick = room:askForChoice(src, { opt_discard, opt_damage },
+              "【刚烈】：选择一项") or opt_discard
+            choose_discard = (pick == opt_discard)
+          end
+          if not choose_discard then
+            room:log("%s 无法/选择不弃牌，受到 1 点伤害", src.name)
+            room:damage(player, src, 1)
+            return false
+          end
+          local dropped = room:askForDiscard(src, 2) or {}
           local n = 0
           for _, c in ipairs(dropped) do
             if src:takeCard(c) then
@@ -579,7 +616,7 @@ Generals.WEI = {
     skills = {
       -- 突袭：摸牌阶段可放弃摸牌，改为获得至多两名其他角色各一张手牌
       phaseTrigger("突袭", "draw",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "draw" or data.player ~= player then return false end
           if player.skip_draw then return false end
           local victims = {}
@@ -604,7 +641,7 @@ Generals.WEI = {
     skills = {
       -- 裸衣：摸牌阶段少摸一张，本回合【杀】/【决斗】伤害 +1
       TriggerSkill.create("裸衣", TriggerEvent.DrawNCards,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.player ~= player then return false end
           data.n = (data.n or 2) - 1
           player.luoyi = true
@@ -613,7 +650,7 @@ Generals.WEI = {
         end, { zh = "裸衣" }),
       resetFlag("裸衣·重置", { flag = "luoyi", zh = "裸衣" }),
       TriggerSkill.create("裸衣·增伤", TriggerEvent.DamageCaused,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not player.luoyi then return false end
           if not data or data.from ~= player or not data.card then return false end
           if not (isSlashName(data.card.name) or data.card.name == "duel") then return false end
@@ -628,29 +665,45 @@ Generals.WEI = {
     skills = {
       -- 天妒：判定牌生效后，获得之
       TriggerSkill.create("天妒", TriggerEvent.FinishJudge,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.player ~= player or not data.judge_card then return false end
           room:log("%s 发动【天妒】，获得判定牌 %s", player.name, data.judge_card:displayName())
           room:obtain(player, data.judge_card)
           return false
         end, { zh = "天妒" }),
-      -- 遗计：受到伤害后摸两张牌（原版可分给他人，这里简化为自用）
+      -- 遗计：受到 1 点伤害后，观看牌堆顶两张并逐张交给任意角色
+      --（每 1 点伤害触发一次；2 点伤害 = 两次共 4 张，文档口径）
       TriggerSkill.create("遗计", TriggerEvent.Damaged,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.to ~= player then return false end
-          room:log("%s 发动【遗计】，摸两张牌", player.name)
-          room:drawCards(player, 2)
+          local names, byName = nameList(room:alivePlayers())
+          for _ = 1, (data.n or 1) do
+            local tops = {}
+            for _ = 1, 2 do
+              if #room.drawPile == 0 then break end
+              tops[#tops + 1] = table.remove(room.drawPile)
+            end
+            for _, c in ipairs(tops) do
+              local pick = room:askForChoice(player, names,
+                string.format("【遗计】：将【%s】交给谁？", c:displayName()),
+                { pick = "self" })
+              local to = (pick and byName[pick]) or player
+              table.insert(to.hand, c)
+              room:log("%s 发动【遗计】，将【%s】交给 %s",
+                player.name, c:displayName(), to.name)
+            end
+          end
           return false
         end, { zh = "遗计" }),
     },
   },
   {
-    name = "甄姬", key = "zhenji", max_hp = 3, kingdom = "wei",
+    name = "甄姬", key = "zhenji", max_hp = 3, kingdom = "wei", female = true,
     skills = {
-      singleViewAs("倾国", "dodge", isBlack),
+      singleViewAs("倾国", "dodge", isBlack, { hand_only = true }),
       -- 洛神：回合开始时可反复判定，黑色判定牌收入手中
       phaseTrigger("洛神", "start",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "start" or data.player ~= player then return false end
           local got = 0
           for _ = 1, 12 do
@@ -679,7 +732,7 @@ Generals.WEI = {
     skills = {
       -- 神速①：跳过判定与摸牌阶段，视为使用一张无距离限制的【杀】
       phaseTrigger("神速·壹", "judge",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "judge" or data.player ~= player then return false end
           local target = firstInRange(player, room, math.huge)
           if not target then return false end
@@ -693,7 +746,7 @@ Generals.WEI = {
         end, { zh = "神速" }),
       -- 神速②：弃置一张装备牌跳过出牌阶段，视为使用一张无距离限制的【杀】
       phaseTrigger("神速·贰", "play",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.shensu_used then return false end
           -- BOT 策略：手里还有【杀】就正常出牌，不白白牺牲出牌阶段
@@ -723,7 +776,7 @@ Generals.WEI = {
     skills = {
       -- 巧变：弃一张手牌跳过一个阶段；跳过摸牌阶段改为夺取至多两人各一张手牌
       TriggerSkill.create("巧变", TriggerEvent.EventPhaseStart,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.player ~= player then return false end
           local ph = data.phase
           if ph ~= "judge" and ph ~= "draw" and ph ~= "play" and ph ~= "discard" then
@@ -777,7 +830,7 @@ Generals.WEI = {
     skills = {
       -- 据守：回合结束阶段可摸三张牌并翻面
       phaseTrigger("据守", "finish",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "finish" or data.player ~= player then return false end
           room:log("%s 发动【据守】，摸三张牌并翻面", player.name)
           room:drawCards(player, 3)
@@ -791,7 +844,7 @@ Generals.WEI = {
     skills = {
       -- 强袭：出牌阶段，失去 1 点体力或弃置武器，对攻击范围内一名角色造成 1 点伤害
       phaseTrigger("强袭", "play",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play then return false end
           local target = firstInRange(player, room)
@@ -818,7 +871,7 @@ Generals.WEI = {
     skills = {
       -- 驱虎：出牌阶段与一名体力更多的角色拼点，赢则令其对范围内角色造成 1 点伤害
       phaseTrigger("驱虎", "play",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or #player.hand == 0 then return false end
           local t = nil
@@ -846,7 +899,7 @@ Generals.WEI = {
         end, { zh = "驱虎" }),
       -- 节命：受到伤害后，可令一名角色将手牌补至 min(5, 体力上限) 张
       TriggerSkill.create("节命", TriggerEvent.Damaged,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.to ~= player or not player.alive then return false end
           local upper = math.min(5, player.max_hp)
           local x = upper - #player.hand
@@ -862,7 +915,7 @@ Generals.WEI = {
     skills = {
       -- 行殇：其他角色死亡时，获得其所有牌
       TriggerSkill.create("行殇", TriggerEvent.Death,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           local dead = data and data.player
           if not dead or dead == player or not player.alive then return false end
           local n = 0
@@ -884,7 +937,7 @@ Generals.WEI = {
         end, { zh = "行殇" }),
       -- 放逐：受到伤害后，令一名其他角色摸 X 张牌并翻面（X 为已损失体力）
       TriggerSkill.create("放逐", TriggerEvent.Damaged,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.to ~= player then return false end
           local t = nil
           if data.from and data.from ~= player and data.from.alive then t = data.from end
@@ -906,7 +959,7 @@ Generals.WEI = {
     skills = {
       -- 骁果：其他角色结束阶段，可弃一张基本牌令其弃一张装备牌，否则受 1 点伤害
       phaseTrigger("骁果", "finish",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "finish" then return false end
           local turner = data.player
           if not turner or turner == player or not turner.alive then return false end
@@ -948,7 +1001,8 @@ Generals.WEI = {
 -- 对齐原版 src/package/standard-wu-generals.cpp（WU 001-016）
 
 -- 手牌里「主动打不出去」的废牌，【制衡】换牌的主要对象
-local JUNK = { dodge = true, nullification = true }
+-- （旧版制衡的「废牌清单」JUNK 已随技能重写移除：废牌策略现在属于
+-- BOT 的 askForDiscard 响应分支，见 bot.lua）
 
 -- 队友（foes 的补集）。注意不能只认「同身份」：主公与忠臣是同阵营但身份不同，
 -- 按 q.role == p.role 判断会把忠臣排除掉。
@@ -990,7 +1044,7 @@ local function makeHongyan()
   s.filter_view_filter = function(card)
     return card.suit == Card.Suit.Spade
   end
-  s.filter_view = function(_card) return Card.Suit.Heart end
+  s.filter_view = function(_) return Card.Suit.Heart end
   return s
 end
 
@@ -1003,45 +1057,53 @@ Generals.WU = {
   {
     name = "孙权", key = "sunquan", max_hp = 4, kingdom = "wu",
     skills = {
-      -- 制衡：出牌阶段限一次，弃置若干张牌，然后摸等量的牌
+      -- 制衡：出牌阶段限一次，弃置任意数量的牌（手牌或装备），然后摸等量牌。
+      -- 弃哪些由玩家自选（UI 多选 / BOT 换废牌 / AI 候选）；空选 = 不发动。
       TriggerSkill.create("制衡", TriggerEvent.EventPhaseStart,
-        function(_s, room, player, data)
-          -- BOT 策略：只把打不出去的废牌（闪/无懈可击）换掉，且留一张保命
-          local junk = {}
-          for _, c in ipairs(player.hand) do
-            if JUNK[c.name] then table.insert(junk, c) end
+        function(_, room, player, _)
+          local cards = room:askForDiscardAny(player, nil,
+            "【制衡】：选择任意张手牌或装备弃置（可不选，摸等量的牌）") or {}
+          local n, seen = 0, {}
+          for _, c in ipairs(cards) do
+            if not seen[c] then
+              local zone = player:takeCardAnyZone(c)
+              if zone == "hand" or zone == "equip" then
+                seen[c] = true
+                if zone == "equip" then room:_onEquipLost(player, c) end
+                table.insert(room.discardPile, c)
+                n = n + 1
+              end
+            end
           end
-          local n = math.min(#junk - 1, 3)
+          if n == 0 then return false end -- 空选 = 不发动
           player.zhiheng_used = true
-          for i = 1, n do
-            player:takeCard(junk[i])
-            table.insert(room.discardPile, junk[i])
-          end
           room:log("%s 发动【制衡】，弃置 %d 张牌并摸 %d 张", player.name, n, n)
           room:drawCards(player, n)
           return false
         end, {
           zh = "制衡",
-          can_trigger = function(_s, _room, player, data)
+          can_trigger = function(_, _, player, data)
             if not (data and data.phase == "play" and data.player == player) then
               return false
             end
             if player.skip_play or player.zhiheng_used then return false end
-            local junk = 0
-            for _, c in ipairs(player.hand) do
-              if JUNK[c.name] then junk = junk + 1 end
+            if #player.hand > 0 then return true end
+            for _, slot in ipairs(Player.EQUIP_SLOTS) do
+              if player.equips[slot] then return true end
             end
-            return junk > 1 -- 换不到牌就不念台词、不做事
+            return false -- 手牌或装备区至少有一张牌才询问
           end,
         }),
       resetFlag("制衡·重置", { flag = "zhiheng_used", zh = "制衡" }),
-      -- 救援（主公技·锁定）：其他吴势力角色在你濒死时对你使用【桃】，
-      -- 额外回复 1 点体力
+      -- 救援（主公技·锁定）：**每回合限一次**，其他吴势力角色在你濒死时对你
+      -- 使用【桃】，你额外回复 1 点体力
       TriggerSkill.create("救援", TriggerEvent.AskForPeaches,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.player ~= player then return false end
           if player.role ~= "lord" then return false end
           if not data.from or data.from.kingdom ~= "wu" then return false end
+          if player.jiuyuan_turn == room.turn_count then return false end
+          player.jiuyuan_turn = room.turn_count
           data.n = (data.n or 1) + 1
           room:log("%s 的【救援】生效：吴势力角色的【桃】额外回复 1 点体力",
             player.name)
@@ -1058,7 +1120,7 @@ Generals.WU = {
     skills = {
       -- 克己：出牌阶段未使用过【杀】则跳过弃牌阶段
       phaseTrigger("克己", "discard",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "discard" or data.player ~= player then return false end
           if player.keji_slash then return false end
           if #player.hand <= player.hp then return false end
@@ -1067,7 +1129,7 @@ Generals.WU = {
         end, { zh = "克己" }),
       -- 记录出牌阶段是否用过杀
       TriggerSkill.create("克己·记录", TriggerEvent.PreCardUsed,
-        function(_s, _room, player, data)
+        function(_, _, player, data)
           if not data or data.from ~= player or not data.card then return false end
           if isSlashName(data.card.name) and player.phase == "play" then
             player.keji_slash = true
@@ -1084,7 +1146,7 @@ Generals.WU = {
       -- 次数不做硬限制；BOT 保留「体力低于 3 时不再自残」的保守策略。
       -- can_trigger：条件不满足时既不做事也不念台词（技能台词挂在 trigger 上）
       TriggerSkill.create("苦肉", TriggerEvent.EventPhaseStart,
-        function(_s, room, player, data)
+        function(_, room, player, _)
           room:log("%s 发动【苦肉】，失去 1 点体力并摸两张牌", player.name)
           room:loseHp(player, 1)
           if not player.alive then return false end
@@ -1092,7 +1154,7 @@ Generals.WU = {
           return false
         end, {
           zh = "苦肉",
-          can_trigger = function(_s, _room, player, data)
+          can_trigger = function(_, _, player, data)
             if not (data and data.phase == "play" and data.player == player) then
               return false
             end
@@ -1107,23 +1169,30 @@ Generals.WU = {
     skills = {
       -- 英姿：摸牌阶段多摸一张
       TriggerSkill.create("英姿", TriggerEvent.DrawNCards,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.player ~= player then return false end
           data.n = (data.n or 2) + 1
           room:log("%s 发动【英姿】，多摸一张牌", player.name)
           return false
         end, { zh = "英姿" }),
-      -- 反间：令一名其他角色获得你的一张手牌，若其猜错花色则受到 1 点伤害
+      -- 反间：出牌阶段限一次，令一名其他角色获得你的一张手牌并猜花色，
+      -- 猜错则受到 1 点伤害。目标与送哪张牌均由周瑜选定。
       phaseTrigger("反间", "play",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.fanjian_used or #player.hand == 0 then return false end
-          local t = nil
-          for _, q in ipairs(foes(player, room)) do t = q break end
-          if not t then return false end
+          local others = room:otherAlivePlayers(player)
+          if #others == 0 then return false end
+          -- 选目标：一名其他角色（BOT/AI 按敌方启发式挑）
+          local names, byName = nameList(others)
+          local picked = room:askForChoice(player, names,
+            "【反间】：选择发动对象（其将获得你的一张手牌并猜花色）", { pick = "enemy" })
+          local t = (picked and byName[picked]) or others[1]
           player.fanjian_used = true
-          local idx = room:random(#player.hand)
-          local card = player.hand[idx]
+          -- 选要送出的手牌（送牌按「最贱优先」给 BOT/AI 兑底）
+          local card = room:askForChooseCard(player, player.hand,
+            "【反间】：选择一张手牌交给目标", { giveaway = true })
+          if not card then card = player.hand[1] end
           player:takeCard(card)
           -- 文档：目标先猜花色，再展示这张牌；无论结果如何都获得此牌
           local SUITS = { Card.Suit.Spade, Card.Suit.Heart, Card.Suit.Club, Card.Suit.Diamond }
@@ -1154,27 +1223,35 @@ Generals.WU = {
     skills = {
       -- 国色：方块手牌当【乐不思蜀】
       singleViewAs("国色", "indulgence", function(c) return c.suit == Card.Suit.Diamond end),
-      -- 流离：成为【杀】的目标时，弃一张牌将其转移给攻击范围内的另一名角色
+      -- 流离：成为【杀】的目标时，弃一张牌将其转移给攻击范围内的另一名
+      -- 角色（不能是使用者）。弃哪张牌、转给谁均由大乔选定。
       TriggerSkill.create("流离", TriggerEvent.TargetConfirming,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or not data.card or not isSlashName(data.card.name) then return false end
           local mine = false
           for _, t in ipairs(data.to or {}) do
             if t == player then mine = true break end
           end
           if not mine or #player.hand == 0 then return false end
-          local alt = nil
+          local cands = {}
           for _, q in ipairs(room.players) do
             if q ~= player and q ~= data.from and q.alive
               and room:distance(player, q) <= player:attackRange() then
-              alt = q
-              break
+              table.insert(cands, q)
             end
           end
-          if not alt then return false end
-          local c = player.hand[1]
-          player:takeCard(c)
-          table.insert(room.discardPile, c)
+          if #cands == 0 then return false end
+          -- 弃牌代价：选一张手牌
+          local cost = room:askForChooseCard(player, player.hand,
+            "【流离】：弃置一张手牌转移此【杀】", { giveaway = true })
+          if not cost then cost = player.hand[1] end
+          player:takeCard(cost)
+          table.insert(room.discardPile, cost)
+          -- 转移目标
+          local names, byName = nameList(cands)
+          local pick = room:askForChoice(player, names,
+            "【流离】：将此【杀】转移给谁？", { pick = "enemy" })
+          local alt = (pick and byName[pick]) or cands[1]
           room:log("%s 发动【流离】，弃置一张牌将【杀】转移给 %s", player.name, alt.name)
           data.to = { alt }
           return false
@@ -1189,7 +1266,7 @@ Generals.WU = {
       -- 连营：失去最后一张手牌时，可以摸一张牌
       -- （标准版陆逊为【谦逊】+【连营】；此前的【度势】是国战版技能）
       TriggerSkill.create("连营", TriggerEvent.CardsMoveOneTime,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.player ~= player then return false end
           if data.from_place ~= "hand" or not data.last_handcard then return false end
           if #player.hand > 0 then return false end
@@ -1202,37 +1279,56 @@ Generals.WU = {
   {
     name = "孙尚香", key = "sunshangxiang", max_hp = 3, kingdom = "wu", female = true,
     skills = {
-      -- 结姻：出牌阶段弃两张手牌，与一名已受伤的男性角色各回复 1 点体力
+      -- 结姻：出牌阶段限一次，弃两张手牌，与一名已受伤的男性角色各回 1 体力。
+      -- 目标与弃哪两张牌均由孙尚香选定（askForChoice + askForDiscard 多选）。
       TriggerSkill.create("结姻", TriggerEvent.EventPhaseStart,
-        function(_s, room, player, data)
-          -- 文档/原版只要求目标是「已受伤的其他男性角色」，不要求自己也受伤
-          local t = nil
+        function(_, room, player, _)
+          local cands = {}
           for _, q in ipairs(room.players) do
             if q ~= player and q.alive and not q.female and q.hp < q.max_hp then
-              t = q
-              break
+              table.insert(cands, q)
             end
           end
-          if not t then return false end
+          if #cands == 0 then return false end
+          -- 代价：弃两张手牌（UI 多选 / BOT 挑废牌 / AI 候选；响应不完整则不发动）
+          local cost = room:askForDiscard(player, 2) or {}
+          local valid = {}
+          local seen = {}
+          for _, c in ipairs(cost) do
+            if not seen[c] then
+              for _, hc in ipairs(player.hand) do
+                if hc == c then
+                  seen[c] = true
+                  valid[#valid + 1] = c
+                  break
+                end
+              end
+            end
+          end
+          if #valid < 2 then return false end
           player.jieyin_used = true
-          for i = 1, 2 do
-            local c = table.remove(player.hand, 1)
+          for _, c in ipairs(valid) do
+            player:takeCard(c)
             table.insert(room.discardPile, c)
           end
+          local names, byName = nameList(cands)
+          local pick = room:askForChoice(player, names,
+            "【结姻】：选择已受伤的男性角色（各回复 1 点体力）", { pick = "ally" })
+          local t = (pick and byName[pick]) or cands[1]
           room:log("%s 发动【结姻】，与 %s 各回复 1 点体力", player.name, t.name)
           room:heal(player, 1)
           room:heal(t, 1)
           return false
         end, {
           zh = "结姻",
-          can_trigger = function(_s, room, player, data)
+          can_trigger = function(_, room, player, data)
             if not (data and data.phase == "play" and data.player == player) then
               return false
             end
             if player.skip_play or player.jieyin_used or #player.hand < 2 then
               return false
             end
-            for _, q in ipairs(room.players) do
+            for _, q in ipairs(room and room.players or {}) do
               if q ~= player and q.alive and not q.female and q.hp < q.max_hp then
                 return true
               end
@@ -1243,7 +1339,7 @@ Generals.WU = {
       resetFlag("结姻·重置", { flag = "jieyin_used", zh = "结姻" }),
       -- 枭姬：失去装备区的牌后摸两张
       TriggerSkill.create("枭姬", TriggerEvent.CardsMoveOneTime,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.player ~= player then return false end
           if data.from_place ~= "equip" then return false end
           room:log("%s 发动【枭姬】，失去装备后摸两张牌", player.name)
@@ -1257,7 +1353,7 @@ Generals.WU = {
     skills = {
       -- 英魂：回合开始若已受伤，令一名其他角色摸 X 张牌后弃 1 张（X = 已损失体力）
       phaseTrigger("英魂", "start",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "start" or data.player ~= player then return false end
           local x = player.max_hp - player.hp
           if x <= 0 then return false end
@@ -1281,7 +1377,7 @@ Generals.WU = {
       makeHongyan(),
       -- 天香：受到伤害时弃一张红桃手牌，将此伤害转移给另一名角色，其再摸 X 张牌
       TriggerSkill.create("天香", TriggerEvent.DamageInflicted,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.to ~= player then return false end
           local idx = nil
           for i, c in ipairs(player.hand) do
@@ -1310,7 +1406,7 @@ Generals.WU = {
     skills = {
       -- 天义：出牌阶段与一名角色拼点，赢则杀无距离限制且次数不限，输则本回合不能出杀
       phaseTrigger("天义", "play",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.tianyi_used or #player.hand == 0 then return false end
           local t = nil
@@ -1333,7 +1429,7 @@ Generals.WU = {
         end, { zh = "天义" }),
       resetFlag("天义·重置", { flag = "tianyi_used", zh = "天义" }),
       TriggerSkill.create("天义·清除", TriggerEvent.TurnStart,
-        function(_s, _room, player, data)
+        function(_, _, player, data)
           if data and data.player == player then
             revokeMarker(player, "天义·胜")
             revokeMarker(player, "天义·负")
@@ -1347,7 +1443,7 @@ Generals.WU = {
     skills = {
       -- 不屈：濒死时翻出牌堆顶一张牌作为「创」，点数不重复则免死并回复至 1 点体力
       TriggerSkill.create("不屈", TriggerEvent.Dying,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.player ~= player then return false end
           local c = drawForJudge(room)
           if not c then return false end
@@ -1376,7 +1472,7 @@ Generals.WU = {
     skills = {
       -- 好施：摸牌阶段多摸两张；若手牌多于 5 张，将一半交给手牌最少的其他角色
       TriggerSkill.create("好施", TriggerEvent.DrawNCards,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.player ~= player then return false end
           data.n = (data.n or 2) + 2
           player.haoshi = true
@@ -1384,7 +1480,7 @@ Generals.WU = {
           return false
         end, { zh = "好施" }),
       TriggerSkill.create("好施·散财", TriggerEvent.AfterDrawNCards,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.player ~= player or not player.haoshi then return false end
           player.haoshi = false
           if #player.hand <= 5 then return false end
@@ -1403,7 +1499,7 @@ Generals.WU = {
         end, { zh = "好施" }),
       -- 缔盟：弃 X 张手牌，交换两名手牌数相差 X 的其他角色的手牌
       phaseTrigger("缔盟", "play",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.dimeng_used or #player.hand < 2 then return false end
           -- BOT 策略：把队友的少牌和敌人的多牌对调（经典用法）
@@ -1434,7 +1530,7 @@ Generals.WU = {
     skills = {
       -- 直谏：出牌阶段将一张装备牌置于一名其他角色的装备区，然后摸一张牌
       phaseTrigger("直谏", "play",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.zhijian_used then return false end
           local equip = nil
@@ -1463,7 +1559,7 @@ Generals.WU = {
       resetFlag("直谏·重置", { flag = "zhijian_used", zh = "直谏" }),
       -- 固政：其他角色弃牌阶段结束时，将其弃牌中的一张还给他，其余收入自己手牌
       phaseTrigger("固政", "discard",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "discard" then return false end
           local turner = data.player
           if not turner or turner == player then return false end
@@ -1496,7 +1592,7 @@ Generals.WU = {
       markerSkill("短兵", { slash_extra_target = true }),
       -- 奋迅：出牌阶段弃一张牌，令本回合与一名角色的距离固定为 1
       phaseTrigger("奋迅", "play",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.fenxun_used or #player.hand == 0 then return false end
           local t, far = nil, 1
@@ -1515,7 +1611,7 @@ Generals.WU = {
         end, { zh = "奋迅" }),
       resetFlag("奋迅·重置", { flag = "fenxun_used", zh = "奋迅" }),
       TriggerSkill.create("奋迅·清除", TriggerEvent.TurnStart,
-        function(_s, _room, player, data)
+        function(_, _, player, data)
           if data and data.player == player then player.fixed_distance = nil end
           return false
         end, { zh = "奋迅" }),
@@ -1556,7 +1652,7 @@ local function firstEquipOf(p)
 end
 
 -- 判定一张牌的花色结果（【悲歌】分四种花色）
-local function beigeEffect(room, caiwenji, victim, from, card)
+local function beigeEffect(room, _, victim, from, card)
   -- 判定属于受害者，走受害者的过滤技（如【红颜】）
   local suit = room:effSuit(victim, card)
   if suit == Card.Suit.Heart then
@@ -1592,26 +1688,33 @@ Generals.QUN = {
         s.only_outside_turn = true
         return s
       end)(),
-      -- 青囊：出牌阶段限一次，弃一张手牌令一名角色回复 1 点体力
+      -- 青囊：出牌阶段限一次，弃一张手牌令一名已受伤角色（含自己）回 1 体力。
+      -- 目标与弃哪张牌均由华佗选定；不再限定「损失 ≥2 体力」才可发动。
       TriggerSkill.create("青囊", TriggerEvent.EventPhaseStart,
-        function(_s, room, player, data)
-          -- 优先救最缺血的队友，其次是自己
-          -- BOT 策略：只救损失 2 点以上体力的角色，不把牌浪费在「补 1 点」上
-          local t = nil
+        function(_, room, player, _)
+          local cands = {}
           for _, q in ipairs(room:alivePlayers()) do
-            if q.max_hp - q.hp >= 2 then
-              if not t or (q.hp - q.max_hp) < (t.hp - t.max_hp) then t = q end
-            end
+            if q.hp < q.max_hp then table.insert(cands, q) end
           end
-          if not t then return false end
+          if #cands == 0 then return false end
+          -- 代价：弃一张手牌
+          local cost = room:askForChooseCard(player, player.hand,
+            "【青囊】：弃置一张手牌", { giveaway = true })
+          if not cost then cost = player.hand[1] end
           player.qingnang_used = true
-          table.insert(room.discardPile, table.remove(player.hand, 1))
+          player:takeCard(cost)
+          table.insert(room.discardPile, cost)
+          -- 目标：任意已受伤角色（含自己）
+          local names, byName = nameList(cands)
+          local pick = room:askForChoice(player, names,
+            "【青囊】：选择回复 1 点体力的角色", { pick = "ally" })
+          local t = (pick and byName[pick]) or cands[1]
           room:log("%s 发动【青囊】，%s 回复 1 点体力", player.name, t.name)
           room:heal(t, 1)
           return false
         end, {
           zh = "青囊",
-          can_trigger = function(_s, room, player, data)
+          can_trigger = function(_, room, player, data)
             if not (data and data.phase == "play" and data.player == player) then
               return false
             end
@@ -1619,7 +1722,7 @@ Generals.QUN = {
               return false
             end
             for _, q in ipairs(room:alivePlayers()) do
-              if q.max_hp - q.hp >= 2 then return true end
+              if q.hp < q.max_hp then return true end
             end
             return false
           end,
@@ -1637,7 +1740,7 @@ Generals.QUN = {
     skills = {
       -- 离间：出牌阶段限一次，弃一张牌令一名男性角色对另一名男性角色使用【决斗】
       phaseTrigger("离间", "play",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or player.lijian_used or #player.hand == 0 then return false end
           local males = {}
@@ -1646,8 +1749,25 @@ Generals.QUN = {
           end
           if #males < 2 then return false end
           player.lijian_used = true
-          table.insert(room.discardPile, table.remove(player.hand, 1))
-          local a, b = males[1], males[2]
+          -- 弃牌代价：选一张手牌
+          local cost = room:askForChooseCard(player, player.hand,
+            "【离间】：弃置一张手牌", { giveaway = true })
+          if not cost then cost = player.hand[1] end
+          player:takeCard(cost)
+          table.insert(room.discardPile, cost)
+          -- 选两名男性及方向（谁对谁用决斗），均由貂蝉选定
+          local namesA, byNameA = nameList(males)
+          local pickA = room:askForChoice(player, namesA,
+            "【离间】：选择使用【决斗】的男性角色", { pick = "enemy" })
+          local a = (pickA and byNameA[pickA]) or males[1]
+          local rest = {}
+          for _, q in ipairs(males) do
+            if q ~= a then rest[#rest + 1] = q end
+          end
+          local namesB, byNameB = nameList(rest)
+          local pickB = room:askForChoice(player, namesB,
+            "【离间】：选择【决斗】的目标", { pick = "enemy" })
+          local b = (pickB and byNameB[pickB]) or rest[1]
           room:log("%s 发动【离间】，令 %s 对 %s 使用【决斗】", player.name, a.name, b.name)
           local duel = phantomCard("duel")
           duel.no_nullify = true -- 此【决斗】不能被【无懈可击】响应
@@ -1657,7 +1777,7 @@ Generals.QUN = {
       resetFlag("离间·重置", { flag = "lijian_used", zh = "离间" }),
       -- 闭月：结束阶段摸一张牌
       phaseTrigger("闭月", "finish",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "finish" or data.player ~= player then return false end
           room:log("%s 发动【闭月】，摸一张牌", player.name)
           room:drawCards(player, 1)
@@ -1678,7 +1798,7 @@ Generals.QUN = {
     skills = {
       -- 双雄：摸牌阶段放弃摸牌改为判定，获得判定牌，本回合可按判定颜色把手牌当【决斗】
       phaseTrigger("双雄", "draw",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "draw" or data.player ~= player then return false end
           if player.skip_draw then return false end
           local c = drawForJudge(room)
@@ -1693,7 +1813,8 @@ Generals.QUN = {
         end, { zh = "双雄" }),
       resetFlag("双雄·重置", { flag = "shuangxiong", zh = "双雄" }),
       (function()
-        local s = ViewAsSkill.create("双雄", { zh = "双雄", result_name = "duel", n = 1 })
+        local s = ViewAsSkill.create("双雄",
+          { zh = "双雄", result_name = "duel", n = 1, hand_only = true })
         -- filter 由 Room:viewAsCandidates 调用，第二个参数是技能持有者
         function s:filter(c, p)
           local v = p and p.shuangxiong
@@ -1757,7 +1878,7 @@ Generals.QUN = {
       markerSkill("马术", { distance_mod = -1 }),
       -- 猛进：你的【杀】被【闪】抵消后，可弃置目标的一张牌
       TriggerSkill.create("猛进", TriggerEvent.SlashMissed,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.from ~= player or not data.to then return false end
           local t = data.to
           if not t.alive then return false end
@@ -1781,7 +1902,7 @@ Generals.QUN = {
     skills = {
       -- 雷击：你打出【闪】后，可令一名角色判定，黑桃则受到 2 点雷伤害
       TriggerSkill.create("雷击", TriggerEvent.CardResponded,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.player ~= player or not data.card then return false end
           if data.card.name ~= "dodge" then return false end
           local t = nil
@@ -1800,7 +1921,7 @@ Generals.QUN = {
         end, { zh = "雷击" }),
       -- 鬼道：判定牌生效前，可用一张黑色手牌替换（并获得原判定牌）
       TriggerSkill.create("鬼道", TriggerEvent.AskForRetrial,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data then return false end
           local black = nil
           for _, c in ipairs(player.hand) do
@@ -1827,7 +1948,7 @@ Generals.QUN = {
     skills = {
       -- 悲歌：一名角色受到【杀】的伤害后，可弃一张牌令其判定，按花色结算
       TriggerSkill.create("悲歌", TriggerEvent.Damage,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or not data.card or not isSlashName(data.card.name) then return false end
           if not data.to or data.to == player or #player.hand == 0 then return false end
           table.insert(room.discardPile, table.remove(player.hand, 1))
@@ -1840,7 +1961,7 @@ Generals.QUN = {
         end, { zh = "悲歌" }),
       -- 断肠（锁定技）：你死亡时，令杀死你的角色失去所有技能
       TriggerSkill.create("断肠", TriggerEvent.Death,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.player ~= player then return false end
           local killer = data.killer
           if not killer or killer == player or not killer.alive then return false end
@@ -1882,7 +2003,7 @@ Generals.QUN = {
       -- 注：国战原版的条件是「来源未明置武将」，标准身份局没有该概念，
       -- 这里改用标准版【名士】的常见条件。
       TriggerSkill.create("名士", TriggerEvent.DamageInflicted,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.to ~= player or not data.from then return false end
           if #data.from.hand < #player.hand then return false end
           data.n = data.n - 1
@@ -1895,7 +2016,7 @@ Generals.QUN = {
         end, { zh = "名士" }),
       -- 礼让：弃牌阶段结束后，可将弃置的牌分配给其他角色
       phaseTrigger("礼让", "discard",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "discard" or data.player ~= player then return false end
           local cards = room.last_discarded or {}
           if #cards == 0 then return false end
@@ -1923,7 +2044,7 @@ Generals.QUN = {
     skills = {
       -- 双刃：出牌阶段开始时与一名角色拼点，赢则视为对其使用【杀】；输则跳过出牌阶段
       phaseTrigger("双刃", "play",
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.phase ~= "play" or data.player ~= player then return false end
           if player.skip_play or #player.hand == 0 then return false end
           local t = nil
@@ -1949,7 +2070,7 @@ Generals.QUN = {
     skills = {
       -- 死谏：失去最后一张手牌时，可弃置一名其他角色的一张牌
       TriggerSkill.create("死谏", TriggerEvent.CardsMoveOneTime,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.player ~= player then return false end
           if data.from_place ~= "hand" or not data.last_handcard then return false end
           local t = nil
@@ -1966,7 +2087,7 @@ Generals.QUN = {
       -- 随势（锁定技）：队友濒死时你摸一张牌；队友死亡时你失去 1 点体力
       -- 注：原版按国战「势力结盟」判定，这里用身份局的 allies() 近似。
       TriggerSkill.create("随势", TriggerEvent.Dying,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.player == player then return false end
           for _, q in ipairs(allies(player, room)) do
             if q == data.player then
@@ -1978,7 +2099,7 @@ Generals.QUN = {
           return false
         end, { zh = "随势" }),
       TriggerSkill.create("随势·殉", TriggerEvent.Death,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.player == player then return false end
           for _, q in ipairs(allies(player, room)) do
             if q == data.player then
@@ -1996,7 +2117,7 @@ Generals.QUN = {
     skills = {
       -- 狂斧：你用【杀】造成伤害后，可获得目标装备区的一张牌（无空槽则弃置之）
       TriggerSkill.create("狂斧", TriggerEvent.Damage,
-        function(_s, room, player, data)
+        function(_, room, player, data)
           if not data or data.from ~= player or not data.to or not data.card then return false end
           if not isSlashName(data.card.name) then return false end
           local t = data.to

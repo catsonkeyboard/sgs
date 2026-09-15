@@ -172,6 +172,10 @@ function ViewAsSkill:init(name, opts)
   self.result_name = opts and opts.result_name -- 转化后的牌名，如 "slash"
   self.n = (opts and opts.n) or 1              -- 需消耗手牌数，可为 {min, max}
   self.view_filter = opts and opts.view_filter -- 可选：哪些手牌可被选中
+  -- 牌面写「一张XX**手牌**」的技能（倾国/双雄/丈八蛇矛/乱击）只认手牌；
+  -- 默认（写「一张XX牌」，如武圣红色牌、国色方块牌、奇袭黑色牌、急救红色牌）
+  -- 装备区的牌也可以被转化——装备区的牌同样是「自己的牌」（官方 FAQ 口径）
+  self.hand_only = (opts and opts.hand_only) == true
   self.enabled_at_play = (opts and opts.enabled_at_play) ~= false
   self.enabled_at_response = (opts and opts.enabled_at_response) or nil
 end
