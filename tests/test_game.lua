@@ -363,6 +363,11 @@ do
   r:_checkWinner()
   check(r.game_over and r.win_role == "lord", "反贼与内奸全灭 → 主公方获胜")
   check(r.winner == lord, "胜者应为主公")
+  local hidden = 0
+  for _, p in ipairs(r.players) do
+    if not p.role_revealed then hidden = hidden + 1 end
+  end
+  check(hidden == 0, "对局结束后所有身份应亮出（暗置 " .. hidden .. " 个）")
 end
 
 -- 胜负判定：主公阵亡且存活者非内奸 → 反贼胜

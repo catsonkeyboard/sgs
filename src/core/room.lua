@@ -36,6 +36,7 @@ function Room:_checkStall()
   if self._stall_turns >= Room.STALL_LIMIT then
     self:log("连续 %d 个回合无人受伤或阵亡，判定为平局", Room.STALL_LIMIT)
     self.game_over = true
+    self:_revealAllRoles()
     self.winner = nil
     return true
   end
@@ -166,6 +167,7 @@ function Room:_resume(response)
   end
   if coroutine.status(self.co) == "dead" then
     self.game_over = true
+    self:_revealAllRoles() -- 兜底：协程跑完即对局结束，所有身份亮出
     self.pending = nil
   else
     self.pending = results[1]
@@ -663,6 +665,7 @@ function Room:drawCards(p, n)
         -- 牌堆 + 弃牌堆都满足不了这次摸牌：文档规则判**平局**
         self:log("牌堆与弃牌堆均已无牌，无法满足摸牌 —— 平局")
         self.game_over = true
+        self:_revealAllRoles()
         self.winner = nil
         self.win_role = nil
         return
@@ -2086,10 +2089,19 @@ function Room:_checkWinner()
   end
 end
 
+-- 游戏结束：亮出所有角色的身份（阵亡者阵亡时已亮，此处幂等）。
+-- 不亮身份的话，存活到最后的内奸/忠臣是谁永远没人知道（用户实测反馈）。
+function Room:_revealAllRoles()
+  for _, p in ipairs(self.players or {}) do
+    p.role_revealed = true
+  end
+end
+
 function Room:_checkLastManStanding()
   local alive = self:alivePlayers()
   if #alive <= 1 then
     self.game_over = true
+    self:_revealAllRoles()
     self.winner = alive[1]
     self.win_role = self.winner and self.winner.role or nil
     self:log("游戏结束，%s 获胜", self.winner and self.winner.name or "无人")
@@ -2105,6 +2117,7 @@ function Room:_checkIdentityWinner()
 
   if not lord or not lord.alive then
     self.game_over = true
+    self:_revealAllRoles()
     if #alive == 1 and alive[1].role == "renegade" then
       self.winner, self.win_role = alive[1], "renegade"
       self:log("主公已阵亡，仅存内奸 %s —— 内奸获胜", alive[1].name)
@@ -2117,6 +2130,7 @@ function Room:_checkIdentityWinner()
 
   if not self:roleAlive("rebel") and not self:roleAlive("renegade") then
     self.game_over = true
+    self:_revealAllRoles()
     self.winner, self.win_role = lord, "lord"
     self:log("反贼与内奸均已覆灭 —— 主公与忠臣获胜")
     return
@@ -2124,6 +2138,7 @@ function Room:_checkIdentityWinner()
 
   if #alive <= 1 then
     self.game_over = true
+    self:_revealAllRoles()
     self.winner = alive[1]
     self.win_role = alive[1] and alive[1].role or nil
     self:log("游戏结束，%s 获胜", self.winner and self.winner.name or "无人")
