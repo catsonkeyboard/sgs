@@ -31,7 +31,9 @@ local function phaseTrigger(name, phase, fn, opts, scope, event)
   local s = TriggerSkill.create(name, event or TriggerEvent.EventPhaseStart, fn, opts)
   scope = scope or "self"
   s.can_trigger = function(_, _, player, data)
-    if not data or data.phase ~= phase then return false end
+    -- phase 为 nil 时不限阶段（【巧变】跨判定/摸牌/出牌/弃牌四个阶段）
+    if phase and (not data or data.phase ~= phase) then return false end
+    if not data then return false end
     if scope == "self" and data.player ~= player then return false end
     if scope == "other" and data.player == player then return false end
     return true
@@ -299,7 +301,11 @@ Generals.SHU = {
             room:log("%s 发动【铁骑】，判定 %s 黑色，无效果", player.name, j:suitString())
           end
           return false
-        end, { zh = "铁骑" }),
+        end, { zh = "铁骑",
+          can_trigger = function(_s, room, player, data)
+            return data and data.from == player and data.card ~= nil
+            and isSlashName(data.card.name) and #room.drawPile > 0
+          end }),
     },
   },
   {
@@ -316,7 +322,13 @@ Generals.SHU = {
           room:log("%s 发动【集智】，摸一张牌", player.name)
           room:drawCards(player, 1)
           return false
-        end, { zh = "集智" }),
+        end, { zh = "集智",
+          can_trigger = function(_s, room, player, data)
+            local d = data and data.card and Cards.get(data.card.name)
+            return data and data.from == player and d ~= nil
+              and d.ctype == Card.Type.Trick
+              and not Cards.isDelayed(data.card.name)
+          end }),
     },
   },
   {
@@ -336,7 +348,11 @@ Generals.SHU = {
             data.card.cannot_dodge = true
           end
           return false
-        end, { zh = "烈弓" }),
+        end, { zh = "烈弓",
+          can_trigger = function(_s, room, player, data)
+            return data and data.from == player and data.to ~= nil
+            and data.card ~= nil and isSlashName(data.card.name)
+          end }),
     },
   },
   {
@@ -385,7 +401,10 @@ Generals.SHU = {
           room:log("%s 发动【涅槃】（限定技），弃置所有牌并回复至 %d 点体力",
             player.name, player.max_hp)
           return true -- 截断：不再走濒死求桃
-        end, { zh = "涅槃", frequency = Freq.Limited }),
+        end, { zh = "涅槃",
+          can_trigger = function(_s, room, player, data)
+            return data and data.player == player and not _s.niepan_used
+          end, frequency = Freq.Limited }),
     },
   },
   {
@@ -439,7 +458,10 @@ Generals.SHU = {
           for _, c in ipairs(others) do table.insert(player.hand, c) end
           data.n = 0
           return false
-        end, { zh = "再起" }),
+        end, { zh = "再起",
+          can_trigger = function(_s, room, player, data)
+            return data and data.player == player and player.hp < player.max_hp
+          end }),
     },
   },
   {
@@ -458,7 +480,11 @@ Generals.SHU = {
             player.name, data.to.name)
           room:damage(player, data.to, 1)
           return false
-        end, { zh = "烈刃" }),
+        end, { zh = "烈刃",
+          can_trigger = function(_s, room, player, data)
+            return data and data.from == player and data.to ~= nil
+            and data.to.alive and #player.hand > 0
+          end }),
     },
   },
   {
@@ -580,7 +606,11 @@ Generals.WEI = {
           room:log("%s 发动【鬼才】，以 %s 替换 %s 的判定牌",
             player.name, c:displayName(), data.player.name)
           return true
-        end, { zh = "鬼才" }),
+        end, { zh = "鬼才",
+          can_trigger = function(_s, room, player, data)
+            return data and data.player ~= nil and data.judge_card ~= nil
+            and #player.hand > 0
+          end }),
     },
   },
   {
@@ -672,7 +702,10 @@ Generals.WEI = {
           player.luoyi = true
           room:log("%s 发动【裸衣】，少摸一张牌，本回合【杀】/【决斗】伤害 +1", player.name)
           return false
-        end, { zh = "裸衣" }),
+        end, { zh = "裸衣",
+          can_trigger = function(_s, room, player, data)
+            return data and data.player == player
+          end }),
       resetFlag("裸衣·重置", { flag = "luoyi", zh = "裸衣" }),
       TriggerSkill.create("裸衣·增伤", TriggerEvent.DamageCaused,
         function(_, room, player, data)
@@ -695,7 +728,10 @@ Generals.WEI = {
           room:log("%s 发动【天妒】，获得判定牌 %s", player.name, data.judge_card:displayName())
           room:obtain(player, data.judge_card)
           return false
-        end, { zh = "天妒" }),
+        end, { zh = "天妒",
+          can_trigger = function(_s, room, player, data)
+            return data and data.player == player and data.judge_card ~= nil
+          end }),
       -- 遗计：受到 1 点伤害后，观看牌堆顶两张并逐张交给任意角色
       --（每 1 点伤害触发一次；2 点伤害 = 两次共 4 张，文档口径）
       TriggerSkill.create("遗计", TriggerEvent.Damaged,
@@ -805,7 +841,7 @@ Generals.WEI = {
     name = "张郃", key = "zhanghe", max_hp = 4, kingdom = "wei",
     skills = {
       -- 巧变：弃一张手牌跳过一个阶段；跳过摸牌阶段改为夺取至多两人各一张手牌
-      TriggerSkill.create("巧变", TriggerEvent.EventPhaseStart,
+      phaseTrigger("巧变", nil,
         function(_, room, player, data)
           if not data or data.player ~= player then return false end
           local ph = data.phase
@@ -841,7 +877,7 @@ Generals.WEI = {
             end
           end
           return true -- 截断：跳过该阶段
-        end, { zh = "巧变" }),
+        end, { zh = "巧变" }, nil, TriggerEvent.EventPhaseStart),
     },
   },
   {
@@ -969,7 +1005,10 @@ Generals.WEI = {
             room:log("%s 发动【行殇】，获得 %s 的 %d 张牌", player.name, dead.name, n)
           end
           return false
-        end, { zh = "行殇" }),
+        end, { zh = "行殇",
+          can_trigger = function(_s, room, player, data)
+            return data and data.player ~= nil and data.player ~= player and player.alive
+          end }),
       -- 放逐：受到伤害后，令一名其他角色摸 X 张牌并翻面（X 为已损失体力）
       TriggerSkill.create("放逐", TriggerEvent.Damaged,
         function(_, room, player, data)
@@ -1148,7 +1187,12 @@ Generals.WU = {
           room:log("%s 的【救援】生效：吴势力角色的【桃】额外回复 1 点体力",
             player.name)
           return false
-        end, { zh = "救援", frequency = Freq.Lord }),
+        end, { zh = "救援",
+          can_trigger = function(_s, room, player, data)
+            return data and data.player == player and player.role == "lord"
+            and data.from ~= nil and data.from.kingdom == "wu"
+            and player.jiuyuan_turn ~= room.turn_count
+          end, frequency = Freq.Lord }),
     },
   },
   {
@@ -1214,7 +1258,10 @@ Generals.WU = {
           data.n = (data.n or 2) + 1
           room:log("%s 发动【英姿】，多摸一张牌", player.name)
           return false
-        end, { zh = "英姿" }),
+        end, { zh = "英姿",
+          can_trigger = function(_s, room, player, data)
+            return data and data.player == player
+          end }),
       -- 反间：出牌阶段限一次，令一名其他角色获得你的一张手牌并猜花色，
       -- 猜错则受到 1 点伤害。目标与送哪张牌均由周瑜选定。
       phaseTrigger("反间", "play",
@@ -1295,7 +1342,16 @@ Generals.WU = {
           room:log("%s 发动【流离】，弃置一张牌将【杀】转移给 %s", player.name, alt.name)
           data.to = { alt }
           return false
-        end, { zh = "流离" }),
+        end, { zh = "流离",
+          can_trigger = function(_s, room, player, data)
+            if not (data and data.card and isSlashName(data.card.name)) then
+              return false
+            end
+            for _, t in ipairs(data.to or {}) do
+              if t == player then return true end
+            end
+            return false
+          end }),
     },
   },
   {
@@ -1313,7 +1369,11 @@ Generals.WU = {
           room:log("%s 发动【连营】，摸一张牌", player.name)
           room:drawCards(player, 1)
           return false
-        end, { zh = "连营" }),
+        end, { zh = "连营",
+          can_trigger = function(_s, room, player, data)
+            return data and data.player == player and data.from_place == "hand"
+            and data.last_handcard == true and #player.hand == 0
+          end }),
     },
   },
   {
@@ -1385,7 +1445,10 @@ Generals.WU = {
           room:log("%s 发动【枭姬】，失去装备后摸两张牌", player.name)
           room:drawCards(player, 2)
           return false
-        end, { zh = "枭姬" }),
+        end, { zh = "枭姬",
+          can_trigger = function(_s, room, player, data)
+            return data and data.player == player and data.from_place == "equip"
+          end }),
     },
   },
   {
@@ -1438,7 +1501,10 @@ Generals.WU = {
             room:drawCards(t, lost)
           end
           return true -- 截断：原伤害不再结算
-        end, { zh = "天香" }),
+        end, { zh = "天香",
+          can_trigger = function(_s, room, player, data)
+            return data and data.to == player
+          end }),
     },
   },
   {
@@ -1504,7 +1570,10 @@ Generals.WU = {
             player.name, c:suitString(), c.number)
           player.hp = 1
           return true -- 截断濒死结算
-        end, { zh = "不屈" }),
+        end, { zh = "不屈",
+          can_trigger = function(_s, room, player, data)
+            return data and data.player == player
+          end }),
     },
   },
   {
@@ -1518,7 +1587,10 @@ Generals.WU = {
           player.haoshi = true
           room:log("%s 发动【好施】，多摸两张牌", player.name)
           return false
-        end, { zh = "好施" }),
+        end, { zh = "好施",
+          can_trigger = function(_s, room, player, data)
+            return data and data.player == player
+          end }),
       TriggerSkill.create("好施·散财", TriggerEvent.AfterDrawNCards,
         function(_, room, player, data)
           if not data or data.player ~= player or not player.haoshi then return false end
@@ -1934,7 +2006,10 @@ Generals.QUN = {
           table.insert(room.discardPile, card)
           room:log("%s 发动【猛进】，弃置 %s 的【%s】", player.name, t.name, card:zhName())
           return false
-        end, { zh = "猛进" }),
+        end, { zh = "猛进",
+          can_trigger = function(_s, room, player, data)
+            return data and data.from == player and data.to ~= nil and data.to.alive
+          end }),
     },
   },
   {
@@ -1958,7 +2033,11 @@ Generals.QUN = {
             room:damage(player, t, 2, "thunder")
           end
           return false
-        end, { zh = "雷击" }),
+        end, { zh = "雷击",
+          can_trigger = function(_s, room, player, data)
+            return data and data.player == player and data.card ~= nil
+            and data.card.name == "dodge"
+          end }),
       -- 鬼道：判定牌生效前，可用一张黑色手牌替换（并获得原判定牌）
       TriggerSkill.create("鬼道", TriggerEvent.AskForRetrial,
         function(_, room, player, data)
@@ -1980,7 +2059,14 @@ Generals.QUN = {
           room:log("%s 发动【鬼道】，以 %s 替换判定牌并获得原判定牌",
             player.name, black:displayName())
           return true
-        end, { zh = "鬼道" }),
+        end, { zh = "鬼道",
+          can_trigger = function(_s, room, player, data)
+            if not (data and data.judge_card) then return false end
+            for _, c in ipairs(player.hand) do
+              if not c:isRed() then return true end
+            end
+            return false
+          end }),
     },
   },
   {
@@ -1998,7 +2084,11 @@ Generals.QUN = {
           room:log("%s 发动【悲歌】，%s 判定 %s", player.name, data.to.name, j:displayName())
           beigeEffect(room, player, data.to, data.from, j)
           return false
-        end, { zh = "悲歌" }),
+        end, { zh = "悲歌",
+          can_trigger = function(_s, room, player, data)
+            return data and data.card ~= nil and isSlashName(data.card.name)
+            and data.to ~= nil and data.to ~= player and #player.hand > 0
+          end }),
       -- 断肠（锁定技）：你死亡时，令杀死你的角色失去所有技能
       TriggerSkill.create("断肠", TriggerEvent.Death,
         function(_, room, player, data)
@@ -2010,7 +2100,10 @@ Generals.QUN = {
           killer.general.skills = {}
           room:log("%s 发动【断肠】，%s 失去所有技能", player.name, killer.name)
           return false
-        end, { zh = "断肠" }),
+        end, { zh = "断肠",
+          can_trigger = function(_s, room, player, data)
+            return data and data.player == player
+          end }),
     },
   },
   {
@@ -2053,7 +2146,11 @@ Generals.QUN = {
           end
           room:log("%s 的【名士】生效，伤害降为 %d", player.name, data.n)
           return false
-        end, { zh = "名士" }),
+        end, { zh = "名士",
+          can_trigger = function(_s, room, player, data)
+            return data and data.to == player and data.from ~= nil
+            and #data.from.hand >= #player.hand
+          end }),
       -- 礼让：弃牌阶段结束后，可将弃置的牌分配给其他角色
       phaseTrigger("礼让", "discard",
         function(_, room, player, data)
@@ -2123,7 +2220,11 @@ Generals.QUN = {
           table.insert(room.discardPile, c)
           room:log("%s 发动【死谏】，弃置 %s 的一张手牌", player.name, t.name)
           return false
-        end, { zh = "死谏" }),
+        end, { zh = "死谏",
+          can_trigger = function(_s, room, player, data)
+            return data and data.player == player and data.from_place == "hand"
+            and data.last_handcard == true
+          end }),
       -- 随势（锁定技）：队友濒死时你摸一张牌；队友死亡时你失去 1 点体力
       -- 注：原版按国战「势力结盟」判定，这里用身份局的 allies() 近似。
       TriggerSkill.create("随势", TriggerEvent.Dying,
@@ -2137,7 +2238,10 @@ Generals.QUN = {
             end
           end
           return false
-        end, { zh = "随势" }),
+        end, { zh = "随势",
+          can_trigger = function(_s, room, player, data)
+            return data and data.player ~= nil and data.player ~= player
+          end }),
       TriggerSkill.create("随势·殉", TriggerEvent.Death,
         function(_, room, player, data)
           if not data or data.player == player then return false end
@@ -2175,7 +2279,11 @@ Generals.QUN = {
               player.name, t.name, card:zhName())
           end
           return false
-        end, { zh = "狂斧" }),
+        end, { zh = "狂斧",
+          can_trigger = function(_s, room, player, data)
+            return data and data.from == player and data.to ~= nil
+            and data.card ~= nil and isSlashName(data.card.name)
+          end }),
     },
   },
   {
