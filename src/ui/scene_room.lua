@@ -36,8 +36,6 @@ local SkillDesc = require "src.ui.skill_desc"
 local RoomScene = class("RoomScene")
 
 local CARD_W, CARD_H = 62, 86
-local EQ_W, EQ_H = 50, 26
-local JUDGE_S = 20
 local PANEL_W, PANEL_H = 210, 104
 
 -- ai_mode: "off"（无人托管）/ "others"（除你以外的座位）/ "all"（全托管，含你自己）
@@ -284,20 +282,15 @@ function RoomScene:cardAt(x, y)
   return nil
 end
 
--- 本人面板上的装备命中检测。【制衡】允许手牌与装备混合多选；装备沿用
--- drawPlayerPanel 的紧凑排列方式，只为当前真人玩家开放点击。
+-- 本人面板上的装备命中检测。【制衡】允许手牌与装备混合多选；装备命中
+-- 沿用 panelChips 的小牌矩形（与绘制同一套），只为当前真人玩家开放点击。
 function RoomScene:equipCardAt(x, y)
   local a = self:anchorOf(self.human)
   if not a then return nil end
-  local idx = 0
-  for _, slot in ipairs(Player.EQUIP_SLOTS) do
-    local c = self.human.equips[slot]
-    if c then
-      local ex, ey = a[1] + 12 + idx * (EQ_W + 4), a[2] + 72
-      if x >= ex and x <= ex + EQ_W and y >= ey and y <= ey + EQ_H then
-        return c, slot
-      end
-      idx = idx + 1
+  for _, chip in ipairs(self:panelChips(self.human, a[1], a[2])) do
+    if chip.kind ~= "judge" and x >= chip.x and x <= chip.x + chip.w
+      and y >= chip.y and y <= chip.y + chip.h then
+      return chip.card, chip.kind
     end
   end
   return nil
@@ -532,7 +525,10 @@ function RoomScene:update(dt)
   -- 演示队列：一次播一条，播完等它对应的间隔再播下一条。
   -- 队列没排空前**不推进引擎**，这样 BOT 的一串行动会被摊开到若干秒里，
   -- 语音与特效不再叠在一起。
-  if #self.presentQueue > 0 then
+  -- 上一条台词（技能语音/阵亡语音）还没播完时队列原地等待——
+  -- 否则前一个人的语音会被下一个人的行动拦腰截断（用户实测反馈）。
+  if #self.presentQueue > 0
+    and not (self.audio and self.audio:voiceBusy()) then
     self.presentTimer = self.presentTimer - (dt or 0)
     if self.presentTimer <= 0 then
       local e = table.remove(self.presentQueue, 1)
@@ -680,6 +676,24 @@ function RoomScene:mousepressed(x, y, button)
   -- 武将头像在任何对局阶段都可查看（包括等待对手、演示动画期间）。
   local avatar_player = self:avatarAt(x, y)
   if avatar_player and self:openSkillPopup(avatar_player) then return end
+
+  -- 装备/判定区小牌：点击查看卡牌说明。【制衡】/弃装混选流程除外——
+  -- 那时要靠点装备小牌来选中它（下方 equipCardAt 路径）
+  local pending_req = self.room.pending
+  local picking_equips = pending_req and pending_req.player.is_human
+    and pending_req.type == "askForDiscard" and pending_req.include_equips
+  if not picking_equips and self.anchors then
+    for i, p in ipairs(self.room.players or {}) do
+      local a = self.anchors[i]
+      if a then
+        for _, chip in ipairs(self:panelChips(p, a[1], a[2])) do
+          if x >= chip.x and x <= chip.x + chip.w and y >= chip.y and y <= chip.y + chip.h then
+            return self:openCardPopup(p, chip)
+          end
+        end
+      end
+    end
+  end
 
   -- 演示进行中不接受牌局操作：此时画面还在播上一段，
   -- 让玩家出牌会出现「状态已推进、画面没跟上」的错位
@@ -1001,7 +1015,8 @@ function RoomScene:playPresent(e)
   elseif e.kind == "death" then
     if d and d.player then
       if audio then
-        if not (d.key and audio:play(d.key)) then audio:play("death") end
+        -- 阵亡语音按台词处理：播完前演示队列不推进
+        if not (d.key and audio:playVoice(d.key)) then audio:playVoice("death") end
       end
       if fx then fx:showBanner(string.format("%s 阵亡", d.player.name), { 0.9, 0.3, 0.25 }) end
     end
@@ -1129,6 +1144,29 @@ function RoomScene:generalAvatar(p)
   return p and self:generalImage(p.general) or nil
 end
 
+-- 装备/判定区小牌的配色（边框色）：武器金、防具蓝、马橙/绿、判定红
+local CHIP_COLOR = {
+  weapon = { 0.82, 0.62, 0.25 },
+  armor = { 0.45, 0.65, 0.85 },
+  offensive_horse = { 0.85, 0.55, 0.30 },
+  defensive_horse = { 0.45, 0.75, 0.50 },
+  judge = { 0.85, 0.35, 0.30 },
+}
+
+-- 马匹小牌后缀：进攻马 -1（你算别人的距离），防御马 +1（别人算你的距离）
+local CHIP_SLOT_TAG = { offensive_horse = "-1", defensive_horse = "+1" }
+
+-- 装备/判定小牌网格：2 列 × N 行；格内 = 小卡图(11×15) + 牌名/距离
+local CHIP_W, CHIP_H = 100, 17
+local CHIP_IMG_W, CHIP_IMG_H = 11, 15
+
+-- 粗略估文本像素宽：UTF-8 里中日韩字符占 3 字节按 13px，其余按 7px
+local function chipTextW(s)
+  local cjk = select(2, s:gsub("[^\128-\191]", ""))
+  local ascii = #s - cjk * 3
+  return cjk * 13 + ascii * 7
+end
+
 function RoomScene:drawPlayerPanel(p, x, y, highlighted)
   love.graphics.setColor(highlighted and 0.18 or 0.12,
     highlighted and 0.30 or 0.16, highlighted and 0.18 or 0.12)
@@ -1188,43 +1226,74 @@ function RoomScene:drawPlayerPanel(p, x, y, highlighted)
     love.graphics.print("连环", x + 110, y + 56)
   end
 
-  -- 装备
-  local slots = { "weapon", "armor", "offensive_horse", "defensive_horse" }
-  local idx = 0
-  for _, slot in ipairs(slots) do
-    local c = p.equips[slot]
+  -- 装备与判定区：小卡图 + 牌名（马匹带距离标注），2 列 × 2 行，
+  -- 绘制与点击命中共用 panelChips 给出的同一套矩形
+  for _, chip in ipairs(self:panelChips(p, x, y)) do
+    love.graphics.setColor(0.10, 0.09, 0.07, 0.95)
+    love.graphics.rectangle("fill", chip.x, chip.y, chip.w, chip.h, 3, 3)
+    local border = (self.selected and self.selected[chip.card])
+      and { 1, 0.82, 0.18 } or CHIP_COLOR[chip.kind] or { 0.6, 0.6, 0.6 }
+    love.graphics.setColor(border[1], border[2], border[3], 0.9)
+    love.graphics.rectangle("line", chip.x, chip.y, chip.w, chip.h, 3, 3)
+    local tx = chip.x + 4
+    if chip.img then
+      love.graphics.setColor(1, 1, 1)
+      love.graphics.draw(chip.img, chip.x + 2, chip.y + 1, 0,
+        CHIP_IMG_W / chip.img:getWidth(), CHIP_IMG_H / chip.img:getHeight())
+      love.graphics.setColor(0.35, 0.3, 0.2)
+      love.graphics.rectangle("line", chip.x + 2, chip.y + 1, CHIP_IMG_W, CHIP_IMG_H)
+      tx = chip.x + 15
+    end
+    love.graphics.setColor(0.95, 0.93, 0.85)
+    love.graphics.setFont(self.font_sm)
+    love.graphics.print(chip.text, tx, chip.y + 1)
+  end
+end
+
+-- 某玩家面板底部的小牌列表（装备 + 判定区延时锦囊）。
+-- 每格 = 小卡图（有卡图时）+ 牌名（马匹带 -1/+1 距离标注）。
+-- ax/ay 是面板左上角；返回 { x,y,w,h,text,card,kind,img }，供绘制与点击命中。
+function RoomScene:panelChips(p, ax, ay)
+  local chips = {}
+  if not p then return chips end
+  local items = {}
+  for _, slot in ipairs({ "weapon", "armor", "offensive_horse", "defensive_horse" }) do
+    local c = p.equips and p.equips[slot]
     if c then
-      local ex = x + 12 + idx * (EQ_W + 4)
-      -- 有卡图就画小图标，没有再退回文字框
-      local img = cardImage(self, c)
-      if img then
-        love.graphics.setColor(1, 1, 1)
-        love.graphics.draw(img, ex, y + 72, 0, EQ_W / img:getWidth(), EQ_H / img:getHeight())
-        love.graphics.setColor(0, 0, 0)
-        love.graphics.rectangle("line", ex, y + 72, EQ_W, EQ_H, 3, 3)
-      else
-        love.graphics.setColor(0.85, 0.8, 0.6)
-        love.graphics.rectangle("fill", ex, y + 72, EQ_W, EQ_H, 3, 3)
-        love.graphics.setColor(0, 0, 0)
-        love.graphics.rectangle("line", ex, y + 72, EQ_W, EQ_H, 3, 3)
-        love.graphics.printf(c:zhName(), ex, y + 76, EQ_W, "center")
-      end
-      if self.selected and self.selected[c] then
-        love.graphics.setColor(1, 0.82, 0.18)
-        love.graphics.rectangle("line", ex - 2, y + 70, EQ_W + 4, EQ_H + 4, 4, 4)
-      end
-      idx = idx + 1
+      items[#items + 1] = { text = c:zhName() .. (CHIP_SLOT_TAG[slot] or ""),
+        card = c, kind = slot }
     end
   end
-
-  -- 判定区
-  for i, _ in ipairs(p.judges) do
-    local jx = x + PANEL_W - 8 - i * (JUDGE_S + 4)
-    love.graphics.setColor(0.5, 0.25, 0.15)
-    love.graphics.rectangle("fill", jx, y + 72, JUDGE_S, JUDGE_S, 3, 3)
-    love.graphics.setColor(1, 1, 1)
-    love.graphics.rectangle("line", jx, y + 72, JUDGE_S, JUDGE_S, 3, 3)
+  for _, c in ipairs(p.judges or {}) do
+    items[#items + 1] = { text = c:zhName(), card = c, kind = "judge" }
   end
+  for i, t in ipairs(items) do
+    local col, row = (i - 1) % 2, math.floor((i - 1) / 2)
+    local img = cardImage(self, t.card)
+    local tw = chipTextW(t.text) + (img and 16 or 8)
+    chips[#chips + 1] = {
+      x = ax + 5 + col * (CHIP_W + 1),
+      y = ay + 68 + row * (CHIP_H + 1),
+      w = math.min(CHIP_W, tw), h = CHIP_H,
+      text = t.text, card = t.card, kind = t.kind, img = img or false,
+    }
+  end
+  return chips
+end
+
+-- 点装备/判定小牌 → 弹出这张牌的说明（复用技能弹层渲染）
+function RoomScene:openCardPopup(p, chip)
+  local def = chip.card and chip.card.name and Cards.get(chip.card.name)
+  local desc = def and def.desc
+  if not desc and chip.kind == "offensive_horse" then
+    desc = "你计算与其他角色的距离时 -1。"
+  elseif not desc and chip.kind == "defensive_horse" then
+    desc = "其他角色计算与你的距离时 +1。"
+  end
+  self.skillPopup = SkillDesc.open(p.name, chip.kind == "judge" and "判定区" or "装备区",
+    { { name = chip.card:zhName(), desc = desc or "暂无详细说明。" } })
+  self.skillPopup.subtitle = "卡牌说明"
+  return true
 end
 
 -- 桌面背景 + 底部仪表盘框体（有原版素材就画，没有就保持纯色）

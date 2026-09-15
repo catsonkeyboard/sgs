@@ -136,6 +136,7 @@ function SkillDesc.open(playerName, generalName, entries)
     player_name = playerName or "未知角色",
     general_name = generalName or "未知武将",
     entries = entries or {},
+    subtitle = "武将技能说明",
   }
 end
 
@@ -175,7 +176,7 @@ function SkillDesc.draw(popup, font, font_mid, font_sm)
     box.x + 24, box.y + 20)
   love.graphics.setFont(font_sm or font)
   love.graphics.setColor(0.72, 0.78, 0.70)
-  love.graphics.print("武将技能说明", box.x + 24, box.y + 51)
+  love.graphics.print(popup.subtitle or "武将技能说明", box.x + 24, box.y + 51)
 
   local entries = popup.entries or {}
   if #entries == 0 then

@@ -145,9 +145,14 @@ do
   }
   scene.buttons, scene.presentQueue, scene.selected = {}, {}, {}
   local pa = scene:anchorOf(scene.human)
-  local got, slot = scene:equipCardAt(pa[1] + 12 + 25, pa[2] + 72 + 13)
-  check(got == eq and slot == "weapon", "点击本人装备框应命中装备牌")
-  scene:mousepressed(pa[1] + 12 + 25, pa[2] + 72 + 13, 1)
+  local chip
+  for _, c in ipairs(scene:panelChips(scene.human, pa[1], pa[2])) do
+    if c.kind == "weapon" then chip = c end
+  end
+  check(chip ~= nil, "装备武器后面板应生成武器小牌")
+  local got, slot = scene:equipCardAt(chip.x + 2, chip.y + 2)
+  check(got == eq and slot == "weapon", "点击本人装备小牌应命中装备牌")
+  scene:mousepressed(chip.x + 2, chip.y + 2, 1)
   local selected = scene:selectedCards()
   check(scene.selected[eq] and #selected == 1 and selected[1] == eq,
     "制衡应允许在装备框中选中装备牌")
@@ -335,7 +340,8 @@ do
   -- 2) 技能事件：即使台词播放失败（无音频/无台词），也要有横幅与闪光
   local sc = scene
   sc.effects = Effects.create()
-  sc.audio = { playSkill = function() return false end, play = function() return false end }
+  sc.audio = { playSkill = function() return false end, play = function() return false end,
+    voiceBusy = function() return false end }
   sc.room:emit("skill", { player = sc.human, skill = "马术" }) -- 被动技，无台词
   sc:update(2) -- 事件入队，需要 update 才会播（演示队列）
   check(sc.effects.banner ~= nil,
@@ -344,7 +350,8 @@ do
 
   -- 3) 有台词的技能同样要有视觉
   sc.effects = Effects.create()
-  sc.audio = { playSkill = function() return true end, play = function() return true end }
+  sc.audio = { playSkill = function() return true end, play = function() return true end,
+    voiceBusy = function() return false end }
   sc.room:emit("skill", { player = sc.human, skill = "奸雄" })
   sc:update(2)
   check(sc.effects.banner ~= nil, "有台词的技能发动应显示横幅")
@@ -745,6 +752,65 @@ do
   check(math.abs((m.buttons[1].x + total / 2) - 800) < 1,
     "身份局一排应在新窗口宽度下居中（中心偏差 "
       .. tostring(math.abs((m.buttons[1].x + total / 2) - 800)) .. "px）")
+end
+
+print("\n--- 牌桌：装备/判定区小牌、卡牌说明弹层、语音串行 ---")
+
+do
+  local Card = require "src.core.card"
+  local SD = require "src.ui.skill_desc"
+  local scene = RoomScene.create(function() end, "identity", 5, "off", { seed = 42 })
+  local p2 = scene.players[2]
+
+  -- 挂上防御马与乐不思蜀，面板应生成对应小牌（马带距离标注）
+  local horse = Card.create(31, "defensive_horse", Card.Suit.Spade, 5, Card.Type.Equip)
+  p2.equips.defensive_horse = horse
+  local indulgence = Card.create(32, "indulgence", Card.Suit.Spade, 6, Card.Type.Trick)
+  p2:addJudge(indulgence)
+  local a = scene:anchorOf(p2)
+  local chips = scene:panelChips(p2, a[1], a[2])
+  check(#chips == 2, "装备 + 判定应生成 2 枚小牌（实得 " .. #chips .. "）")
+  check(chips[1].text == "防御马+1",
+    "防御马小牌应带 +1 距离标注（实得 " .. tostring(chips[1] and chips[1].text) .. "）")
+  check(chips[2].text == "乐不思蜀" and chips[2].kind == "judge",
+    "判定区小牌应显示牌名（实得 " .. tostring(chips[2] and chips[2].text) .. "）")
+
+  -- 点小牌 → 弹出卡牌说明；点关闭 → 弹层消失
+  scene:mousepressed(chips[1].x + 2, chips[1].y + 2, 1)
+  check(scene.skillPopup ~= nil
+      and scene.skillPopup.entries[1].name == "防御马"
+      and scene.skillPopup.subtitle == "卡牌说明",
+    "点装备小牌应弹出卡牌说明（实得 "
+      .. tostring(scene.skillPopup and scene.skillPopup.entries[1].name) .. "）")
+  local box = SD.layout(scene.skillPopup)
+  scene:mousepressed(box.close.x + 2, box.close.y + 2, 1)
+  check(scene.skillPopup == nil, "点关闭应关掉说明弹层")
+  scene:mousepressed(chips[2].x + 2, chips[2].y + 2, 1)
+  check(scene.skillPopup ~= nil and scene.skillPopup.entries[1].name == "乐不思蜀",
+    "点判定小牌应弹出乐不思蜀说明")
+
+  -- 语音串行：上一条台词没播完时，演示队列不推进
+  scene.skillPopup = nil
+  local busy = true
+  scene.audio = setmetatable({}, { __index = function()
+    return function() return busy end
+  end })
+  scene.room:emit("skill", { player = scene.players[1], skill = "试炼" })
+  check(#scene.presentQueue == 1, "skill 事件应入演示队列")
+  scene:update(1.0)
+  check(#scene.presentQueue == 1, "台词未播完时队列不应推进（剩 " .. #scene.presentQueue .. "）")
+  busy = false
+  scene:update(1.0)
+  check(#scene.presentQueue == 0, "台词播完后队列应继续推进")
+end
+
+-- Audio 模块：台词独占记录与 voiceBusy 判定（headless 恒为 false）
+do
+  local Audio = require "src.ui.audio"
+  local audio = Audio.create()
+  check(audio:voiceBusy() == false, "headless 下 voiceBusy 应为 false")
+  check(audio:playSkill("奸雄") == false, "headless 下 playSkill 应静默返回 false")
+  check(audio:playVoice("caocao") == false, "headless 下 playVoice 应静默返回 false")
 end
 
 print(string.format("\n===== UI: %d passed, %d failed =====", passes, failures))

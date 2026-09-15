@@ -32,7 +32,8 @@ local function loadSource(path)
   return src
 end
 
--- 播放一个已解析出的相对路径（内部用）
+-- 播放一个已解析出的相对路径（内部用）。
+-- 返回音源实例（供 voiceBusy 判断台词是否还在播）；失败返回 false。
 function Audio:_playRel(rel)
   if not rel then return false end
   local path = self.skin:path(rel)
@@ -52,7 +53,8 @@ function Audio:_playRel(rel)
     s:play()
     return s
   end)
-  return ok and inst ~= nil
+  if ok and inst then return inst end
+  return false
 end
 
 function Audio:play(key, gender)
@@ -62,12 +64,29 @@ function Audio:play(key, gender)
   return self:_playRel(rel)
 end
 
--- 技能台词：技能名是中文，由 Skin:skillSound 查拼音键（带 1/2 两个版本）
+-- 技能台词：技能名是中文，由 Skin:skillSound 查拼音键（带 1/2 两个版本）。
+-- 台词要独占播放：记录音源，演示队列在它结束前不推进（防语音串音）。
 function Audio:playSkill(skillName)
   if not self.enabled or self.muted or not skillName then return false end
   if not (love and love.audio) then return false end
   if not (self.skin and self.skin.skillSound) then return false end
-  return self:_playRel(self.skin:skillSound(skillName))
+  local inst = self:_playRel(self.skin:skillSound(skillName))
+  if inst then self.voice = inst end
+  return inst or false
+end
+
+-- 阵亡语音等同样按「台词」处理（键为拼音，走 Skin:sound）
+function Audio:playVoice(key)
+  local inst = self:play(key)
+  if inst then self.voice = inst end
+  return inst or false
+end
+
+-- 当前是否有台词还在播放（headless / 播放失败时恒为 false）
+function Audio:voiceBusy()
+  if not (self.voice and love and love.audio) then return false end
+  local ok, playing = pcall(function() return self.voice:isPlaying() end)
+  return ok and playing == true
 end
 
 -- 卡牌音效：引擎的牌名 → 原版音频键名不一致的在这里翻译
