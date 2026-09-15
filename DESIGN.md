@@ -1,7 +1,8 @@
-# sgs-love — QSanguosha 的 LÖVE2D 重写
+# sgs — Lua / LÖVE2D 的三国杀身份局
 
-> 目标：以 Lua 为唯一语言，重写 QSanguosha（原版 78K 行 C++ + 20K 行 Lua 扩展），
-> 对齐「三国杀」标准局核心体验，并最大化复用原版资产与社区 Lua 内容。
+> 目标：以 Lua 为唯一语言，实现完整可玩的「三国杀」标准局体验：
+> 零 GUI 依赖的规则引擎（可 headless 回归）、牌桌 UI、LLM 驱动的 AI 玩家，
+> 以及直接运行社区 sgs.* 扩展脚本的兼容层。
 
 ## 一、架构分层
 
@@ -49,11 +50,11 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 - 单测不依赖图形环境
 - 阶段 D 网络服务端可直接以同一 core 跑 headless 房间
 
-### 4. 资产复用
+### 4. 资产
 
-- 字体：`../QSanguosha/font/DroidSansFallback.ttf`（默认字体无 CJK）
-- 图像/音频：按需接入 `../QSanguosha/image|audio/`
-- 皮肤布局 JSON：阶段 C 用 serde…（哦不，用 dkjson/纯 Lua JSON 读取）
+- 字体/图像/音频全部自带在 `assets/`（约 28MB），开箱即用
+- `SGS_ASSET_ROOT` 可显式指向其它资源根；缺资源时所有查询安全降级
+- 皮肤布局 JSON 用纯 Lua JSON 读取（先剥 `/* */` 与 `//` 注释）
 
 ## 三、阶段计划
 
@@ -164,8 +165,6 @@ obtain / takeOneCard / loseHp`。
 勾玉、势力图标、背景、皮肤 JSON、卡牌与系统音效）。`Skin` 默认根就是 `assets/`，
 仅当显式设置 `SGS_ASSET_ROOT` 时才指向别处。找不到资源仍会全部降级（查询返回
 nil，UI 走内置默认值）。
-
-> 历史：早期是按路径引用 `../QSanguosha`（57MB 全量），后改为自带。
 
 | 文件 | 职责 |
 | --- | --- |

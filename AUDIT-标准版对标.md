@@ -1,6 +1,6 @@
-# sgs-love 与《基础版全表》《身份局游玩说明》对标审计
+# sgs 与《基础版全表》《身份局游玩说明》对标审计
 
-审计对象：`/Users/liming/Code/AIGame/sgs-love`（src/core/{card,cards,standard,generals,room,player}.lua）
+审计对象：本仓库（src/core/{card,cards,standard,generals,room,player}.lua）
 对照基准：
 
 1. 资料库文档《三国杀基础版武将与卡牌全表》——标准版 25 将 + 108 张游戏牌

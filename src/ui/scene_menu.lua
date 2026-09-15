@@ -249,7 +249,7 @@ function MenuScene:draw()
   local sub_y = title_y + 86
   love.graphics.setColor(0.72, 0.76, 0.68)
   love.graphics.setFont(self.font)
-  love.graphics.printf("sgs-love · 标准牌堆 · 身份局 / 1v1 / 联机", 0, sub_y, w, "center")
+  love.graphics.printf("sgs · 标准牌堆 · 身份局 / 1v1 / 联机", 0, sub_y, w, "center")
   if love.graphics.line then
     love.graphics.setColor(GOLD_DIM[1], GOLD_DIM[2], GOLD_DIM[3], 0.35)
     love.graphics.line(w / 2 - 320, sub_y + 10, w / 2 - 150, sub_y + 10)
@@ -286,7 +286,7 @@ function MenuScene:draw()
   -- ===== 页脚 =====
   love.graphics.setColor(0.5, 0.55, 0.5)
   love.graphics.setFont(self.font_sm)
-  love.graphics.printf("LÖVE 11.5 · 从 QSanguosha (C++/Qt) 迁移", 0, h - 34, w, "center")
+  love.graphics.printf("sgs · LÖVE 11.5 · LLM 驱动的 AI 玩家", 0, h - 34, w, "center")
   love.graphics.setColor(1, 1, 1, 1)
 end
 

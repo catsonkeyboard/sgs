@@ -8,8 +8,8 @@
 local HEADLESS_FLAGS = { ["--test"] = true, ["--soak"] = true }
 
 function love.conf(t)
-  t.identity = "sgs-love"
-  t.window.title = "三国杀 · sgs-love"
+  t.identity = "sgs"
+  t.window.title = "三国杀 · sgs"
   t.window.width = 1130
   t.window.height = 650
   t.window.vsync = 1

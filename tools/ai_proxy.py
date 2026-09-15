@@ -112,7 +112,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="sgs-love 的 LLM 本地明文代理")
+    ap = argparse.ArgumentParser(description="sgs 的 LLM 本地明文代理")
     ap.add_argument("--port", type=int, default=int(os.environ.get("SGS_AI_PROXY_PORT") or DEFAULT_PORT))
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("-v", "--verbose", action="store_true")
