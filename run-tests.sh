@@ -8,12 +8,20 @@ cd "$(dirname "$0")"
 set -e
 
 echo "== 静态检查：方法定义/调用语法 =="
+# python3 不在 PATH 时（本机未装）再试常见安装位置；都找不到就跳过检查
+PY=""
 if command -v python3 >/dev/null 2>&1; then
   PY=python3
 else
-  PY=/Users/liming/.workbuddy/binaries/python/versions/3.13.12/bin/python3
+  for cand in /usr/bin/python3 /opt/homebrew/bin/python3 /usr/local/bin/python3; do
+    if [ -x "$cand" ]; then PY="$cand" break; fi
+  done
 fi
-"$PY" tools/lint_methods.py src tests
+if [ -n "$PY" ]; then
+  "$PY" tools/lint_methods.py src tests
+else
+  echo "（未找到 python3，跳过静态检查）"
+fi
 
 echo
 echo "== 对局与单元测试 =="
