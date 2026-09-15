@@ -613,8 +613,23 @@ do
   check(sd.human.general == pick, "应落到玩家自己选定的武将")
   check(sd.human.max_hp == pick.max_hp + ((sd.human.role == "lord") and 1 or 0),
     "主公体力上限 +1 应重算")
-  -- 座位 1（真人）先手：beginPlay 内 advance 会推到首个出牌询问，
-  -- 真人已过摸牌阶段（起始 4 + 摸 2）；其余座位仍是起始 4 张
+  -- 座位 1（真人）先手：beginPlay 内 advance 停在第一个待响应的请求。
+  -- 选到的武将若有出牌阶段前的发动询问（如颜良文丑【双雄】、甄姬【洛神】），
+  -- advance 会先停在那里——逐个婉拒，直到真正的出牌询问再核对摸牌结果。
+  local guard = 0
+  while sd.room.pending and sd.room.pending.type ~= "askForUseCard"
+    and guard < 8 do
+    guard = guard + 1
+    local req = sd.room.pending
+    if req.type == "askForSkillInvoke" or req.type == "askForGuanxing" then
+      sd.room:step(false) -- 不发动 / 观星保持原序
+    else
+      sd.room:step(nil)   -- 其余询问给空响应（引擎有默认兜底）
+    end
+  end
+  check(sd.room.pending and sd.room.pending.type == "askForUseCard",
+    "婉拒后应推进到真人的出牌询问（实得 "
+      .. tostring(sd.room.pending and sd.room.pending.type) .. "）")
   check(#sd.human.hand == 6,
     "真人先手：起始 4 + 首回合摸 2（实得 " .. #sd.human.hand .. "）")
   local dealt = true
