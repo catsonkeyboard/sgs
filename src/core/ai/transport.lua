@@ -26,7 +26,7 @@ local Transport = {}
 --
 --   chat       OpenAI Chat Completions（/v1/chat/completions），
 --              system/user 两条消息，取 choices[1].message.content
---   responses  OpenAI Responses API（/v1/responses，TokenHub 的 hy3 走这个），
+--   responses  OpenAI Responses API（/v1/responses，hy3 走这个），
 --              instructions + input，取 output_text
 --
 -- Responses 还有一个关键能力：**关掉思维链**。

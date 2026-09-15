@@ -1,6 +1,6 @@
-# AI 玩家启动指南（TokenHub hy3）
+# AI 玩家启动指南
 
-本项目的 AI 托管由 LLM 驱动，当前接入 **TokenHub 的 hy3 模型（Responses API）**。
+本项目的 AI 托管由 LLM 驱动，默认按 **hy3 模型（Responses API）** 配置（可用 `SGS_AI_MODEL` 换任意模型）。
 本文是从零开启 AI 的最短路径；设计与实现细节见 `AI-操作方案.md`。
 
 ---
@@ -13,7 +13,7 @@
 
 ```bash
 # 终端 1：起代理
-export SGS_AI_URL="https://tokenhub.tencentmaas.com/v1/responses"
+export SGS_AI_URL="https://llm.example.com/v1/responses"
 export SGS_AI_KEY="sk-..."
 ./tools/ai_proxy.py                 # 默认监听 127.0.0.1:8899，加 -v 看完整请求/响应
 
@@ -27,7 +27,7 @@ export SGS_AI_TRANSPORT=proxy
 不用起代理，但密钥会经过游戏进程：
 
 ```bash
-export SGS_AI_URL="https://tokenhub.tencentmaas.com/v1/responses"
+export SGS_AI_URL="https://llm.example.com/v1/responses"
 export SGS_AI_KEY="sk-..."
 export SGS_AI_MODEL="hy3"
 export SGS_AI_REASONING="none"      # ← 关键，见下
@@ -40,7 +40,7 @@ export SGS_AI_REASONING="none"      # ← 关键，见下
 
 | 变量 | 说明 | 默认值 |
 | --- | --- | --- |
-| `SGS_AI_URL` | 模型接口地址（TokenHub 用 `/v1/responses`） | 无，必填（直连模式） |
+| `SGS_AI_URL` | 模型接口地址（Responses 协议用 `/v1/responses`） | 无，必填（直连模式） |
 | `SGS_AI_KEY` | 接口密钥（也可用 `OPENAI_API_KEY`） | 无，必填（直连模式） |
 | `SGS_AI_MODEL` | 模型名 | `hy3` |
 | `SGS_AI_TRANSPORT` | `curl`（直连）/ `proxy`（本机代理） | `curl` |
@@ -92,7 +92,7 @@ Esc、点【关闭】或点弹层外区域关闭。
 
 ```bash
 export SGS_NET_AI=1          # 1/on/all = 全部空座；"2,3" = 指定座位（人来了人优先）
-export SGS_AI_URL="https://tokenhub.tencentmaas.com/v1/responses"
+export SGS_AI_URL="https://llm.example.com/v1/responses"
 export SGS_AI_KEY="sk-..."
 export SGS_AI_REASONING="none"
 ./tools/serve.sh

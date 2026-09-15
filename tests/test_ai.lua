@@ -525,7 +525,7 @@ do
 end
 
 print()
-print("--- Responses 协议（TokenHub hy3）---")
+print("--- Responses 协议（hy3）---")
 
 do
   local Json = require "src.core.json"
@@ -570,7 +570,7 @@ do
     "没有正文应判为失败")
 
   -- 协议推断
-  check(Transport.guessProtocol("https://tokenhub.tencentmaas.com/v1/responses")
+  check(Transport.guessProtocol("https://llm.example.com/v1/responses")
     == "responses", "URL 含 /responses 应识别为 Responses 协议")
   check(Transport.guessProtocol("https://api.openai.com/v1/chat/completions")
     == "chat", "URL 含 /chat/completions 应识别为 chat 协议")

@@ -104,7 +104,7 @@ function Threaded:init(opts)
   self.timeout = opts.timeout or 60
   self.temperature = opts.temperature or 0.2
   self.max_tokens = opts.max_tokens or 300
-  -- Responses 协议（TokenHub hy3）必须显式关掉思维链，否则单次 10 秒以上
+  -- Responses 协议（hy3）必须显式关掉思维链，否则单次 10 秒以上
   self.reasoning_effort = opts.reasoning_effort
   self.max_output_tokens = opts.max_output_tokens
 
@@ -163,7 +163,7 @@ function Threaded:isAlive()
 end
 
 -- 协议推断：显式配置 > URL 特征 > 默认 responses
--- （本项目当前接入的 TokenHub hy3 走 Responses API，所以默认给它）
+-- （本项目默认接入的 hy3 走 Responses API，所以默认给它）
 local function resolveProtocol(url)
   local explicit = os.getenv("SGS_AI_PROTOCOL")
   if explicit == "chat" or explicit == "responses" then return explicit end

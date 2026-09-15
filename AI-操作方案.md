@@ -283,7 +283,7 @@ require 失败），而 LLM 接口一律 HTTPS；curl 一次 1~3 秒又不能放
 | 协议 | 请求形态 | 取值 |
 | --- | --- | --- |
 | `chat`（OpenAI Chat Completions） | `messages:[{system},{user}]`，temperature 0.2，max_tokens 300 | `choices[1].message.content` |
-| `responses`（OpenAI Responses API，TokenHub hy3 走这个） | `instructions + input` | `output_text` |
+| `responses`（OpenAI Responses API，hy3 走这个） | `instructions + input` | `output_text` |
 
 **`SGS_AI_REASONING=none` 是关键开关（默认已是 none）**：Responses 协议的思维链
 参数必须写成嵌套的 `{"reasoning": {"effort": "none"}}`——传 `"low"` 不被识别

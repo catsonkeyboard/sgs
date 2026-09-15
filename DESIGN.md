@@ -331,13 +331,13 @@ Package/General/OneCardViewAsSkill/TriggerSkill/`filter_pattern`/`cloneCard`/
   认不出的名字直接丢弃——**不能**写成 `nameOf(k) or k`，那样会凭空造出不存在的角色。
 - 预算：超过 `max_steps`（默认 60）后把最早的折叠成一行统计摘要。
 
-### 接入 TokenHub hy3（Responses API）
+### 接入模型网关（Responses API）
 
 不是 Chat Completions，是 **Responses API**：请求用 `instructions` + `input`，
 响应取顶层 `output_text`（没有就从 `output[].content[].text` 拼）。
 
 ```bash
-export SGS_AI_URL="https://tokenhub.tencentmaas.com/v1/responses"
+export SGS_AI_URL="https://llm.example.com/v1/responses"
 export SGS_AI_KEY="sk-..."
 export SGS_AI_MODEL="hy3"
 export SGS_AI_REASONING=none     # 必须，见下表

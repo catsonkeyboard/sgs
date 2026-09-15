@@ -82,7 +82,7 @@ diy/ 示例扩展的武将同样**默认不进随机池**（只供测试验证�
 
 ## AI 玩家（LLM 驱动）
 
-最短启动路径（TokenHub hy3 配置 / 环境变量表 / 常见问题）见
+最短启动路径（模型接口配置 / 环境变量表 / 常见问题）见
 [**AI启动指南.md**](AI启动指南.md)。
 
 任意座位都能交给 AI：菜单上「AI 托管」切三档（关 / 其他座位 / 全部），
@@ -97,7 +97,7 @@ diy/ 示例扩展的武将同样**默认不进随机池**（只供测试验证�
 
 ```bash
 # 终端 1
-export SGS_AI_URL="https://tokenhub.tencentmaas.com/v1/responses"
+export SGS_AI_URL="https://llm.example.com/v1/responses"
 export SGS_AI_KEY="sk-..."
 ./tools/ai_proxy.py                 # 默认 127.0.0.1:8899，加 -v 看完整请求/响应
 
@@ -109,8 +109,8 @@ export SGS_AI_TRANSPORT=proxy
 **方式二：直连 HTTPS**——不用起代理，但密钥要经过游戏进程：
 
 ```bash
-# TokenHub hy3（Responses API）
-export SGS_AI_URL="https://tokenhub.tencentmaas.com/v1/responses"
+# 直连（Responses API）
+export SGS_AI_URL="https://llm.example.com/v1/responses"
 export SGS_AI_KEY="sk-..."
 export SGS_AI_MODEL="hy3"
 export SGS_AI_REASONING="none"      # ← 关键，见下
@@ -310,7 +310,7 @@ assets/       资源：image/  audio/  skins/  font/（自带，无需原项目�
 | C | 完整 UI（皮肤/布局/音频/动效/选将/菜单） | ✅ |
 | D | LuaSocket 网络服务端 + 多人 | 🚧 进行中（联机/重连/观战/聊天/UI 联调已完成，空座可设 SGS_NET_AI 交给 LLM，缺多房间大厅） |
 | E | 标准版对标补齐（濒死救援/主公技/武器/花色表） | ✅ 完成，见 `AUDIT-标准版对标.md` 与 `PLAN-标准版补齐.md` |
-| F | LLM 驱动的 AI 玩家 | ✅ 完成：mock 全链路 117 项测试 + TokenHub hy3 真机实测（关思维链后一局约 6 分钟）；思考三档开关、身份推测过程展示、联机 AI 均已接入 |
+| F | LLM 驱动的 AI 玩家 | ✅ 完成：mock 全链路 117 项测试 + 真机实测（关思维链后一局约 6 分钟）；思考三档开关、身份推测过程展示、联机 AI 均已接入 |
 
 **E 阶段背景**：对照「基础版武将与卡牌全表」「身份局游玩说明」两份文档审计后，
 发现角色/牌型/规则上的缺口，审计结论见 `AUDIT-标准版对标.md`，

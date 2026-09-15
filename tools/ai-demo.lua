@@ -3,7 +3,7 @@
 -- 用法（从项目根目录）：
 --
 --   方式一，走本机代理（推荐）：
---     export SGS_AI_URL="https://tokenhub.tencentmaas.com/v1/responses"
+--     export SGS_AI_URL="https://llm.example.com/v1/responses"
 --     export SGS_AI_KEY="sk-..."
 --     ./tools/ai_proxy.py &              # 另开一个终端，或加 & 放后台
 --     export SGS_AI_TRANSPORT=proxy
@@ -54,7 +54,7 @@ if mode == "proxy" then
 else
   if not url or url == "" or not key or key == "" then
     print("未配置 SGS_AI_URL / SGS_AI_KEY，无法做真机验证。")
-    print("TokenHub 示例：export SGS_AI_URL=https://tokenhub.tencentmaas.com/v1/responses")
+    print("示例：export SGS_AI_URL=https://llm.example.com/v1/responses")
     print("             export SGS_AI_KEY=sk-xxx ; export SGS_AI_MODEL=hy3")
     return
   end
