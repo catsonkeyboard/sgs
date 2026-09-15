@@ -351,7 +351,14 @@ Generals.SHU = {
           room:log("%s 发动【狂骨】，回复 1 点体力", player.name)
           room:heal(player, 1)
           return false
-        end, { zh = "狂骨" }),
+        end, { zh = "狂骨",
+          -- 守卫必须提到 can_trigger：否则场上任何一次伤害都会先播
+          -- 横幅与台词，再进效果里判条件（结果什么也没做）
+          can_trigger = function(_s, room, player, data)
+            return data and data.from == player and data.to ~= nil
+          and room:distance(player, data.to) <= 1
+          and player.hp < player.max_hp
+          end }),
     },
   },
   {
@@ -501,7 +508,13 @@ Generals.WEI = {
           room:log("%s 发动【奸雄】，获得【%s】", player.name, real:zhName())
           room:obtain(player, real)
           return false
-        end, { zh = "奸雄" }),
+        end, { zh = "奸雄",
+          -- 守卫必须提到 can_trigger：否则场上任何一次伤害都会先播
+          -- 横幅与台词，再进效果里判条件（结果什么也没做）
+          can_trigger = function(_s, room, player, data)
+            return data and data.to == player and data.card ~= nil
+          and not data.card.phantom
+          end }),
       -- 护驾（主公技）：需要【闪】时，可令其他魏势力角色提供
       markerSkill("护驾", { lord_supply = { dodge = true } }, Freq.Lord),
     },
@@ -522,7 +535,13 @@ Generals.WEI = {
           room:log("%s 发动【反馈】，获得 %s 的一张牌", player.name, src.name)
           room:takeOneCard(player, src)
           return false
-        end, { zh = "反馈" }),
+        end, { zh = "反馈",
+          -- 守卫必须提到 can_trigger：否则场上任何一次伤害都会先播
+          -- 横幅与台词，再进效果里判条件（结果什么也没做）
+          can_trigger = function(_s, room, player, data)
+            return data and data.to == player and data.from ~= nil
+          and data.from ~= player and data.from.alive
+          end }),
       -- 鬼才：任意角色的判定牌生效前，可用任意一张手牌替换。
       -- 人类必须看到全部手牌，不把 BOT 的战略判断固化成规则限制；BOT 仍只在
       -- 能改善己方或恶化敌方判定时发动，并只从能达到该结果的牌中选择。
@@ -608,7 +627,13 @@ Generals.WEI = {
             room:damage(player, src, 1)
           end
           return false
-        end, { zh = "刚烈" }),
+        end, { zh = "刚烈",
+          -- 守卫必须提到 can_trigger：否则场上任何一次伤害都会先播
+          -- 横幅与台词，再进效果里判条件（结果什么也没做）
+          can_trigger = function(_s, room, player, data)
+            return data and data.to == player and data.from ~= nil
+          and data.from ~= player and data.from.alive
+          end }),
     },
   },
   {
@@ -694,7 +719,12 @@ Generals.WEI = {
             end
           end
           return false
-        end, { zh = "遗计" }),
+        end, { zh = "遗计",
+          -- 守卫必须提到 can_trigger：否则场上任何一次伤害都会先播
+          -- 横幅与台词，再进效果里判条件（结果什么也没做）
+          can_trigger = function(_s, room, player, data)
+            return data and data.to == player
+          end }),
     },
   },
   {
@@ -907,7 +937,12 @@ Generals.WEI = {
           room:log("%s 发动【节命】，将手牌补至 %d 张", player.name, upper)
           room:drawCards(player, x)
           return false
-        end, { zh = "节命" }),
+        end, { zh = "节命",
+          -- 守卫必须提到 can_trigger：否则场上任何一次伤害都会先播
+          -- 横幅与台词，再进效果里判条件（结果什么也没做）
+          can_trigger = function(_s, room, player, data)
+            return data and data.to == player and player.alive
+          end }),
     },
   },
   {
@@ -951,7 +986,12 @@ Generals.WEI = {
           if lost > 0 then room:drawCards(t, lost) end
           room:turnOver(t)
           return false
-        end, { zh = "放逐" }),
+        end, { zh = "放逐",
+          -- 守卫必须提到 can_trigger：否则场上任何一次伤害都会先播
+          -- 横幅与台词，再进效果里判条件（结果什么也没做）
+          can_trigger = function(_s, room, player, data)
+            return data and data.to == player
+          end }),
     },
   },
   {
