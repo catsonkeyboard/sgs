@@ -76,9 +76,12 @@ core/ 禁止 require 任何 love 模块（CI 可校验），收益：
 - 桌面背景 `image/backdrop/table.jpg`、仪表盘底框 `dashboard*`
 - 音效 `audio/**`（按 audio.json 键名）
 
-**表现层事件**：core 新增 `Room:onEvent/emit`，目前发出 `useCard` /
-`damage` / `death` 三个事件。UI 在上面挂音频与动效；core 只调回调，
-不依赖 UI；回调抛错会被捕获，绝不中断对局。
+**表现层事件**：core 新增 `Room:onEvent/emit`，目前发出 `useCard`（含目标
+列表）/ `damage`（含来源）/ `death` / `skill` / `respond`（任何人打出的响应
+牌：杀被闪、无懈、濒死求桃）/ `equip`（装备上阵，带槽位）/ `skillTarget`
+（兼容层 `askForPlayerChosen` 指定到人，带技能名）。UI 在上面挂音频与动效——
+出牌/响应/装备都有飞牌动画与音效，技能指定与伤害命中画「来源 → 目标」指向
+箭头；core 只调回调，不依赖 UI；回调抛错会被捕获，绝不中断对局。
 
 **动画说明**：原版 `defaultSkin.animation.json` 在这个皮肤里**是空的**（只有 `}`），
 没有可复用的动效定义，因此 `effects.lua` 是自己实现的最小方案。

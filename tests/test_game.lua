@@ -583,6 +583,40 @@ local function runInRoom(fn, respond)
   return true
 end
 
+do -- 表现层事件：杀被闪 → BOT 打出【闪】应广播 respond 事件（UI 播音效/飞牌）
+  local r, ps = makeRoomWith({ "白板武将", "白板武将" }, 20)
+  local events = {}
+  r:onEvent("respond", function(d) table.insert(events, d) end)
+  local slash = give(ps[1], "slash", Card.Suit.Spade, 5)
+  give(ps[2], "dodge", Card.Suit.Heart, 2)
+  runInRoom(function()
+    r:useCard(ps[1], slash, ps[2])
+  end, function(req)
+    if req and req.type == "askForCard" and req.card_name == "dodge" then
+      return ps[2].hand[1]
+    end
+    return nil
+  end)
+  check(#events == 1 and events[1].card and events[1].card.name == "dodge"
+      and events[1].player == ps[2],
+    "被闪时应广播 respond 事件（实得 " .. #events .. " 条）")
+end
+
+do -- 表现层事件：装备上阵应广播 equip 事件并带槽位
+  local r, ps = makeRoomWith({ "白板武将", "白板武将" }, 21)
+  local events = {}
+  r:onEvent("equip", function(d) table.insert(events, d) end)
+  local crossbow = give(ps[1], "crossbow", Card.Suit.Club, 1, Card.Type.Equip)
+  local horse = give(ps[1], "offensive_horse", Card.Suit.Spade, 5, Card.Type.Equip)
+  runInRoom(function()
+    r:useCard(ps[1], crossbow, ps[1])
+    r:useCard(ps[1], horse, ps[1])
+  end)
+  check(#events == 2 and events[1].slot == "weapon" and events[2].slot == "offensive_horse"
+      and events[1].player == ps[1],
+    "装备武器/马应广播 equip 事件并带槽位（实得 " .. #events .. " 条）")
+end
+
 do -- 曹操·奸雄：受到伤害后获得造成伤害的牌
   local r, ps = makeRoomWith({ "曹操", "白板武将" }, 11)
   local slash = Card.create(1, "slash", Card.Suit.Spade, 5, Card.Type.Basic)
@@ -1429,6 +1463,16 @@ do -- 询问类 API：askForPindian / askForAG / askForYiji / setPlayerProperty
   check(#ps[1].hand == 1,
     "【试炼】拼点获胜后应摸 2 张并分出 1 张（实得 " .. #ps[1].hand .. "）")
   check(#ps[2].hand == 1, "分出的牌应交给另一名角色（实得 " .. #ps[2].hand .. "）")
+
+  -- askForPlayerChosen：应广播 skillTarget 指向（UI 画施法者→目标的箭头）
+  local st_events = {}
+  r:onEvent("skillTarget", function(d) table.insert(st_events, d) end)
+  runInRoom(function()
+    r:askForPlayerChosen(ps[1], r:otherAlivePlayers(ps[1]), "试炼")
+  end)
+  check(#st_events == 1 and st_events[1].skill == "试炼"
+      and st_events[1].target ~= nil,
+    "askForPlayerChosen 应广播 skillTarget 指向（实得 " .. #st_events .. " 条）")
 end
 
 do -- 名称归一 / cloneCard / Card_Parse

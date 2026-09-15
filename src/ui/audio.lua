@@ -55,10 +55,10 @@ function Audio:_playRel(rel)
   return ok and inst ~= nil
 end
 
-function Audio:play(key)
+function Audio:play(key, gender)
   if not self.enabled or self.muted or not key then return false end
   if not (love and love.audio) then return false end -- headless 无音频
-  local rel = self.skin:sound(key)
+  local rel = self.skin:sound(key, gender)
   return self:_playRel(rel)
 end
 
@@ -70,9 +70,28 @@ function Audio:playSkill(skillName)
   return self:_playRel(self.skin:skillSound(skillName))
 end
 
--- 按卡牌名播放使用音效（原版键名形如 "slash"、"peach"）
-function Audio:playCard(cardName)
-  return self:play(cardName)
+-- 卡牌音效：引擎的牌名 → 原版音频键名不一致的在这里翻译
+-- （闪在引擎里叫 dodge，原版音频文件叫 jink.ogg）。
+-- gender 用于选 audio/card/<male|female>/ 目录，出牌人不同音色不同。
+local CARD_SOUND_KEY = { dodge = "jink" }
+
+function Audio:playCard(cardName, gender)
+  if not cardName then return false end
+  return self:play(CARD_SOUND_KEY[cardName] or cardName, gender)
+end
+
+-- 装备音效：引擎槽位（weapon/armor/offensive_horse/defensive_horse）
+-- → 音频键（audio/card/common/{weapon,armor,horse}.ogg）
+local EQUIP_SOUND_KEY = {
+  weapon = "weapon",
+  armor = "armor",
+  offensive_horse = "horse",
+  defensive_horse = "horse",
+}
+
+function Audio:playEquip(slot)
+  if not slot then return false end
+  return self:play(EQUIP_SOUND_KEY[slot] or slot)
 end
 
 function Audio:setVolume(v)

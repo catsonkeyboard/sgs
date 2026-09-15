@@ -276,7 +276,12 @@ function Room:askForCard(player, card_name, prompt, extra)
     for k, v in pairs(extra) do req[k] = v end
   end
   local res = coroutine.yield(req)
-  if res then return res end
+  if res then
+    -- 表现层：任何人（含 BOT）打出的牌都广播一下——UI 据此播
+    -- 「打出【闪】」的音效与飞牌动画（杀被闪、无懈、濒死求桃等全走这里）
+    self:emit("respond", { player = player, card = res, reason = card_name })
+    return res
+  end
   -- 主公技【护驾】/【激将】：主公本人拿不出【闪】/【杀】时，
   -- 可向其他同势力角色求助（文档：「视为由你使用或打出」）。
   if card_name == "dodge" or card_name == "slash" then
@@ -1524,6 +1529,8 @@ function Room:_equipCard(from, card)
     end
   end
   self:log("%s 装备【%s】", from.name, card:zhName())
+  -- 表现层：装备上阵的音效/动画（武器/防具/马）
+  self:emit("equip", { player = from, card = card, slot = slot })
 end
 
 -- ===== 杀的结算 =====

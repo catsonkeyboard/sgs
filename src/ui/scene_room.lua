@@ -20,6 +20,9 @@ local PRESENT_DELAY = {
   skill   = 0.62,  -- 发动技能（台词最长，留足时间）
   damage  = 0.34,  -- 受伤
   death   = 0.85,  -- 阵亡
+  respond = 0.5,   -- 打出响应牌（闪/无懈/求桃）
+  equip   = 0.42,  -- 装备上阵
+  skillTarget = 0.34, -- 技能指向目标
 }
 local Bot = require "src.core.bot"
 local Agent = require "src.core.ai.agent"
@@ -860,6 +863,13 @@ local function drawCard(x, y, w, h, c, font, font_sm, scene)
   love.graphics.printf(c:zhName(), x, y + h / 2 - 10, w, "center")
 end
 
+-- 飞牌动画的绘制闭包：特效层只给轨迹插值，牌面用与手牌同一套 drawCard
+local function flyCardFn(scene, c)
+  return function(x, y, w, h, _alpha)
+    drawCard(x, y, w, h, c, scene.font, scene.font_sm, scene)
+  end
+end
+
 local ROLE_COLOR = {
   lord = { 0.95, 0.75, 0.2 },
   loyalist = { 0.35, 0.65, 0.95 },
@@ -905,9 +915,63 @@ function RoomScene:playPresent(e)
   local d = e.data
   if e.kind == "useCard" then
     if d and d.card then
-      if audio then audio:play(d.card.name) end
+      if audio then audio:playCard(d.card.name, d.from and d.from.female and "female" or "male") end
       if d.from and fx then
         fx:showBanner(string.format("%s 使用【%s】", d.from.name, d.card:zhName()))
+      end
+      self:presentCardFlight(d.card, d.from, d.to)
+    end
+  elseif e.kind == "respond" then
+    -- 任何人打出的响应牌（杀被闪、无懈、濒死求桃……）：音效 + 飞牌 + 面板高亮
+    if d and d.card and d.player then
+      if audio then
+        audio:playCard(d.card.name, d.player.female and "female" or "male")
+      end
+      if fx then
+        fx:showBanner(string.format("%s 打出【%s】", d.player.name, d.card:zhName()),
+          { 0.75, 0.9, 1 })
+        local a = self:anchorOf(d.player)
+        if a then
+          fx:flashPanel(a[1], a[2], self.panelW or PANEL_W, self.panelH or PANEL_H,
+            { 0.6, 0.85, 1 })
+        end
+      end
+      -- 响应牌朝牌桌中央飞（是替谁打的这里拿不到，飞向中央最不误导）
+      local sx, sy = self:launchPoint(d.player)
+      local cx, cy = self:centerPoint()
+      if fx and sx then
+        fx:fly(flyCardFn(self, d.card), sx, sy, cx, cy, CARD_W * 0.9, CARD_H * 0.9)
+      end
+    end
+  elseif e.kind == "equip" then
+    -- 装备上阵：武器/防具/马各有音效，牌从手里飞到自己面板
+    if d and d.card and d.player then
+      if audio then audio:playEquip(d.slot) end
+      if fx then
+        fx:showBanner(string.format("%s 装备【%s】", d.player.name, d.card:zhName()),
+          { 0.8, 0.95, 0.75 })
+        local a = self:anchorOf(d.player)
+        if a then
+          fx:flashPanel(a[1], a[2], self.panelW or PANEL_W, self.panelH or PANEL_H,
+            { 0.65, 0.95, 0.65 })
+        end
+      end
+      local px, py = self:panelCenter(d.player)
+      local sx, sy = self:launchPoint(d.player)
+      if fx and px and sx then
+        fx:fly(flyCardFn(self, d.card), sx, sy, px, py, CARD_W * 0.9, CARD_H * 0.9)
+      end
+    end
+  elseif e.kind == "skillTarget" then
+    -- 技能指定目标：施法者 → 目标画一条指向箭头，并高亮目标面板
+    if d and d.player and d.target and fx then
+      local x1, y1 = self:panelCenter(d.player)
+      local x2, y2 = self:panelCenter(d.target)
+      if x1 and x2 then fx:arrow(x1, y1, x2, y2) end
+      local a = self:anchorOf(d.target)
+      if a then
+        fx:flashPanel(a[1], a[2], self.panelW or PANEL_W, self.panelH or PANEL_H,
+          { 0.95, 0.85, 0.35 })
       end
     end
   elseif e.kind == "damage" then
@@ -916,6 +980,12 @@ function RoomScene:playPresent(e)
       local a = self:anchorOf(d.to)
       if a and fx then
         fx:float(a[1] + (self.panelW or 210) / 2, a[2] + 30, "-" .. tostring(d.n))
+      end
+      -- 被动命中也画指向（谁打的我）：伤害来源 → 受害者
+      if d.from and fx then
+        local x1, y1 = self:panelCenter(d.from)
+        local x2, y2 = self:panelCenter(d.to)
+        if x1 and x2 then fx:arrow(x1, y1, x2, y2, { 0.95, 0.3, 0.25 }) end
       end
     end
   elseif e.kind == "skill" then
@@ -938,10 +1008,70 @@ function RoomScene:playPresent(e)
   end
 end
 
+-- 面板中心（anchorOf 找不到座位时返回 nil，调用方跳过动画即可）
+function RoomScene:panelCenter(p)
+  local a = self:anchorOf(p)
+  if not a then return nil end
+  return a[1] + (self.panelW or PANEL_W) / 2, a[2] + (self.panelH or PANEL_H) / 2
+end
+
+-- 飞牌起点：真人从手牌区出手，BOT 从面板中心出手
+function RoomScene:launchPoint(p)
+  if not p then return nil end
+  if p == self.human and not self.draft and #(p.hand or {}) > 0
+    and self.handCardRect then
+    local x, y = self:handCardRect(math.ceil(#p.hand / 2))
+    return x + CARD_W / 2, y + CARD_H / 2
+  end
+  return self:panelCenter(p)
+end
+
+-- 屏幕中心（响应牌的落点；headless 下给一个兜底尺寸）
+function RoomScene:centerPoint()
+  local w, h = 1130, 650
+  if love and love.graphics and love.graphics.getDimensions then
+    local ok, a, b = pcall(love.graphics.getDimensions)
+    if ok and a then w, h = a, b or h end
+  end
+  return w / 2, h / 2
+end
+
+-- 出牌的指向与飞牌：装备牌飞回自己面板，其余按目标逐个画箭头
+function RoomScene:presentCardFlight(card, from, targets)
+  local fx = self.effects
+  if not (fx and from) then return end
+  local def = card.name and Cards.get(card.name) or nil
+  local is_equip = def ~= nil and def.ctype == Card.Type.Equip
+  local list = (targets and #targets > 0) and targets or {}
+  if is_equip then list = { from } end -- 装备牌：目标是出牌人自己
+
+  local sx, sy = self:launchPoint(from)
+  local tx, ty
+  if is_equip or #list == 0 then
+    tx, ty = self:panelCenter(from)
+    if not is_equip and #list == 0 then tx, ty = self:centerPoint() end
+  else
+    tx, ty = self:panelCenter(list[1])
+  end
+  if sx and tx then
+    fx:fly(flyCardFn(self, card), sx, sy, tx, ty, CARD_W * 0.9, CARD_H * 0.9)
+  end
+  -- 多目标（AOE）逐个画指向，封顶 6 条防刷屏
+  for i, t in ipairs(list) do
+    if i > 6 then break end
+    if not is_equip and t ~= from then
+      local x1, y1 = self:panelCenter(from)
+      local x2, y2 = self:panelCenter(t)
+      if x1 and x2 then fx:arrow(x1, y1, x2, y2, { 1, 0.9, 0.55 }) end
+    end
+  end
+end
+
 function RoomScene:bindPresentationHooks()
   local room = self.room
   if not room then return end
-  for _, kind in ipairs({ "useCard", "damage", "skill", "death" }) do
+  for _, kind in ipairs({ "useCard", "damage", "skill", "death",
+                          "respond", "equip", "skillTarget" }) do
     room:onEvent(kind, function(d) self:enqueuePresent(kind, d) end)
   end
 end

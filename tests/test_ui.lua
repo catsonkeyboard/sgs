@@ -20,6 +20,10 @@ love = {
     printf = function() end,
     rectangle = function() end,
     circle = function() end,
+    line = function() end,
+    polygon = function() end,
+    setLineWidth = function() end,
+    draw = function() end,
     getDimensions = function() return 1130, 650 end,
   },
 }
@@ -637,6 +641,59 @@ do
     if i > 1 and #p.hand ~= 4 then dealt = false end
   end
   check(dealt, "其余座位应为起始 4 张手牌")
+end
+
+print("\n--- 表现层：技能指向 / 出牌飞牌 / 响应与装备反馈 ---")
+
+do
+  local scene = RoomScene.create(function() end, "identity", 5, "off", { seed = 42 })
+  local fx = scene.effects
+  check(fx ~= nil, "场景应创建特效层")
+  local p1, p2 = scene.players[1], scene.players[2]
+  local card = p1.hand[1]
+
+  -- 出牌对准目标：入队 → 播放 → 应产生指向箭头与飞牌
+  scene.room:emit("useCard", { card = card, from = p1, to = { p2 } })
+  check(#scene.presentQueue == 1, "useCard 事件应入演示队列")
+  scene:playPresent(table.remove(scene.presentQueue, 1))
+  check(#fx.flies == 1 and #fx.arrows == 1,
+    "对目标出牌应产生 1 条飞牌与 1 条指向箭头（飞 " .. #fx.flies
+      .. "，箭 " .. #fx.arrows .. "）")
+
+  -- 无目标牌（如无中生有）：只飞牌、不画箭头，落点是屏幕中央
+  scene.room:emit("useCard", { card = card, from = p1, to = {} })
+  scene:playPresent(table.remove(scene.presentQueue, 1))
+  check(#fx.flies == 2 and #fx.arrows == 1,
+    "无目标出牌只应飞牌不画箭头（飞 " .. #fx.flies .. "，箭 " .. #fx.arrows .. "）")
+
+  -- BOT 打出响应牌（杀被闪）：飞牌 + 面板高亮
+  scene.room:emit("respond", { player = p2, card = card, reason = "dodge" })
+  scene:playPresent(table.remove(scene.presentQueue, 1))
+  check(#fx.flies == 3, "打出响应牌应有飞牌动画（实得 " .. #fx.flies .. " 条）")
+
+  -- 装备上阵：飞牌挂到自己面板
+  scene.room:emit("equip", { player = p2, card = card, slot = "weapon" })
+  scene:playPresent(table.remove(scene.presentQueue, 1))
+  check(#fx.flies == 4, "装备上阵应有飞牌动画（实得 " .. #fx.flies .. " 条）")
+
+  -- 技能指向：施法者 → 目标
+  scene.room:emit("skillTarget", { player = p1, target = p2, skill = "试炼" })
+  scene:playPresent(table.remove(scene.presentQueue, 1))
+  check(#fx.arrows == 2, "技能指定目标应画指向箭头（实得 " .. #fx.arrows .. " 条）")
+
+  -- 伤害：来源 → 受害者的红色指向
+  scene.room:emit("damage", { to = p2, from = p1, n = 1 })
+  scene:playPresent(table.remove(scene.presentQueue, 1))
+  check(#fx.arrows == 3, "伤害命中应画来源指向（实得 " .. #fx.arrows .. " 条）")
+
+  -- 动画推进与绘制不应报错；到期后清理干净
+  fx:arrow(10, 10, 200, 200)
+  fx:update(0.1)
+  local ok_draw, err_draw = pcall(function() fx:draw(1130, 650, stub_font, stub_font) end)
+  check(ok_draw, "特效绘制（含箭头/飞牌）不应报错"
+    .. (ok_draw and "" or ("：" .. tostring(err_draw))))
+  fx:update(10)
+  check(#fx.arrows == 0 and #fx.flies == 0, "动画到期后应清理干净")
 end
 
 print(string.format("\n===== UI: %d passed, %d failed =====", passes, failures))

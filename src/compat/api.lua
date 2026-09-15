@@ -269,11 +269,16 @@ define(Room, "askForSuit", function(self)
   local suits = { Card.Suit.Spade, Card.Suit.Heart, Card.Suit.Club, Card.Suit.Diamond }
   return suits[self:random(4)]
 end)
-define(Room, "askForPlayerChosen", function(_self, p, targets)
+define(Room, "askForPlayerChosen", function(self, p, targets, reason)
+  local chosen
   for _, t in ipairs(targets or {}) do
-    if t ~= p and t.alive then return t end
+    if t ~= p and t.alive then chosen = t break end
   end
-  return nil
+  if chosen then
+    -- 表现层：技能指定到人时广播指向（UI 画「施法者 → 目标」的箭头）
+    self:emit("skillTarget", { player = p, target = chosen, skill = reason })
+  end
+  return chosen
 end)
 
 -- 拼点：本引擎的 pindian 直接结算并返回胜负，这里补出原版 PindianStruct 的字段
