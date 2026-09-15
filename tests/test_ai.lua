@@ -801,5 +801,76 @@ do
   end
 end
 
+print()
+print("--- AI 思考与身份猜测过程 ---")
+
+do -- belief_log：判断变化要留痕（UI 的时间线就靠它）
+  local Memory = require "src.core.ai.memory"
+  local mem = Memory.create({})
+  mem:updateBeliefs({ ["乙"] = "反贼" }, function(k) return k end, { turn = 2, reason = "他杀主公" })
+  mem:updateBeliefs({ ["乙"] = "反贼" }, function(k) return k end, { turn = 3, reason = "重复判断" })
+  mem:updateBeliefs({ ["乙"] = "内奸" }, function(k) return k end, { turn = 5, reason = "他救了主公" })
+  local log = mem:beliefTimeline()
+  check(#log == 2, "重复同值不应记录，变化才记（实得 " .. #log .. " 条）")
+  check(log[1].from == "未知" and log[1].to == "反贼" and log[1].turn == 2,
+    "首次判断应记 未知→反贼（实得 " .. log[1].from .. "→" .. log[1].to .. "）")
+  check(log[2].from == "反贼" and log[2].to == "内奸" and log[2].turn == 5,
+    "改判应记 反贼→内奸")
+  check(log[2].reason == "他救了主公", "时间线应带上当次理由")
+
+  local changes = mem:updateBeliefs({ ["乙"] = "内奸" }, function(k) return k end)
+  check(type(changes) == "table" and #changes == 0, "无变化时应返回空表")
+end
+
+do -- 端到端：beliefs 变化触发 on_beliefs；reasoning 摘要触发 on_reasoning
+  local room = makeRoom(12, { 1 })
+  local belief_events, reasoning_events = {}, {}
+  local first = true
+  local agent = Agent.create({
+    transport = Transport.mock {
+      responder = function()
+        if first then
+          first = false
+          return { text = '{"action":1,"reason":"试探","beliefs":{"P2":"反贼"}}',
+            reasoning = "P2 对主公出杀，应是反贼" }
+        end
+        return '{"action":1,"reason":"继续"}'
+      end,
+    },
+    on_beliefs = function(changes, ctx)
+      belief_events[#belief_events + 1] = { changes = changes, ctx = ctx }
+    end,
+    on_reasoning = function(who, summary)
+      reasoning_events[#reasoning_events + 1] = { who = who, summary = summary }
+    end,
+  })
+  local driver = Driver.create(room, Bot.make(), agent)
+  local guard = 0
+  while (agent.stats.by_ai < 2) and not room.game_over and guard < 5000 do
+    guard = guard + 1
+    local st, req = driver:advance()
+    if st == "over" then break end
+    if st == "thinking" then
+      local r, s = agent:respond(req, room)
+      if s == "ready" then room:step(r) end
+    elseif st == "human" then
+      room:step(Bot.make()(req, room))
+    end
+  end
+  check(#belief_events == 1, "首次给出判断应触发一次 on_beliefs（实得 "
+    .. #belief_events .. " 次）")
+  if belief_events[1] then
+    local c = belief_events[1].changes[1]
+    check(c and c.to == "反贼" and c.from == "未知",
+      "on_beliefs 应带 未知→反贼 的变化（实得 "
+        .. tostring(c and (c.from .. "→" .. c.to)) .. "）")
+    check(belief_events[1].ctx.reason == "试探", "ctx 应带当次决策理由")
+  end
+  check(#reasoning_events == 1 and reasoning_events[1].summary == "P2 对主公出杀，应是反贼",
+    "思维链摘要应透传到 on_reasoning（实得 " .. #reasoning_events .. " 次）")
+  -- 第二次起不再回传 beliefs，也不再有 reasoning：不应重复触发
+  check(#belief_events == 1 and #reasoning_events == 1, "无变化/无摘要时不应触发回调")
+end
+
 print(string.format("\n===== AI 测试: %d passed, %d failed =====", passes, failures))
 if failures > 0 then error("AI 测试失败", 0) end

@@ -25,6 +25,8 @@ function Mem:init(opts)
   self.folded = {}                      -- 已折叠步骤的分类计数
   self.folded_count = 0
   self.beliefs = {}                     -- {["P2"]="反贼", ...}
+  self.belief_log = {}                  -- 判断变化时间线 {turn,name,from,to,reason}
+  self.max_belief_log = 60              -- 时间线上限（防无限增长）
   self.notes = opts.notes or ""         -- AI 自己写的长期观察
   self.total = 0
   self.rejected = {}                    -- 被拒绝的输出，供调试
@@ -49,15 +51,18 @@ function Mem:record(entry)
   end
 end
 
--- 更新身份判断。只接受已知座位，值做长度限制，避免模型输出垃圾把提示词撑爆
+-- 更新身份判断。只接受已知座位，值做长度限制，避免模型输出垃圾把提示词撑爆。
+-- 返回本次发生变化的记录列表 { {name=, from=, to=} }（无变化为空表），
+-- 同时追加进 belief_log 供 UI 展示「猜测过程」——只有最新标签的话，
+-- 玩家永远看不到 AI 是怎么一步步改判的。
 local VALID_LABEL = {
   ["主公"] = true, ["忠臣"] = true, ["反贼"] = true, ["内奸"] = true,
   ["未知"] = true, ["不确定"] = true,
 }
 
-function Mem:updateBeliefs(b, nameOf)
-  if type(b) ~= "table" then return false end
-  local changed = false
+function Mem:updateBeliefs(b, nameOf, meta)
+  if type(b) ~= "table" then return {} end
+  local changes = {}
   for key, val in pairs(b) do
     local name = tostring(key)
     -- 允许模型用座位号（"2" / "P2" / "座位2"）或玩家名指代。
@@ -76,12 +81,25 @@ function Mem:updateBeliefs(b, nameOf)
     end
     if hit and target then
       if self.beliefs[target] ~= hit then
+        local from = self.beliefs[target] or "未知"
         self.beliefs[target] = hit
-        changed = true
+        changes[#changes + 1] = { name = target, from = from, to = hit }
+        self.belief_log[#self.belief_log + 1] = {
+          turn = meta and meta.turn, name = target,
+          from = from, to = hit, reason = meta and meta.reason or "",
+        }
+        while #self.belief_log > self.max_belief_log do
+          table.remove(self.belief_log, 1)
+        end
       end
     end
   end
-  return changed
+  return changes
+end
+
+-- 猜测变化时间线（旧的在前），最多保留 max_belief_log 条
+function Mem:beliefTimeline()
+  return self.belief_log
 end
 
 function Mem:setNotes(text)

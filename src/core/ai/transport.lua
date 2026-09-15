@@ -154,6 +154,10 @@ function Mock:submit(prompt)
   end
   if text == nil then
     self._result = { ok = false, err = "mock 未给出响应" }
+  elseif type(text) == "table" then
+    -- 表形式可带思维链摘要（测 on_reasoning 用）：{text=..., reasoning=...}
+    self._result = { ok = true, text = tostring(text.text),
+      reasoning = text.reasoning }
   else
     self._result = { ok = true, text = tostring(text) }
   end

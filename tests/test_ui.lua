@@ -813,6 +813,111 @@ do
   check(audio:playVoice("caocao") == false, "headless 下 playVoice 应静默返回 false")
 end
 
+print("\n--- AI 思考开关与推测展示 ---")
+
+do -- 文本截断必须按 UTF-8 完整字符：字节级截断会让 print 抛 Invalid UTF-8
+  local TextFit = require "src.ui.text_fit"
+  -- 校验整个字符串是合法 UTF-8（无孤立续字节、无截断的多字节序列）
+  local function validUTF8(s)
+    local i = 1
+    while i <= #s do
+      local b = string.byte(s, i)
+      if b < 128 then i = i + 1
+      elseif b >= 192 then
+        local n = (b >= 240) and 4 or (b >= 224) and 3 or 2
+        if i + n - 1 > #s then return false end
+        for j = i + 1, i + n - 1 do
+          local c = string.byte(s, j)
+          if not c or c < 128 or c >= 192 then return false end
+        end
+        i = i + n
+      else return false end -- 孤立续字节
+    end
+    return true
+  end
+
+  local long = "张飞判断曹操是反贼因为他对主公使用了杀" -- 20 个汉字
+  for _, n in ipairs({ 1, 2, 4, 5, 7, 10, 58, 59, 60, 61 }) do
+    local t = TextFit.truncate(long, n)
+    check(validUTF8(t), string.format("truncate(%d) 应保持合法 UTF-8（%q）", n, t))
+  end
+  check(TextFit.truncate(long, 100) == long, "不超长应原样返回")
+  check(TextFit.truncate("abc", 2) == "a…", "ASCII 截断同样按字符")
+
+  local f = TextFit.fit(long, 91) -- 91px ≈ 7 个汉字宽
+  check(validUTF8(f) and TextFit.width(f) <= 91,
+    "fit 应同时满足合法性与宽度（宽 " .. TextFit.width(f) .. "px）")
+end
+
+do
+  local Menu = require "src.ui.scene_menu"
+  local picked = {}
+  local m = Menu.create(function(mode, size, ai, draft, think)
+    picked[#picked + 1] = { mode = mode, think = think }
+  end, function() end)
+
+  -- 三档循环：关 → 低 → 高 → 关（环境变量未设时初值为关）
+  local tb = m.think_button
+  check(tb.text == "AI 思考：关", "环境变量未设时初值应为关（实得 " .. tb.text .. "）")
+  m:mousepressed(tb.x + 1, tb.y + 1, 1)
+  check(tb.text == "AI 思考：低", "点击应切到低（实得 " .. tb.text .. "）")
+  m:mousepressed(tb.x + 1, tb.y + 1, 1)
+  check(tb.text == "AI 思考：高", "再点应切到高（实得 " .. tb.text .. "）")
+  m:mousepressed(tb.x + 1, tb.y + 1, 1)
+  check(tb.text == "AI 思考：关", "三轮应切回关")
+
+  -- 点身份局：第 5 参应把当前思考档传给 on_start
+  m:mousepressed(tb.x + 1, tb.y + 1, 1) -- 切到低
+  local b5
+  for _, b in ipairs(m.buttons) do
+    if b.size == 5 then b5 = b end
+  end
+  m:mousepressed(b5.x + 1, b5.y + 1, 1)
+  check(picked[1] and picked[1].mode == "identity" and picked[1].think == "low",
+    "on_start 第 5 参应透传思考档（实得 " .. tostring(picked[1] and picked[1].think) .. "）")
+end
+
+do
+  -- 牌桌：ai_reasoning 落进场景；feed 推送与「AI 推测」弹层开合
+  local sc = RoomScene.create(function() end, "identity", 5, "others",
+    { seed = 42, ai_reasoning = "low" })
+  check(sc.ai_reasoning == "low", "opts.ai_reasoning 应落进场景")
+  check(sc.agent ~= nil, "AI 模式下应创建 Agent")
+
+  sc:pushAIFeed("belief", "张飞 判 曹操：未知→反贼（他杀主公）", 3)
+  sc:pushAIFeed("think", "张飞 思考：P2 对主公出杀")
+  check(#sc.aiFeed == 2, "pushAIFeed 应累积（实得 " .. #sc.aiFeed .. " 条）")
+
+  -- 按钮列应有「AI 推测」入口，点开弹层、内容可生成、Esc/外点关闭
+  sc:_refreshButtons()
+  local ai_btn
+  for _, b in ipairs(sc.buttons) do
+    if b.text == "AI 推测" then ai_btn = b end
+  end
+  check(ai_btn ~= nil, "AI 模式下按钮列应有【AI 推测】")
+  if ai_btn then ai_btn.cb() end
+  check(sc.aiPopup == true, "点【AI 推测】应打开弹层")
+  local lines = sc:aiPopupLines()
+  check(type(lines) == "table" and #lines > 0, "弹层内容行应可生成")
+  local joined = table.concat(lines, "\n")
+  check(joined:find("未知→反贼", 1, true) ~= nil, "弹层时间线应包含判断变化")
+  check(joined:find("张飞 思考", 1, true) ~= nil, "弹层时间线应包含思维链摘要")
+  local ok_draw, err = pcall(function() sc:draw() end)
+  check(ok_draw, "弹层开着时 draw 不应报错" .. (ok_draw and "" or ("：" .. tostring(err))))
+  sc:keypressed("escape")
+  check(sc.aiPopup == nil, "Esc 应关闭弹层")
+  sc.aiPopup = true
+  local box = sc:aiPopupLayout()
+  check(sc:aiPopupShouldClose(box.close.x + 2, box.close.y + 2), "点关闭钮应判定关闭")
+  check(not sc:aiPopupShouldClose(box.x + 50, box.y + 60), "弹层内部不应判定关闭")
+
+  -- 小面板只在 belief 类显示最近变化；draw 已含（上面 pcall 覆盖弹层+面板路径）
+  sc.aiPopup = nil
+  local ok2, err2 = pcall(function() sc:draw() end)
+  check(ok2, "AI 模式下 draw（含推测小面板）不应报错"
+    .. (ok2 and "" or ("：" .. tostring(err2))))
+end
+
 print(string.format("\n===== UI: %d passed, %d failed =====", passes, failures))
 if failures > 0 then error("UI 测试失败", 0) end
 

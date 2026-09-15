@@ -32,6 +32,7 @@ local Audio = require "src.ui.audio"
 local Layout = require "src.ui.layout"
 local Effects = require "src.ui.effects"
 local SkillDesc = require "src.ui.skill_desc"
+local TextFit = require "src.ui.text_fit"
 
 local RoomScene = class("RoomScene")
 
@@ -95,6 +96,11 @@ function RoomScene:init(on_exit, mode, size, ai_mode, opts)
   self.font_sm = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 12)
   self.on_exit = on_exit
   self.ai_mode = ai_mode or "off"
+  -- 菜单「AI 思考」开关（none/low/high），覆盖 SGS_AI_REASONING；
+  -- beginPlay 建 Agent 时消费。AI 推测 feed 在 beginPlay 后随时可推。
+  self.ai_reasoning = opts and opts.ai_reasoning or nil
+  self.aiFeed = {}   -- AI 推测变化流 {kind=belief|think, text=, turn=}
+  self.aiPopup = nil -- 「AI 推测」详情弹层（点按钮列打开）
 
   -- ===== 开局选将（opt-in：opts.draft；默认仍走随机分将的老流程）=====
   -- 文档开局流程：身份分配 → 主公从 5 张候选里选 1、其余各从 3 张里选 1（暗置）
@@ -217,7 +223,8 @@ function RoomScene:beginPlay()
   if self.ai_mode ~= "off" then
     local ok, mod = pcall(require, "src.ui.ai_transport")
     if ok then
-      transport, self.ai_error = mod.fromEnv()
+      -- 菜单「AI 思考」开关覆盖 SGS_AI_REASONING（Responses 协议的思维链强度）
+      transport, self.ai_error = mod.fromEnv({ reasoning = self.ai_reasoning })
     else
       self.ai_error = "无法加载 AI 传输层：" .. tostring(mod)
     end
@@ -229,12 +236,34 @@ function RoomScene:beginPlay()
       for _, p in ipairs(self.players) do p:setControl("ai") end
       end
   end
+  -- 思维链开启时单次调用 12 秒以上，Agent 自身的超时也要放宽（默认 30 秒）
+  local thinking_on = self.ai_reasoning and self.ai_reasoning ~= "none"
+    and self.ai_reasoning ~= ""
   self.agent = Agent.create({
     transport = transport,
+    timeout = thinking_on and 140 or nil,
     -- 用 love.timer 而不是 os.time：os.time 只有秒级精度，超时判断会差一整秒
     clock = love.timer and love.timer.getTime or nil,
     on_error = function(reason)
       print(string.format("[AI] 机械兜底：%s", tostring(reason)))
+    end,
+    -- 身份判断变化 → 右侧「AI 推测」面板与弹层时间线
+    on_beliefs = function(changes, ctx)
+      local who = ctx and ctx.player and ctx.player.name or "AI"
+      for _, c in ipairs(changes or {}) do
+        local line = string.format("%s 判 %s：%s→%s", who, c.name, c.from, c.to)
+        if ctx.reason and ctx.reason ~= "" then
+          line = line .. "（" .. ctx.reason .. "）"
+        end
+        self:pushAIFeed("belief", line, ctx.turn)
+      end
+    end,
+    -- 思维链摘要（思考开启时才有）→ 只进弹层时间线，不刷小面板防刷屏
+    on_reasoning = function(who, summary)
+      if summary and summary ~= "" then
+        local s = tostring(summary):gsub("%s+", " ")
+        self:pushAIFeed("think", string.format("%s 思考：%s", who, TextFit.truncate(s, 60)))
+      end
     end,
   })
 
@@ -397,6 +426,11 @@ function RoomScene:_refreshButtons()
   local btns = {}
   local req = self.room.pending
   local function push(text, cb) table.insert(btns, { text = text, cb = cb }) end
+
+  -- 「AI 推测」详情入口：AI 参与对局时常驻（点开看身份判断过程）
+  if self.agent and self.ai_mode ~= "off" then
+    push("AI 推测", function() self.aiPopup = true end)
+  end
 
   if self.room.game_over then
     push("返回菜单", function() self.on_exit() end)
@@ -564,8 +598,8 @@ function RoomScene:_exitGame()
 end
 
 function RoomScene:keypressed(key)
-  if self.skillPopup then
-    if key == "escape" then self.skillPopup = nil end
+  if self.skillPopup or self.aiPopup then
+    if key == "escape" then self.skillPopup = nil self.aiPopup = nil end
     return
   end
   -- Esc 退出（二次确认）。注意：整个文件只能有**一个** keypressed，
@@ -670,6 +704,11 @@ function RoomScene:mousepressed(x, y, button)
   -- 技能说明弹层优先接管点击：关闭按钮或弹层外区域关闭，弹层内部不穿透。
   if self.skillPopup then
     if SkillDesc.shouldClose(self.skillPopup, x, y) then self.skillPopup = nil end
+    return
+  end
+  -- 「AI 推测」弹层同规则
+  if self.aiPopup then
+    if self:aiPopupShouldClose(x, y) then self.aiPopup = nil end
     return
   end
 
@@ -1296,6 +1335,169 @@ function RoomScene:openCardPopup(p, chip)
   return true
 end
 
+-- ===== AI 推测展示：右侧常驻小面板 + 「AI 推测」详情弹层 =====
+-- 文本截断走 src/ui/text_fit.lua（按 UTF-8 完整字符截，
+-- 字节级 sub 会把中文劈开导致 print 抛 Invalid UTF-8）
+
+-- 推一条 AI 动态进 feed（kind: "belief" 身份判断变化 / "think" 思维链摘要）。
+-- 上限 40 条，旧的先丢——这里只要「过程流」，完整状态看弹层。
+function RoomScene:pushAIFeed(kind, text, turn)
+  self.aiFeed = self.aiFeed or {}
+  table.insert(self.aiFeed, { kind = kind, text = tostring(text), turn = turn })
+  while #self.aiFeed > 40 do table.remove(self.aiFeed, 1) end
+end
+
+-- 右侧常驻小面板（920,400 起，约 200×190）：只显示身份判断变化（最近 5 条），
+-- 思维链摘要进弹层时间线，不在这刷屏。
+function RoomScene:drawAIPanel()
+  if not (self.agent and self.ai_mode ~= "off") then return end
+  local x, y, w, h = 920, 400, 200, 190
+  love.graphics.setColor(0.05, 0.08, 0.05, 0.72)
+  love.graphics.rectangle("fill", x, y, w, h, 8, 8)
+  love.graphics.setColor(0.82, 0.68, 0.30, 0.5)
+  love.graphics.rectangle("line", x, y, w, h, 8, 8)
+  love.graphics.setColor(1, 0.90, 0.58)
+  love.graphics.setFont(self.font_sm)
+  love.graphics.print("AI 推测", x + 10, y + 8)
+
+  local beliefs = {}
+  for _, e in ipairs(self.aiFeed or {}) do
+    if e.kind == "belief" then beliefs[#beliefs + 1] = e end
+  end
+  if #beliefs == 0 then
+    love.graphics.setColor(0.6, 0.65, 0.6)
+    love.graphics.print("AI 还没有身份判断", x + 10, y + 30)
+  else
+    local shown = math.min(5, #beliefs)
+    for i = 0, shown - 1 do
+      local e = beliefs[#beliefs - shown + 1 + i]
+      love.graphics.setColor(0.88, 0.90, 0.84)
+      -- 超宽截断（按完整字符）：小面板只有 180px 可用宽
+      love.graphics.print(TextFit.fit(e.text, w - 20), x + 10, y + 28 + i * 16)
+    end
+  end
+  love.graphics.setColor(0.55, 0.6, 0.55)
+  love.graphics.print("点【AI 推测】看完整过程", x + 10, y + h - 20)
+end
+
+-- 「AI 推测」弹层的布局（居中模态，与技能弹层同风格）
+function RoomScene:aiPopupLayout()
+  local sw, sh = love.graphics.getDimensions()
+  local w = math.min(720, sw - 80)
+  local lines = self:aiPopupLines()
+  local h = math.min(sh - 40, 96 + #lines * 17)
+  local x, y = (sw - w) / 2, (sh - h) / 2
+  return { x = x, y = y, w = w, h = h,
+    close = { x = x + w - 94, y = y + 16, w = 72, h = 30 } }
+end
+
+function RoomScene:aiPopupShouldClose(x, y)
+  local box = self:aiPopupLayout()
+  local c = box.close
+  if x >= c.x and x <= c.x + c.w and y >= c.y and y <= c.y + c.h then return true end
+  return x < box.x or x > box.x + box.w or y < box.y or y > box.y + box.h
+end
+
+-- 弹层内容行（实时读 agent.memories，弹层开着时新判断也会出现）：
+-- 区块 A 各 AI 当前判断 → 区块 B 变化时间线（含思维链摘要）→ 区块 C 长期观察
+function RoomScene:aiPopupLines()
+  local lines = {}
+  local agent = self.agent
+  if not (agent and agent.memories) then return { "（AI 未参与对局）" } end
+  local seats = {}
+  for k in pairs(agent.memories) do seats[#seats + 1] = k end
+  table.sort(seats, function(a, b) return tostring(a) < tostring(b) end)
+
+  local function playerNameOf(key)
+    for _, p in ipairs(self.players or {}) do
+      if tostring(p.seat) == tostring(key) or p.name == key then return p.name end
+    end
+    return "座位" .. tostring(key)
+  end
+
+  if #seats > 0 then
+    lines[#lines + 1] = "◆ 当前判断"
+    for _, seat in ipairs(seats) do
+      local mem = agent.memories[seat]
+      local who = playerNameOf(seat)
+      local keys = {}
+      for k in pairs(mem.beliefs or {}) do keys[#keys + 1] = k end
+      table.sort(keys)
+      if #keys == 0 then
+        lines[#lines + 1] = string.format("  %s：暂无判断", who)
+      else
+        local parts = {}
+        for _, k in ipairs(keys) do parts[#parts + 1] = k .. "=" .. mem.beliefs[k] end
+        lines[#lines + 1] = string.format("  %s：%s", who, table.concat(parts, "，"))
+      end
+    end
+  end
+
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "◆ 判断过程"
+  -- 时间线：feed 里 belief + think 混排（含理由与思维链摘要），最近 18 条
+  local feed = self.aiFeed or {}
+  local shown = math.min(18, #feed)
+  if shown == 0 then
+    lines[#lines + 1] = "  （还没有变化记录）"
+  else
+    for i = #feed - shown + 1, #feed do
+      local e = feed[i]
+      local prefix = e.kind == "think" and "  ◇ " or "  · "
+      local turnTag = e.turn and ("[第" .. tostring(e.turn) .. "轮] ") or ""
+      lines[#lines + 1] = prefix .. turnTag .. e.text
+    end
+  end
+
+  local any_note = false
+  for _, seat in ipairs(seats) do
+    local mem = agent.memories[seat]
+    if mem.notes and mem.notes ~= "" then
+      if not any_note then lines[#lines + 1] = "" lines[#lines + 1] = "◆ AI 长期观察" any_note = true end
+      lines[#lines + 1] = string.format("  %s：%s", playerNameOf(seat), mem.notes)
+    end
+  end
+  return lines
+end
+
+function RoomScene:drawAIPopup()
+  if not self.aiPopup then return end
+  local sw, sh = love.graphics.getDimensions()
+  local box = self:aiPopupLayout()
+  love.graphics.setColor(0, 0, 0, 0.68)
+  love.graphics.rectangle("fill", 0, 0, sw, sh)
+  love.graphics.setColor(0.10, 0.14, 0.10, 0.98)
+  love.graphics.rectangle("fill", box.x, box.y, box.w, box.h, 12, 12)
+  love.graphics.setColor(0.82, 0.68, 0.30)
+  love.graphics.rectangle("line", box.x, box.y, box.w, box.h, 12, 12)
+  love.graphics.setFont(self.font_mid)
+  love.graphics.setColor(1, 0.90, 0.58)
+  love.graphics.print("AI 身份推测", box.x + 24, box.y + 16)
+  love.graphics.setFont(self.font_sm)
+  love.graphics.setColor(0.72, 0.78, 0.70)
+  love.graphics.print("各 AI 座位对全场身份的判断与变化过程", box.x + 24, box.y + 47)
+
+  love.graphics.setFont(self.font_sm)
+  local max_fit = math.floor((box.h - 96) / 17)
+  local lines = self:aiPopupLines()
+  for i, ln in ipairs(lines) do
+    if i > max_fit then
+      love.graphics.setColor(0.6, 0.62, 0.58)
+      love.graphics.print("……（还有 " .. (#lines - max_fit) .. " 行，关闭后等新判断再看）",
+        box.x + 24, box.y + 78 + (i - 1) * 17)
+      break
+    end
+    love.graphics.setColor(0.90, 0.92, 0.86)
+    love.graphics.print(TextFit.fit(ln, box.w - 48), box.x + 24, box.y + 78 + (i - 1) * 17)
+  end
+
+  local c = box.close
+  love.graphics.setColor(0.28, 0.38, 0.26)
+  love.graphics.rectangle("fill", c.x, c.y, c.w, c.h, 6, 6)
+  love.graphics.setColor(1, 1, 1)
+  love.graphics.printf("关闭", c.x, c.y + 7, c.w, "center")
+end
+
 -- 桌面背景 + 底部仪表盘框体（有原版素材就画，没有就保持纯色）
 function RoomScene:drawBackground()
   if not self.skin then return end
@@ -1503,6 +1705,10 @@ function RoomScene:draw()
     love.graphics.setColor(1, 1, 1)
     love.graphics.printf(b.text, b.x, b.y + 11, b.w, "center")
   end
+
+  -- AI 推测常驻小面板（右侧空闲区）与详情弹层（模态，最顶层）
+  self:drawAIPanel()
+  self:drawAIPopup()
 
   -- 战斗日志：放在左下、手牌上方。
   -- 之前画在 x=620，正好压在自己的仪表盘上，长句还会超出右边缘。

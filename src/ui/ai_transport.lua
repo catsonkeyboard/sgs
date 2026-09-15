@@ -179,10 +179,15 @@ end
 --                                   **默认 none**：hy3 开着思维链单次要 10 秒以上，
 --                                   关掉后 1.5 秒。这是能不能玩下去的关键开关。
 -- 没配就返回 nil + 原因，让上层决定是降级还是提示用户
-local function fromEnv()
+-- opts.reasoning 可覆盖 SGS_AI_REASONING（菜单「AI 思考」开关传入；
+-- 思维链开启时单次请求可达 12 秒以上，超时同步放宽到 150 秒）
+local function fromEnv(opts)
+  opts = opts or {}
   local model = os.getenv("SGS_AI_MODEL") or "hy3"
   local mode = os.getenv("SGS_AI_TRANSPORT") or "curl"
-  local effort = os.getenv("SGS_AI_REASONING") or "none"
+  local effort = opts.reasoning or os.getenv("SGS_AI_REASONING") or "none"
+  -- 思考开启（非 none）时给足思维链 + 重试的时间余量
+  local timeout = (effort ~= "none" and effort ~= "") and 150 or 90
 
   if mode == "proxy" then
     local base = os.getenv("SGS_AI_PROXY") or "http://127.0.0.1:8899"
@@ -194,7 +199,7 @@ local function fromEnv()
       protocol = protocol,
       model = model,
       reasoning_effort = effort,
-      timeout = 90,
+      timeout = timeout,
     }), nil
   end
 
@@ -213,6 +218,7 @@ local function fromEnv()
     api_key = key,
     model = model,
     reasoning_effort = effort,
+    timeout = timeout,
   }), nil
 end
 

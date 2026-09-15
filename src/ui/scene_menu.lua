@@ -57,15 +57,30 @@ function MenuScene:init(on_start, on_net)
     { key = "all",    label = "全部",   desc = "连你的座位也交给 AI（观战模式）" },
   }
   self.ai_index = 1
-  self.ai_button = { w = 380, h = 48, ai_toggle = true, on = false,
+  -- AI 托管
+  self.ai_button = { w = 300, h = 48, ai_toggle = true, on = false,
     color = BTN_SLATE, text = "AI 托管：关", desc = "" }
   self:refreshAIButton()
 
   -- 开局选将（文档开局流程：主公 5 选 1、其余 3 选 1）；关 = 沿用随机分将
   self.draft_on = true
-  self.draft_button = { w = 380, h = 48, draft_toggle = true, on = true,
+  self.draft_button = { w = 300, h = 48, draft_toggle = true, on = true,
     color = BTN_SLATE, text = "开局选将：开", desc = "" }
   self:refreshDraftButton()
+
+  -- AI 思考三档（responses 协议的思维链强度）。默认取环境变量 SGS_AI_REASONING，
+  -- 慢一点没关系时可以开——开启后 AI 的身份推测过程更细致。
+  self.think_modes = {
+    { key = "none", label = "关", desc = "思维链关闭，单次约 1.5 秒（默认）" },
+    { key = "low",  label = "低", desc = "轻量思维链，单次数秒" },
+    { key = "high", label = "高", desc = "满血思维链，单次 12 秒以上，推测更细" },
+  }
+  local env_effort = os.getenv("SGS_AI_REASONING") or "none"
+  self.think_index = (env_effort == "low") and 2
+    or (env_effort ~= "none" and env_effort ~= "" ) and 3 or 1
+  self.think_button = { w = 300, h = 48, think_toggle = true, on = false,
+    color = BTN_SLATE, text = "AI 思考：关", desc = "" }
+  self:refreshThinkButton()
 
   self.t = 0
   self:relayout(1130, 650)
@@ -90,12 +105,13 @@ function MenuScene:relayout(w, h)
   self.buttons[4].x, self.buttons[4].y = bx, math.floor(h * 0.48) + 88
   self.buttons[5].w, self.buttons[5].h = bw, 58
   self.buttons[5].x, self.buttons[5].y = bx + bw + gap2, math.floor(h * 0.48) + 88
-  -- 第三行：两个开关
-  local cw, gap3 = 380, 24
-  local cx = (w - (2 * cw + gap3)) / 2
+  -- 第三行：三个开关（AI 托管 / 开局选将 / AI 思考）
+  local cw, gap3 = 300, 24
+  local cx = (w - (3 * cw + 2 * gap3)) / 2
   local cy = math.floor(h * 0.48) + 170
   self.ai_button.x, self.ai_button.y = cx, cy
   self.draft_button.x, self.draft_button.y = cx + cw + gap3, cy
+  self.think_button.x, self.think_button.y = cx + (cw + gap3) * 2, cy
   self.row_y = math.floor(h * 0.48) -- 供 draw 画开关说明行
 end
 
@@ -112,6 +128,13 @@ function MenuScene:refreshDraftButton()
     and "主公 5 选 1、其余 3 选 1（文档开局流程）"
     or "随机分将（跳过选将直接开局）"
   self.draft_button.on = self.draft_on
+end
+
+function MenuScene:refreshThinkButton()
+  local m = self.think_modes[self.think_index]
+  self.think_button.text = "AI 思考：" .. m.label
+  self.think_button.desc = m.desc .. "（Responses 协议；联机以服务端环境变量为准）"
+  self.think_button.on = self.think_index ~= 1
 end
 
 function MenuScene:update(dt)
@@ -255,9 +278,9 @@ function MenuScene:draw()
   -- 开关的说明挂在按钮下方
   love.graphics.setColor(0.62, 0.66, 0.60)
   love.graphics.setFont(self.font_sm)
-  for _, b in ipairs({ self.ai_button, self.draft_button }) do
+  for _, b in ipairs({ self.ai_button, self.draft_button, self.think_button }) do
     self:drawButton(b)
-    love.graphics.printf(b.desc, b.x - 40, self.row_y + 170 + b.h + 8, b.w + 80, "center")
+    love.graphics.printf(b.desc, b.x - 20, self.row_y + 170 + b.h + 8, b.w + 40, "center")
   end
 
   -- ===== 页脚 =====
@@ -284,13 +307,20 @@ function MenuScene:mousepressed(x, y, button)
     return
   end
 
+  local tb = self.think_button
+  if pointIn(tb, x, y) then
+    self.think_index = (self.think_index % #self.think_modes) + 1
+    self:refreshThinkButton()
+    return
+  end
+
   for _, b in ipairs(self.buttons) do
     if pointIn(b, x, y) then
       if b.net then
         if self.on_net then self.on_net() end
       else
         self.on_start(b.mode, b.size, self.ai_modes[self.ai_index].key,
-          self.draft_on)
+          self.draft_on, self.think_modes[self.think_index].key)
       end
       return
     end

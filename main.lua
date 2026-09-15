@@ -17,11 +17,12 @@ local startNetScene
 
 -- ai_mode: "off" / "others" / "all"，由菜单上的 AI 托管按钮决定；
 -- draft: 是否开局选将（文档开局流程：主公 5 选 1、其余 3 选 1），
--- 由菜单上的「开局选将」开关决定
-startGame = function(mode, size, ai_mode, draft)
+--   由菜单上的「开局选将」开关决定；
+-- ai_reasoning: "none" / "low" / "high"，菜单「AI 思考」开关，覆盖 SGS_AI_REASONING
+startGame = function(mode, size, ai_mode, draft, ai_reasoning)
   local RoomScene = require "src.ui.scene_room"
   current_scene = RoomScene.create(backToMenu, mode, size, ai_mode,
-    { draft = draft ~= false })
+    { draft = draft ~= false, ai_reasoning = ai_reasoning })
 end
 
 backToMenu = function()

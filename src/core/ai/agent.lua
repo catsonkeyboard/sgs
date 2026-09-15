@@ -70,6 +70,11 @@ function Agent:init(opts)
   self.max_steps = opts.max_steps or 60
   self.on_decision = opts.on_decision
   self.on_error = opts.on_error
+  -- on_beliefs(changes, ctx)：身份判断发生变化时回调（UI 展示猜测过程用）。
+  --   changes = { {name=, from=, to=} }，ctx = {player=, reason=, turn=}
+  -- on_reasoning(player_name, summary)：模型返回思维链摘要时回调（思考开启时才有）
+  self.on_beliefs = opts.on_beliefs
+  self.on_reasoning = opts.on_reasoning
   self.current = nil
   self.memories = {}   -- seat -> Memory
   self.stats = {
@@ -169,10 +174,14 @@ function Agent:_poll(req, room)
 
   self.stats.by_ai = self.stats.by_ai + 1
   self:_remember(req, room, cur, resp, extra)
+  if res.reasoning and self.on_reasoning then
+    pcall(self.on_reasoning, req.player.name, res.reasoning)
+  end
   if self.on_decision then
     pcall(self.on_decision, {
       req = req, room = room, raw = res.text, resp = resp, extra = extra,
       prompt = cur.prompt, actions = cur.actions, memory = cur.memory,
+      reasoning = res.reasoning,
     })
   end
   self.current = nil
@@ -295,7 +304,14 @@ function Agent:_remember(req, room, cur, resp, extra)
     reason = (extra and extra.reason) or "",
   })
   if extra and extra.beliefs then
-    mem:updateBeliefs(extra.beliefs, makeNameOf(room))
+    local changes = mem:updateBeliefs(extra.beliefs, makeNameOf(room), {
+      turn = room.turn_count, reason = extra.reason,
+    })
+    if #changes > 0 and self.on_beliefs then
+      pcall(self.on_beliefs, changes, {
+        player = req.player, reason = extra.reason, turn = room.turn_count,
+      })
+    end
   end
   if extra and extra.note then mem:setNotes(extra.note) end
 end
