@@ -24,7 +24,7 @@ DeckSpec.STANDARD = {
   { S, 2, "double_sword" }, { S, 2, "eight_diagram" }, { S, 2, "ice_sword" }, -- EX
   { S, 3, "dismantlement" }, { S, 3, "snatch" },
   { S, 4, "dismantlement" }, { S, 4, "snatch" },
-  { S, 5, "blade" }, { S, 5, "defensive_horse" }, -- 绝影
+  { S, 5, "blade" }, { S, 5, "jueying" },
   { S, 6, "indulgence" }, { S, 6, "qinggang_sword" },
   { S, 7, "slash" }, { S, 7, "savage_assault" },
   { S, 8, "slash" }, { S, 8, "slash" },
@@ -32,14 +32,14 @@ DeckSpec.STANDARD = {
   { S, 10, "slash" }, { S, 10, "slash" },
   { S, 11, "snatch" }, { S, 11, "nullification" },
   { S, 12, "dismantlement" }, { S, 12, "spear" },
-  { S, 13, "savage_assault" }, { S, 13, "offensive_horse" }, -- 大宛
+  { S, 13, "savage_assault" }, { S, 13, "dayuan" },
 
   -- ==================== ♥ 红桃 27 张 ====================
   { H, 1, "god_salvation" }, { H, 1, "archery_attack" },
   { H, 2, "dodge" }, { H, 2, "dodge" },
   { H, 3, "peach" }, { H, 3, "amazing_grace" },
   { H, 4, "peach" }, { H, 4, "amazing_grace" },
-  { H, 5, "kylin_bow" }, { H, 5, "offensive_horse" }, -- 赤兔
+  { H, 5, "kylin_bow" }, { H, 5, "chitu" },
   { H, 6, "peach" }, { H, 6, "indulgence" },
   { H, 7, "peach" }, { H, 7, "ex_nihilo" },
   { H, 8, "peach" }, { H, 8, "ex_nihilo" },
@@ -47,14 +47,14 @@ DeckSpec.STANDARD = {
   { H, 10, "slash" }, { H, 10, "slash" },
   { H, 11, "slash" }, { H, 11, "ex_nihilo" },
   { H, 12, "peach" }, { H, 12, "dismantlement" }, { H, 12, "lightning" }, -- EX
-  { H, 13, "dodge" }, { H, 13, "defensive_horse" }, -- 爪黄飞电
+  { H, 13, "dodge" }, { H, 13, "zhuahuangfeidian" },
 
   -- ==================== ♣ 梅花 27 张 ====================
   { C, 1, "duel" }, { C, 1, "crossbow" },
   { C, 2, "slash" }, { C, 2, "eight_diagram" }, { C, 2, "renwang_shield" }, -- EX
   { C, 3, "slash" }, { C, 3, "dismantlement" },
   { C, 4, "slash" }, { C, 4, "dismantlement" },
-  { C, 5, "slash" }, { C, 5, "defensive_horse" }, -- 的卢
+  { C, 5, "slash" }, { C, 5, "dilu" },
   { C, 6, "slash" }, { C, 6, "indulgence" },
   { C, 7, "slash" }, { C, 7, "savage_assault" },
   { C, 8, "slash" }, { C, 8, "slash" },
@@ -77,7 +77,7 @@ DeckSpec.STANDARD = {
   { D, 10, "slash" }, { D, 10, "dodge" },
   { D, 11, "dodge" }, { D, 11, "dodge" },
   { D, 12, "peach" }, { D, 12, "halberd" }, { D, 12, "nullification" }, -- EX
-  { D, 13, "slash" }, { D, 13, "offensive_horse" }, -- 紫骍
+  { D, 13, "slash" }, { D, 13, "zixing" },
 }
 
 -- 牌名 -> 文档标注的张数，用于校验表本身没有写错
@@ -89,7 +89,8 @@ DeckSpec.EXPECTED = {
   crossbow = 2, eight_diagram = 2,
   double_sword = 1, ice_sword = 1, renwang_shield = 1, qinggang_sword = 1,
   blade = 1, spear = 1, axe = 1, halberd = 1, kylin_bow = 1,
-  offensive_horse = 3, defensive_horse = 3,
+  jueying = 1, zhuahuangfeidian = 1, dilu = 1,
+  dayuan = 1, chitu = 1, zixing = 1,
 }
 
 -- 统计某张表里的牌名张数（自检用）

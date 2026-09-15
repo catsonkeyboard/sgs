@@ -461,6 +461,41 @@ Cards.define("vine", {
   desc = "火焰伤害 +1；【南蛮入侵】【万箭齐发】与普通【杀】无效",
 })
 
+-- ===== 六匹马（标准版）=====
+-- 牌名必须用**具体名字**（绝影/的卢/…），不能用「防御马」这类类别名：
+--   1) 卡图按牌名找文件（image/card/<PinyinCamel>.png），类别名找不到图
+--   2) 同类别多张牌在界面上无法区分（两张防御马看不出是哪两匹）
+-- 距离修正由 Player:distanceModifier / defenseModifier 按**装备槽位**结算
+-- （见 player.lua，读 equips.offensive_horse / equips.defensive_horse），
+-- 与牌名无关，所以这里换名不影响距离逻辑。
+-- 花色点数见 deck_spec.lua，与资料《三国杀标准版身份局资料》一致。
+Cards.define("jueying", {
+  zh = "绝影", ctype = T.Equip, equip = "defensive_horse", range = 0,
+  desc = "其他角色计算与你的距离时 +1",
+})
+Cards.define("zhuahuangfeidian", {
+  zh = "爪黄飞电", ctype = T.Equip, equip = "defensive_horse", range = 0,
+  desc = "其他角色计算与你的距离时 +1",
+})
+Cards.define("dilu", {
+  zh = "的卢", ctype = T.Equip, equip = "defensive_horse", range = 0,
+  desc = "其他角色计算与你的距离时 +1",
+})
+Cards.define("dayuan", {
+  zh = "大宛", ctype = T.Equip, equip = "offensive_horse", range = 0,
+  desc = "你计算与其他角色的距离时 -1",
+})
+Cards.define("chitu", {
+  zh = "赤兔", ctype = T.Equip, equip = "offensive_horse", range = 0,
+  desc = "你计算与其他角色的距离时 -1",
+})
+Cards.define("zixing", {
+  zh = "紫骍", ctype = T.Equip, equip = "offensive_horse", range = 0,
+  desc = "你计算与其他角色的距离时 -1",
+})
+
+-- 类别名保留为「通用牌」，但**标准牌堆不再使用**（避免界面上出现无名马）。
+-- 保留是为了兼容 DIY 扩展里可能直接引用 defensive_horse 的写法。
 Cards.define("offensive_horse", {
   zh = "进攻马", ctype = T.Equip, equip = "offensive_horse", range = 0,
   desc = "你与其他角色的距离 -1",

@@ -2685,6 +2685,86 @@ do
     .. table.concat(bad, "；") .. "）")
 end
 
+print("\n--- 六匹马：牌名 / 花色点数 / 距离 ---")
+
+do
+  -- 回归：以前牌堆用「防御马/进攻马」这类**类别名**，导致
+  --   1) 界面显示通用名（看不到的卢/绝影…）
+  --   2) 6 匹马全部没有卡图（卡图按具体牌名找文件）
+  local HORSES = {
+    { "jueying", "绝影", "defensive_horse", Card.Suit.Spade, 5 },
+    { "zhuahuangfeidian", "爪黄飞电", "defensive_horse", Card.Suit.Heart, 13 },
+    { "dilu", "的卢", "defensive_horse", Card.Suit.Club, 5 },
+    { "dayuan", "大宛", "offensive_horse", Card.Suit.Spade, 13 },
+    { "chitu", "赤兔", "offensive_horse", Card.Suit.Heart, 5 },
+    { "zixing", "紫骍", "offensive_horse", Card.Suit.Diamond, 13 },
+  }
+
+  for _, h in ipairs(HORSES) do
+    local key, zh, slot, suit, num = h[1], h[2], h[3], h[4], h[5]
+    local d = Cards.get(key)
+    check(d ~= nil, "应定义马【" .. zh .. "】（key=" .. key .. "）")
+    if d then
+      check(d.zh == zh, string.format("%s 的中文名应为%s（实得 %s）", key, zh, d.zh))
+      check(d.equip == slot, string.format("【%s】应占 %s 槽（实得 %s）", zh, slot, tostring(d.equip)))
+    end
+  end
+
+  -- 牌堆里这 6 匹各一张，且花色点数与资料一致
+  local SUIT_ZH = { [Card.Suit.Spade] = "♠", [Card.Suit.Heart] = "♥",
+    [Card.Suit.Club] = "♣", [Card.Suit.Diamond] = "♦" }
+  local cnt, bySuitNum = {}, {}
+  for _, row in ipairs(require("src.core.deck_spec").STANDARD) do
+    cnt[row[3]] = (cnt[row[3]] or 0) + 1
+    bySuitNum[row[1] .. ":" .. row[2]] = row[3]
+  end
+  for _, h in ipairs(HORSES) do
+    local key, zh, _, suit, num = h[1], h[2], h[3], h[4], h[5]
+    check(cnt[key] == 1, string.format("牌堆里【%s】应恰好 1 张（实得 %d）", zh, cnt[key] or 0))
+    check(bySuitNum[suit .. ":" .. num] == key,
+      string.format("%s%d 应为【%s】（实得 %s）", SUIT_ZH[suit] or suit, num, zh,
+        tostring(bySuitNum[suit .. ":" .. num])))
+  end
+
+  -- 牌堆不应再使用类别名（否则界面上又会出现无名马）
+  check((cnt["offensive_horse"] or 0) == 0 and (cnt["defensive_horse"] or 0) == 0,
+    "标准牌堆不应再使用「进攻马/防御马」类别名")
+
+  -- 距离：5 人局座位 1↔3 基础距离 2
+  local eng = Engine.create()
+  Standard.setup(eng)
+  local function distWith(key, def)
+    local ps = {}
+    for i = 1, 5 do
+      table.insert(ps, Player.create("P" .. i, eng:getGeneral("白板武将"), i, false))
+    end
+    local r = Room.create(eng, ps)
+    r:setupRoles(Standard.makeRng(1))
+    r:start()
+    local c = Card.create(900, key, Card.Suit.Club, 5, Card.Type.Equip)
+    if def then ps[3]:equipCard(c, "defensive_horse") else ps[1]:equipCard(c, "offensive_horse") end
+    return r:distance(ps[1], ps[3])
+  end
+  check(distWith("jueying", true) == 3, "【绝影】应让其他人算你 +1（2 -> 3）")
+  check(distWith("zhuahuangfeidian", true) == 3, "【爪黄飞电】应 +1")
+  check(distWith("dilu", true) == 3, "【的卢】应 +1")
+  check(distWith("dayuan", false) == 1, "【大宛】应让你算别人 -1（2 -> 1）")
+  check(distWith("chitu", false) == 1, "【赤兔】应 -1")
+  check(distWith("zixing", false) == 1, "【紫骍】应 -1")
+
+  -- 一攻一防同时装备应互相抵消（2 - 1 + 1 = 2）
+  local eng2 = Engine.create()
+  Standard.setup(eng2)
+  local ps2 = {}
+  for i = 1, 5 do table.insert(ps2, Player.create("P" .. i, eng2:getGeneral("白板武将"), i, false)) end
+  local r2 = Room.create(eng2, ps2)
+  r2:setupRoles(Standard.makeRng(1))
+  r2:start()
+  ps2[1]:equipCard(Card.create(901, "chitu", Card.Suit.Heart, 5, Card.Type.Equip), "offensive_horse")
+  ps2[3]:equipCard(Card.create(902, "dilu", Card.Suit.Club, 5, Card.Type.Equip), "defensive_horse")
+  check(r2:distance(ps2[1], ps2[3]) == 2, "进攻马与防御马应互相抵消（2-1+1=2）")
+end
+
 print("\n--- 标准版牌堆（108 张固定花色点数）---")
 
 do

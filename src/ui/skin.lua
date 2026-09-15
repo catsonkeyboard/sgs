@@ -119,6 +119,7 @@ local CARD_CAMEL = {
   ["vine"] = "Vine", ["renwang_shield"] = "RenWangShield",
   ["chitu"] = "ChiTu", ["dayuan"] = "DaYuan", ["dilu"] = "DiLu",
   ["jueying"] = "JueYing", ["zhuahuangfeidian"] = "ZhuaHuangFeiDian",
+  ["zixing"] = "ZiXing",
   ["dilu_horse"] = "DiLu",
 }
 
