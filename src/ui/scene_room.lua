@@ -242,6 +242,8 @@ function RoomScene:beginPlay()
   self.agent = Agent.create({
     transport = transport,
     timeout = thinking_on and 140 or nil,
+    -- 「正在思考」提示里的名字与面板同款（AI（武将）/BOT（武将））
+    name_of = function(p) return self:displayName(p) end,
     -- 用 love.timer 而不是 os.time：os.time 只有秒级精度，超时判断会差一整秒
     clock = love.timer and love.timer.getTime or nil,
     on_error = function(reason)
@@ -249,7 +251,7 @@ function RoomScene:beginPlay()
     end,
     -- 身份判断变化 → 右侧「AI 推测」面板与弹层时间线
     on_beliefs = function(changes, ctx)
-      local who = ctx and ctx.player and ctx.player.name or "AI"
+      local who = ctx and ctx.player and self:displayName(ctx.player) or "AI"
       for _, c in ipairs(changes or {}) do
         local line = string.format("%s 判 %s：%s→%s", who, c.name, c.from, c.to)
         if ctx.reason and ctx.reason ~= "" then
@@ -358,7 +360,7 @@ end
 
 function RoomScene:openSkillPopup(p)
   if not (p and p.general) then return false end
-  self.skillPopup = SkillDesc.open(p.name, p.general.name,
+  self.skillPopup = SkillDesc.open(self:displayName(p), p.general.name,
     SkillDesc.entriesFromSkills(p.general.skills))
   return true
 end
@@ -622,7 +624,7 @@ function RoomScene:keypressed(key)
   local back = p.is_human and "human" or "bot"
   local next_mode = (p:controlMode() == "ai") and back or "ai"
   p:setControl(next_mode)
-  self.msg = string.format("%d 号位（%s）→ %s", n, p.name, CONTROL_ZH[next_mode] or next_mode)
+  self.msg = string.format("%d 号位（%s）→ %s", n, self:displayName(p), CONTROL_ZH[next_mode] or next_mode)
   if not self.room.game_over then
     self.driver_state = self.driver:advance()
   end
@@ -649,12 +651,12 @@ function RoomScene:dragStatusText()
   local text = string.format("攻击范围 %d", reach)
   local p = self:panelAt(mx, my)
   if p and p ~= self.human then
-    text = text .. string.format(" · 到 %s 距离 %d", p.name,
+    text = text .. string.format(" · 到 %s 距离 %d", self:displayName(p),
       self.room:distance(self.human, p))
   end
   if not p then return text end
   if self:isValidTarget(p) then
-    return text .. " · 松手对 " .. p.name .. " 使用【" .. card:zhName() .. "】"
+    return text .. " · 松手对 " .. self:displayName(p) .. " 使用【" .. card:zhName() .. "】"
   end
   return text .. " · " .. (self:rejectReason(p) or "该目标不合法")
 end
@@ -970,7 +972,7 @@ function RoomScene:playPresent(e)
     if d and d.card then
       if audio then audio:playCard(d.card.name, d.from and d.from.female and "female" or "male") end
       if d.from and fx then
-        fx:showBanner(string.format("%s 使用【%s】", d.from.name, d.card:zhName()))
+        fx:showBanner(string.format("%s 使用【%s】", self:displayName(d.from), d.card:zhName()))
       end
       self:presentCardFlight(d.card, d.from, d.to)
     end
@@ -981,7 +983,7 @@ function RoomScene:playPresent(e)
         audio:playCard(d.card.name, d.player.female and "female" or "male")
       end
       if fx then
-        fx:showBanner(string.format("%s 打出【%s】", d.player.name, d.card:zhName()),
+        fx:showBanner(string.format("%s 打出【%s】", self:displayName(d.player), d.card:zhName()),
           { 0.75, 0.9, 1 })
         local a = self:anchorOf(d.player)
         if a then
@@ -1001,7 +1003,7 @@ function RoomScene:playPresent(e)
     if d and d.card and d.player then
       if audio then audio:playEquip(d.slot) end
       if fx then
-        fx:showBanner(string.format("%s 装备【%s】", d.player.name, d.card:zhName()),
+        fx:showBanner(string.format("%s 装备【%s】", self:displayName(d.player), d.card:zhName()),
           { 0.8, 0.95, 0.75 })
         local a = self:anchorOf(d.player)
         if a then
@@ -1045,7 +1047,7 @@ function RoomScene:playPresent(e)
     if not d then return end
     if audio then audio:playSkill(d.skill) end
     if d.player then
-      if fx then fx:showBanner(string.format("%s 发动【%s】", d.player.name, tostring(d.skill)), { 0.95, 0.85, 0.35 }) end
+      if fx then fx:showBanner(string.format("%s 发动【%s】", self:displayName(d.player), tostring(d.skill)), { 0.95, 0.85, 0.35 }) end
       local a = self:anchorOf(d.player)
       if a and fx then
         fx:flashPanel(a[1], a[2], self.panelW or 210, self.panelH or 96, { 0.95, 0.85, 0.35 })
@@ -1057,7 +1059,7 @@ function RoomScene:playPresent(e)
         -- 阵亡语音按台词处理：播完前演示队列不推进
         if not (d.key and audio:playVoice(d.key)) then audio:playVoice("death") end
       end
-      if fx then fx:showBanner(string.format("%s 阵亡", d.player.name), { 0.9, 0.3, 0.25 }) end
+      if fx then fx:showBanner(string.format("%s 阵亡", self:displayName(d.player)), { 0.9, 0.3, 0.25 }) end
     end
   end
 end
@@ -1138,6 +1140,18 @@ function RoomScene:anchorOf(p)
   return nil
 end
 
+-- 牌桌上的显示名：按**当前控制模式**动态生成——BOT 规则驱动显示 BOT（武将），
+-- AI（LLM 驱动）显示 AI（武将），自己显示 你（武将）。控制模式随时可切
+-- （数字键），所以不能在建玩家时起死名字。p.name 保留原值给日志/协议用。
+function RoomScene:displayName(p)
+  if not p then return "?" end
+  local g = p.general and p.general.name or "-"
+  local mode = p.controlMode and p:controlMode() or "bot"
+  if mode == "ai" then return "AI（" .. g .. "）" end
+  if mode == "human" then return "你（" .. g .. "）" end
+  return "BOT（" .. g .. "）"
+end
+
 -- 势力图标：image/kingdom/icon/<kingdom>.png
 function RoomScene:kingdomIcon(p)
   if not (self.skin and p and p.kingdom) then return nil end
@@ -1214,7 +1228,7 @@ function RoomScene:drawPlayerPanel(p, x, y, highlighted)
     love.graphics.setColor(0.95, 0.8, 0.25)
     love.graphics.rectangle("line", x, y, PANEL_W, PANEL_H, 8, 8)
   end
-  if self.skillPopup and self.skillPopup.player_name == p.name then
+  if self.skillPopup and self.skillPopup.player_name == self:displayName(p) then
     love.graphics.setColor(0.95, 0.72, 0.22)
     love.graphics.rectangle("line", x + 6, y + 22, 48, 48, 5, 5)
   end
@@ -1239,7 +1253,7 @@ function RoomScene:drawPlayerPanel(p, x, y, highlighted)
 
   love.graphics.setFont(self.font_sm)
   love.graphics.setColor(1, 0.92, 0.75)
-  love.graphics.print(p.name .. "（" .. (p.general and p.general.name or "-") .. "）", x + 8, y + 6)
+  love.graphics.print(self:displayName(p), x + 8, y + 6)
 
   -- 身份：本人、主公、已阵亡者可见
   if p.role and (p == self.human or p.role_revealed or not p.alive) then
@@ -1329,7 +1343,7 @@ function RoomScene:openCardPopup(p, chip)
   elseif not desc and chip.kind == "defensive_horse" then
     desc = "其他角色计算与你的距离时 +1。"
   end
-  self.skillPopup = SkillDesc.open(p.name, chip.kind == "judge" and "判定区" or "装备区",
+  self.skillPopup = SkillDesc.open(self:displayName(p), chip.kind == "judge" and "判定区" or "装备区",
     { { name = chip.card:zhName(), desc = desc or "暂无详细说明。" } })
   self.skillPopup.subtitle = "卡牌说明"
   return true
@@ -1682,7 +1696,7 @@ function RoomScene:draw()
       if self.driver_state == "thinking" and self.agent then
         prompt = (self.agent:thinkingLabel() or "AI 思考中") .. "…"
       else
-        prompt = "等待 " .. req.player.name .. " 响应…"
+        prompt = "等待 " .. self:displayName(req.player) .. " 响应…"
       end
     end
   end

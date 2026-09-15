@@ -75,6 +75,8 @@ function Agent:init(opts)
   -- on_reasoning(player_name, summary)：模型返回思维链摘要时回调（思考开启时才有）
   self.on_beliefs = opts.on_beliefs
   self.on_reasoning = opts.on_reasoning
+  -- thinkingLabel 里玩家名的显示形式（UI 注入，如 "AI（张飞）"）；未注入用原名
+  self.name_of = opts.name_of
   self.current = nil
   self.memories = {}   -- seat -> Memory
   self.stats = {
@@ -326,8 +328,10 @@ function Agent:thinkingLabel()
   local cur = self.current
   if not cur then return nil end
   local r = cur.prompt and cur.prompt.view and cur.prompt.view.request
-  local base = string.format("%s 正在思考：%s",
-    cur.req.player.name, (r and r.ask) or cur.req.type)
+  -- 显示名可由 UI 注入（name_of）：牌桌上按控制模式显示 AI（武将）/BOT（武将），
+  -- 与面板一致；未注入时退回 player.name
+  local who = self.name_of and self.name_of(cur.req.player) or cur.req.player.name
+  local base = string.format("%s 正在思考：%s", who, (r and r.ask) or cur.req.type)
   if cur.attempt and cur.attempt > 1 then
     return base .. string.format("（第 %d 次尝试）", cur.attempt)
   end

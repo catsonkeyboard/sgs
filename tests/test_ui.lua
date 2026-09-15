@@ -918,6 +918,39 @@ do
     .. (ok2 and "" or ("：" .. tostring(err2))))
 end
 
+print("\n--- 按控制模式显示 BOT（武将）/ AI（武将） ---")
+
+do
+  local sc = RoomScene.create(function() end, "identity", 5, "others", { seed = 42 })
+  local p2 = sc.players[2]
+  local g2 = p2.general.name
+  check(p2:controlMode() == "ai", "AI 托管模式下其余座位应为 ai 控制")
+  check(sc:displayName(p2) == "AI（" .. g2 .. "）",
+    "AI 座位面板应显示 AI（武将）（实得 " .. sc:displayName(p2) .. "）")
+  check(sc:displayName(sc.human) == "你（" .. sc.human.general.name .. "）",
+    "人类座位应显示 你（武将）（实得 " .. sc:displayName(sc.human) .. "）")
+
+  -- 数字键切回规则 BOT：显示名应跟着变（控制模式运行时可切，不能写死）
+  sc:keypressed("2")
+  check(p2:controlMode() == "bot", "按 2 应切回规则 BOT")
+  check(sc:displayName(p2) == "BOT（" .. g2 .. "）",
+    "切回 BOT 后应显示 BOT（武将）（实得 " .. sc:displayName(p2) .. "）")
+  sc:keypressed("2")
+  check(sc:displayName(p2) == "AI（" .. g2 .. "）", "再切回 AI 应恢复 AI（武将）")
+
+  -- 「正在思考」提示的名字与面板同源
+  check(sc.agent.name_of ~= nil
+      and sc.agent.name_of(p2) == sc:displayName(p2),
+    "thinkingLabel 的名字解析应与 displayName 一致")
+  sc:keypressed("2")
+  check(sc.agent.name_of(p2) == sc:displayName(p2), "切换后两者应保持一致")
+
+  -- 默认 ai_mode=off：全部显示 BOT（武将）
+  local sc2 = RoomScene.create(function() end, "identity", 5, "off", { seed = 42 })
+  check(sc2:displayName(sc2.players[2]) == "BOT（" .. sc2.players[2].general.name .. "）",
+    "未开托管时应显示 BOT（武将）")
+end
+
 print(string.format("\n===== UI: %d passed, %d failed =====", passes, failures))
 if failures > 0 then error("UI 测试失败", 0) end
 
