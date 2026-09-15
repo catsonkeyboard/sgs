@@ -696,6 +696,57 @@ do
   check(#fx.arrows == 0 and #fx.flies == 0, "动画到期后应清理干净")
 end
 
+print("\n--- 主菜单 ---")
+
+do
+  local Menu = require "src.ui.scene_menu"
+  local picked = {}
+  local m = Menu.create(function(mode, size, ai, draft)
+    picked[#picked + 1] = { mode = mode, size = size, ai = ai, draft = draft }
+  end, function() picked[#picked + 1] = "net" end)
+
+  local ok_draw, err = pcall(function() m:draw() end)
+  check(ok_draw, "主菜单绘制不应报错" .. (ok_draw and "" or ("：" .. tostring(err))))
+  local ok_upd, err_upd = pcall(function() m:update(0.016) end)
+  check(ok_upd, "主菜单 update（悬停轮询）不应报错"
+    .. (ok_upd and "" or ("：" .. tostring(err_upd))))
+
+  -- AI 托管三档循环：关 → 其他座位 → 全部 → 关
+  local ab = m.ai_button
+  m:mousepressed(ab.x + 1, ab.y + 1, 1)
+  check(m.ai_button.text == "AI 托管：其他座位", "AI 托管点击应切到「其他座位」")
+  m:mousepressed(ab.x + 1, ab.y + 1, 1)
+  check(m.ai_button.text == "AI 托管：全部", "AI 托管再点应切到「全部」")
+  m:mousepressed(ab.x + 1, ab.y + 1, 1)
+  check(m.ai_button.text == "AI 托管：关", "AI 托管三轮应切回「关」")
+
+  -- 开局选将开关
+  local db = m.draft_button
+  m:mousepressed(db.x + 1, db.y + 1, 1)
+  check(m.draft_button.text == "开局选将：关", "开局选将点击应切到「关」")
+  m:mousepressed(db.x + 1, db.y + 1, 1)
+  check(m.draft_button.text == "开局选将：开", "再点应切回「开」")
+
+  -- 点身份局（5 人）：应以 identity/5/当前 AI 档/选将开 回调
+  local b5, bnet
+  for _, b in ipairs(m.buttons) do
+    if b.size == 5 then b5 = b elseif b.net then bnet = b end
+  end
+  m:mousepressed(b5.x + 1, b5.y + 1, 1)
+  check(#picked == 1 and picked[1].mode == "identity" and picked[1].size == 5
+      and picked[1].ai == "off" and picked[1].draft == true,
+    "点身份局（5 人）应回调 identity/5/off/选将开（实得 " .. #picked .. " 个回调）")
+  m:mousepressed(bnet.x + 1, bnet.y + 1, 1)
+  check(picked[2] == "net", "联机按钮应触发 on_net")
+
+  -- 布局自适应：换窗口尺寸后矩形应整体居中
+  m:relayout(1600, 900)
+  local total = m.buttons[3].x + m.buttons[3].w - m.buttons[1].x
+  check(math.abs((m.buttons[1].x + total / 2) - 800) < 1,
+    "身份局一排应在新窗口宽度下居中（中心偏差 "
+      .. tostring(math.abs((m.buttons[1].x + total / 2) - 800)) .. "px）")
+end
+
 print(string.format("\n===== UI: %d passed, %d failed =====", passes, failures))
 if failures > 0 then error("UI 测试失败", 0) end
 
