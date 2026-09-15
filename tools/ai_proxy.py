@@ -12,7 +12,7 @@ TLS 交给 Python —— 标准库 urllib 就能做，零依赖、跨平台一�
   - 重试、超时、多模型路由都可以在这里加，不用改 Lua。
 
 用法：
-    export SGS_AI_URL="https://api.openai.com/v1/chat/completions"
+    export SGS_AI_URL="https://tokenhub.tencentmaas.com/v1/responses"
     export SGS_AI_KEY="sk-..."
     ./tools/ai_proxy.py                 # 默认监听 127.0.0.1:8899
     ./tools/ai_proxy.py --port 9000 -v  # 换端口 + 打印日志
@@ -124,7 +124,7 @@ def main():
 
     if not upstream:
         log("警告：未设置 SGS_AI_URL，代理起来后只能回健康检查。")
-        log("      export SGS_AI_URL=https://api.openai.com/v1/chat/completions")
+        log("      export SGS_AI_URL=https://tokenhub.tencentmaas.com/v1/responses")
 
     ProxyHandler.upstream = upstream
     ProxyHandler.api_key = api_key

@@ -68,6 +68,9 @@ diy/ 示例扩展的武将同样**默认不进随机池**（只供测试验证�
 
 ## AI 玩家（LLM 驱动）
 
+最短启动路径（TokenHub hy3 配置 / 环境变量表 / 常见问题）见
+[**AI启动指南.md**](AI启动指南.md)。
+
 任意座位都能交给 AI：菜单上「AI 托管」切三档（关 / 其他座位 / 全部），
 进牌桌后按**数字键 1..N** 可随时切单个座位（想让 AI 替你打一手就按 1）。
 
@@ -75,7 +78,7 @@ diy/ 示例扩展的武将同样**默认不进随机池**（只供测试验证�
 
 ```bash
 # 终端 1
-export SGS_AI_URL="https://api.openai.com/v1/chat/completions"
+export SGS_AI_URL="https://tokenhub.tencentmaas.com/v1/responses"
 export SGS_AI_KEY="sk-..."
 ./tools/ai_proxy.py                 # 默认 127.0.0.1:8899，加 -v 看完整请求/响应
 

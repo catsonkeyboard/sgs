@@ -3,7 +3,7 @@
 -- 用法（从项目根目录）：
 --
 --   方式一，走本机代理（推荐）：
---     export SGS_AI_URL="https://api.openai.com/v1/chat/completions"
+--     export SGS_AI_URL="https://tokenhub.tencentmaas.com/v1/responses"
 --     export SGS_AI_KEY="sk-..."
 --     ./tools/ai_proxy.py &              # 另开一个终端，或加 & 放后台
 --     export SGS_AI_TRANSPORT=proxy
