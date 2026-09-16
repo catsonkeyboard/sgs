@@ -12,6 +12,7 @@ local Cards = require "src.core.cards"
 local Card = require "src.core.card"
 local Player = require "src.core.player"
 local Generals = require "src.core.generals"
+local Utf8 = require "src.core.utf8"
 
 local Room = class("Room")
 
@@ -308,7 +309,9 @@ function Room:lordSupply(p, card_name)
   end
   if not skill then return nil end
 
-  local zh = (card_name == "dodge") and "闪" or "杀"
+  -- 牌名统一走卡牌定义的 zh（此前写死 dodge→闪/其余→杀，桃会显示错）
+  local def = Cards.get(card_name)
+  local zh = (def and def.zh) or card_name or "?"
   self:log("%s 发动【%s】，向其他%s势力角色求助一张【%s】",
     p.name, skill.name, KINGDOM_ZH[p.kingdom] or p.kingdom, zh)
 
@@ -534,6 +537,9 @@ end
 
 function Room:log(fmt, ...)
   local msg = string.format(fmt, ...)
+  -- 消毒：日志可能收到任意来源文本（LLM 输出/DIY 扩展/网络），
+  -- 坏字节进 loglines 会让 UI 的 print 抛 UTF-8 decoding error（实测踩过）
+  msg = Utf8.sanitize(msg)
   table.insert(self.loglines, msg)
   if #self.loglines > 500 then table.remove(self.loglines, 1) end
 end

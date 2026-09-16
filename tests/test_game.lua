@@ -310,6 +310,49 @@ do -- diy/ 示例武将默认不进随机池（正常对局看不到）；opts.d
     "opts.demo = true 时随机池应能抽到 diy/ 示例武将")
 end
 
+do -- UTF-8 消毒：LLM 输出/DIY 脚本带坏字节时不能让 UI 的 print 崩
+  local Utf8 = require "src.core.utf8"
+  local function validUTF8(s)
+    local i = 1
+    while i <= #s do
+      local b = string.byte(s, i)
+      if b < 128 then i = i + 1
+      elseif b >= 192 then
+        local n = (b >= 240) and 4 or (b >= 224) and 3 or 2
+        if i + n - 1 > #s then return false end
+        for j = i + 1, i + n - 1 do
+          local c = string.byte(s, j)
+          if not c or c < 128 or c >= 192 then return false end
+        end
+        i = i + n
+      else return false end
+    end
+    return true
+  end
+
+  check(Utf8.sanitize("正常的中文 abc") == "正常的中文 abc", "合法文本应原样通过")
+  check(Utf8.sanitize("\240\159\152\128") == "\240\159\152\128", "4 字节 emoji 应原样通过")
+  local bad1 = Utf8.sanitize("\229\188\160\128abc") -- 张 + 孤立续字节
+  check(validUTF8(bad1) and bad1:find("abc", 1, true) ~= nil and #bad1 == 9,
+    "孤立续字节应替换为 U+FFFD 且其余内容保留")
+  local bad2 = Utf8.sanitize("\228\184abc") -- 3 字节序列被截断
+  check(validUTF8(bad2) and bad2:find("abc", 1, true) ~= nil,
+    "截断的多字节序列应替换为 U+FFFD")
+  check(validUTF8(Utf8.sanitize("\255\254\128\193")), "纯垃圾字节应全部被替换")
+
+  -- Room:log 是所有日志的入口：坏字节必须在入库时拦下
+  local e = Engine.create()
+  Standard.setup(e)
+  local ps = {}
+  for i = 1, 2 do
+    table.insert(ps, Player.create("P" .. i, e:getGeneral("白板武将"), i, false))
+  end
+  local r = Room.create(e, ps)
+  r:log("%s 摸了 %d 张牌", "\229\188\160\128坏字节", 2)
+  check(validUTF8(r.loglines[#r.loglines]),
+    "Room:log 应对入库文本消毒（UI print 不再遇坏字节崩溃）")
+end
+
 print("\n--- 身份局 ---")
 
 -- 构造一个 n 人身份局（全部 BOT），可指定 seed（对局测试统一用 5 / 8 人）
