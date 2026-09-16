@@ -703,6 +703,61 @@ do
   check(#fx.arrows == 0 and #fx.flies == 0, "动画到期后应清理干净")
 end
 
+print("\n--- 暂停 ---")
+
+do
+  local sc = RoomScene.create(function() end, "identity", 5, "off", { seed = 42 })
+  check(sc.paused == false, "开局默认不暂停")
+
+  -- 按钮列应有【暂停】，点击进入暂停
+  sc:_refreshButtons()
+  local pause_btn
+  for _, b in ipairs(sc.buttons) do
+    if b.text == "暂停" then pause_btn = b end
+  end
+  check(pause_btn ~= nil, "按钮列应有【暂停】")
+  if pause_btn then pause_btn.cb() end
+  check(sc.paused == true, "点【暂停】应进入暂停")
+
+  -- 暂停时 update 不推进：演示队列倒计时冻结（队列长度与计时不变）
+  sc.room:emit("skill", { player = sc.players[2], skill = "马术" })
+  sc.presentTimer = 0.5
+  local q_len = #sc.presentQueue
+  sc:update(1.0)
+  check(#sc.presentQueue == q_len and sc.presentTimer == 0.5,
+    "暂停时演示队列不应推进")
+
+  -- 暂停中点击只认【继续】：点手牌中心不应选中牌
+  local paused_pick = sc.picked
+  local cx, cy = sc:handCardRect(1)
+  sc:mousepressed(cx + 31, cy + 43, 1)
+  check(sc.picked == paused_pick, "暂停中点手牌应被遮罩拦截")
+
+  -- 点【继续】恢复；P 键也能切换
+  local r = sc:pauseOverlayLayout().resume
+  sc:mousepressed(r.x + 5, r.y + 5, 1)
+  check(sc.paused == false, "点【继续】应恢复对局")
+  sc:keypressed("p")
+  check(sc.paused == true, "按 P 应暂停")
+  sc:keypressed("p")
+  check(sc.paused == false, "再按 P 应恢复")
+
+  -- 暂停遮罩绘制不报错
+  sc.paused = true
+  local ok_draw, err = pcall(function() sc:draw() end)
+  check(ok_draw, "暂停遮罩绘制不应报错" .. (ok_draw and "" or ("：" .. tostring(err))))
+  sc.paused = false
+
+  -- 对局结束后不再显示暂停按钮（只有返回菜单）
+  sc.room.game_over = true
+  sc:_refreshButtons()
+  local still = false
+  for _, b in ipairs(sc.buttons) do
+    if b.text == "暂停" then still = true end
+  end
+  check(not still, "对局结束不应再有【暂停】按钮")
+end
+
 print("\n--- 主菜单 ---")
 
 do

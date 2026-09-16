@@ -282,6 +282,8 @@ function RoomScene:beginPlay()
   self.effects = Effects.create()
   self:bindPresentationHooks()
 
+  self.paused = false -- 暂停：冻结引擎推进与演示队列，点击只留【继续】
+
   self.msg = ""
   self.buttons = {}
   -- 演示队列：BOT 的每次出牌/发动技能/受伤/阵亡先入队，再按节奏逐个播放。
@@ -430,6 +432,11 @@ function RoomScene:_refreshButtons()
   local req = self.room.pending
   local function push(text, cb) table.insert(btns, { text = text, cb = cb }) end
 
+  -- 【暂停】常驻：冻结对局（P 键同效）；暂停中的点击由遮罩层接管
+  if not self.room.game_over then
+    push("暂停", function() self.paused = true end)
+  end
+
   -- 「AI 推测」详情入口：AI 参与对局时常驻（点开看身份判断过程）
   if self.agent and self.ai_mode ~= "off" then
     push("AI 推测", function()
@@ -560,6 +567,8 @@ end
 function RoomScene:update(dt)
   -- 开局选将阶段：对局尚未开始，跳过一切推进
   if self.draft then return end
+  -- 暂停：不推进引擎、不播演示队列、不动特效——画面完全静止
+  if self.paused then return end
   if self.effects and dt then self.effects:update(dt) end
 
   -- 演示队列：一次播一条，播完等它对应的间隔再播下一条。
@@ -616,6 +625,11 @@ function RoomScene:wheelmoved(_x, y)
 end
 
 function RoomScene:keypressed(key)
+  -- P 键切换暂停（选将阶段没有对局可停）
+  if key == "p" and not self.draft then
+    self.paused = not self.paused
+    return
+  end
   if self.aiPopup then
     -- 「AI 推测」弹层：↑↓ 滚 1 行，PgUp/PgDn/Home/End 整页跳，Esc 关闭
     local box = self:aiPopupLayout()
@@ -734,6 +748,15 @@ end
 
 function RoomScene:mousepressed(x, y, button)
   if button ~= 1 then return end
+  -- 暂停遮罩优先接管：只放行【继续】，其余点击一律吞掉
+  if self.paused then
+    local r = self:pauseOverlayLayout()
+    if x >= r.resume.x and x <= r.resume.x + r.resume.w
+      and y >= r.resume.y and y <= r.resume.y + r.resume.h then
+      self.paused = false
+    end
+    return
+  end
   -- 开局选将：点候选卡片直接选定
   if self.draft then
     for _, r in ipairs(self.draft.rects or {}) do
@@ -1403,6 +1426,38 @@ function RoomScene:pushAIFeed(kind, text, turn)
   while #self.aiFeed > 40 do table.remove(self.aiFeed, 1) end
 end
 
+-- 暂停遮罩布局（继续按钮的命中矩形）
+function RoomScene:pauseOverlayLayout()
+  local w, h = love.graphics.getDimensions()
+  local rw, rh = 220, 56
+  return {
+    resume = { x = (w - rw) / 2, y = h / 2 + 26, w = rw, h = rh },
+  }
+end
+
+-- 暂停遮罩：压暗全屏 + 标题 + 继续按钮（draw 最后画，盖住牌桌）
+function RoomScene:drawPauseOverlay()
+  if not self.paused then return end
+  local w, h = love.graphics.getDimensions()
+  love.graphics.setColor(0, 0, 0, 0.62)
+  love.graphics.rectangle("fill", 0, 0, w, h)
+  love.graphics.setFont(self.font_mid)
+  love.graphics.setColor(1, 0.95, 0.8)
+  love.graphics.printf("暂 停", 0, h / 2 - 72, w, "center")
+  love.graphics.setFont(self.font_sm)
+  love.graphics.setColor(0.75, 0.8, 0.75)
+  love.graphics.printf("对局已冻结：引擎推进、演示动画与音效全部暂停", 0, h / 2 - 26, w, "center")
+  love.graphics.printf("点【继续】或按 P 回到对局（Esc 仍为退出确认）", 0, h / 2 - 6, w, "center")
+  local r = self:pauseOverlayLayout().resume
+  love.graphics.setColor(0.22, 0.38, 0.26)
+  love.graphics.rectangle("fill", r.x, r.y, r.w, r.h, 10, 10)
+  love.graphics.setColor(0.82, 0.68, 0.30)
+  love.graphics.rectangle("line", r.x, r.y, r.w, r.h, 10, 10)
+  love.graphics.setColor(1, 1, 1)
+  love.graphics.setFont(self.font)
+  love.graphics.printf("继 续", r.x, r.y + 17, r.w, "center")
+end
+
 -- 右侧常驻小面板（920,400 起，约 200×190）：只显示身份判断变化（最近 5 条），
 -- 思维链摘要进弹层时间线，不在这刷屏。
 function RoomScene:drawAIPanel()
@@ -1828,6 +1883,9 @@ function RoomScene:draw()
     love.graphics.setColor(0.85, 0.9, 0.82)
     love.graphics.print(text, LOG_X, y)
   end
+
+  -- 暂停遮罩：盖住牌桌与按钮，只留【继续】
+  self:drawPauseOverlay()
 
   -- 必须最后绘制，确保技能说明覆盖牌桌、按钮和日志。
   SkillDesc.draw(self.skillPopup, self.font, self.font_mid, self.font_sm)
