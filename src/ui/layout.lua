@@ -52,7 +52,10 @@ function Layout:init(skin, n, panelW, panelH)
   self.anchors = self:computeAnchors(self.n)
 end
 
--- 1 号位是自己（底部居中），其余按「上边 → 左边 → 右边」分配
+-- 1 号位是自己（底部居中），其余沿**顺时针**分配：
+-- 左列（自下而上）→ 顶排（从左到右）→ 右列（自上而下）。
+-- 引擎回合按座位号 1→N 推进，视觉上必须构成一圈顺时针，
+-- 否则出牌顺序看起来在桌上乱跳（用户实测反馈）。
 function Layout:computeAnchors(n)
   local a = {}
   if n <= 1 then
@@ -69,25 +72,29 @@ function Layout:computeAnchors(n)
   local left = math.ceil(sides / 2)
   local right = sides - left
 
-  -- 上边：沿 x 居中排开
+  -- 顶排：沿 x 居中排开
   local topY = self.roomPadding + 24
   local totalW = top * self.photoW + (top - 1) * self.hDist
   local startX = math.max(self.roomPadding, (self.sceneW - totalW) / 2)
-  for i = 1, top do
-    a[1 + i] = { startX + (i - 1) * (self.photoW + self.hDist), topY }
-  end
 
-  -- 左边：沿 y 向下排开
   local leftX = self.roomPadding
-  local baseY = topY + self.photoH + self.vDist
-  for i = 1, left do
-    a[1 + top + i] = { leftX, baseY + (i - 1) * (self.photoH + self.vDist) }
-  end
-
-  -- 右边：沿 y 向下排开
   local rightX = self.sceneW - self.roomPadding - self.photoW
-  for i = 1, right do
-    a[1 + top + left + i] = { rightX, baseY + (i - 1) * (self.photoH + self.vDist) }
+  local baseY = topY + self.photoH + self.vDist
+  local step = self.photoH + self.vDist
+
+  -- 按顺时针收集槽位，再依次分配给座位 2..N
+  local slots = {}
+  for i = left, 1, -1 do -- 左列自下而上：紧挨自己的是座位 2
+    slots[#slots + 1] = { leftX, baseY + (i - 1) * step }
+  end
+  for i = 1, top do -- 顶排从左到右
+    slots[#slots + 1] = { startX + (i - 1) * (self.photoW + self.hDist), topY }
+  end
+  for i = 1, right do -- 右列自上而下：最后一个座位回到自己右手边
+    slots[#slots + 1] = { rightX, baseY + (i - 1) * step }
+  end
+  for i, pos in ipairs(slots) do
+    a[1 + i] = pos
   end
   return a
 end

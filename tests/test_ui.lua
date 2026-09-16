@@ -758,6 +758,51 @@ do
   check(not still, "对局结束不应再有【暂停】按钮")
 end
 
+print("\n--- 座位按顺时针排列 ---")
+
+do
+  -- 引擎回合按座位号 1→N 推进；布局必须让座位号在视觉上构成一圈
+  -- 顺时针（你 → 左 → 上 → 右），否则出牌顺序看起来在桌上乱跳
+  local Layout = require "src.ui.layout"
+  local function zones(n)
+    local L = Layout.create(nil, n, 210, 104)
+    local out = {}
+    for seat = 1, n do
+      local x, y = L.anchors[seat][1], L.anchors[seat][2]
+      local zone
+      if seat == 1 then zone = 0 -- 自己（底部）
+      elseif y < 160 then zone = 2 -- 顶排
+      elseif x < 400 then zone = 1 -- 左列
+      else zone = 3 end -- 右列
+      out[#out + 1] = { zone = zone, x = x, y = y }
+    end
+    return out
+  end
+
+  for _, n in ipairs({ 2, 4, 5, 8 }) do
+    local z = zones(n)
+    local mono = true
+    for i = 2, #z - 1 do
+      if z[i + 1].zone < z[i].zone then mono = false end
+    end
+    check(mono, string.format("%d 人局座位应沿顺时针单调排列（左→上→右）", n))
+    -- 同列内部方向：左列自下而上（y 随座位递减）、顶排从左到右（x 递增）
+    for i = 3, #z - 1 do
+      if z[i].zone == 1 and z[i + 1].zone == 1 and z[i + 1].y > z[i].y then
+        check(false, string.format("%d 人局左列应自下而上", n))
+      end
+      if z[i].zone == 2 and z[i + 1].zone == 2 and z[i + 1].x < z[i].x then
+        check(false, string.format("%d 人局顶排应从左到右", n))
+      end
+    end
+  end
+
+  local z5 = zones(5)
+  check(z5[2].zone == 1 and z5[3].zone == 2 and z5[4].zone == 2 and z5[5].zone == 3,
+    "5 人局应为 你→左→上左→上右→右（实得区域 "
+      .. table.concat({ z5[2].zone, z5[3].zone, z5[4].zone, z5[5].zone }, ",") .. "）")
+end
+
 print("\n--- 主菜单 ---")
 
 do
