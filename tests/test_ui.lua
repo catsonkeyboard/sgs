@@ -803,6 +803,49 @@ do
       .. table.concat({ z5[2].zone, z5[3].zone, z5[4].zone, z5[5].zone }, ",") .. "）")
 end
 
+print("\n--- 大量手牌自适应（克己囤牌） ---")
+
+do
+  local Card = require "src.core.card"
+  local sc = RoomScene.create(function() end, "identity", 5, "off", { seed = 42 })
+  local old_hand = sc.human.hand
+  -- 吕蒙【克己】跳过弃牌可合法囤 30+ 张
+  sc.human.hand = {}
+  for i = 1, 30 do
+    sc.human.hand[i] = Card.create(1000 + i, "slash", Card.Suit.Club,
+      (i % 13) + 1, Card.Type.Basic)
+  end
+
+  -- 所有不越出画布
+  local overflow = 0
+  for i = 1, 30 do
+    local x = sc:handCardRect(i)
+    if x + 62 > 1130 or x < 0 then overflow = overflow + 1 end
+  end
+  check(overflow == 0, "30 张手牌都不应越出画布（越界 " .. overflow .. " 张）")
+
+  -- 相邻间距收敛但仍为正（可点）
+  local x1, x2, x30 = sc:handCardRect(1), sc:handCardRect(2), sc:handCardRect(30)
+  check(x2 - x1 >= 16, "收拢后相邻间距应 ≥16px（实得 " .. (x2 - x1) .. "）")
+  check(x30 > x2, "第 30 张应仍排在后面（单调递增）")
+
+  -- 命中：每张牌中心仍命中自身（重叠区靠左优先的顺序保证）
+  local bad = {}
+  for i = 1, 30 do
+    local cx = sc:handCardRect(i)
+    local card, got = sc:cardAt(cx + 31, 520 + 43)
+    if not (got == i and card == sc.human.hand[i]) then
+      bad[#bad + 1] = i .. "→" .. tostring(got)
+    end
+  end
+  check(#bad == 0, "30 张重叠牌点各自中心都应命中自身（" .. table.concat(bad, ",") .. "）")
+
+  -- 常规手牌间距不变（不回归）
+  sc.human.hand = old_hand
+  local a, b = sc:handCardRect(1), sc:handCardRect(2)
+  check(b - a == 70, "常规手牌间距应保持 70px（实得 " .. (b - a) .. "）")
+end
+
 print("\n--- 主菜单 ---")
 
 do

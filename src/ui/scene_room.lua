@@ -300,9 +300,19 @@ end
 
 -- ===== 布局 =====
 
+-- 手牌区：固定起点，间距自适应——牌多时自动收拢重叠（克己囤牌 30+ 张
+-- 也不出屏幕），像真实牌桌的扇形搭接；命中检测按顺序「靠左优先」，
+-- 点重叠区选中的是下层（更靠左）那张，行为直观。
 function RoomScene:handCardRect(i)
   local x0, y0 = 40, 520
-  return x0 + (i - 1) * (CARD_W + 8), y0, CARD_W, CARD_H
+  local n = self.human and #self.human.hand or 0
+  local spacing = CARD_W + 8
+  if n > 1 then
+    local avail = 1130 - 40 - 40 - CARD_W -- 右侧留 40 边距
+    spacing = math.min(spacing, avail / (n - 1))
+    spacing = math.max(spacing, 16) -- 再挤也保住至少一条可点的边
+  end
+  return x0 + (i - 1) * spacing, y0, CARD_W, CARD_H
 end
 
 function RoomScene:cardAt(x, y)
