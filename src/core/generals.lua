@@ -2305,6 +2305,14 @@ function Generals.all()
   return out
 end
 
+-- 按中文名查武将（联机客户端只拿到武将名时，用它本地还原技能表）
+function Generals.byName(name)
+  for _, g in ipairs(Generals.all()) do
+    if g.name == name then return g end
+  end
+  return nil
+end
+
 -- 收集某玩家的技能标记值（同名标记取绝对值最大者）
 function Generals.marker(player, key, default)
   local best = default

@@ -194,7 +194,17 @@ end
 
 function NetScene:openSkillPopup(p)
   if not (p and p.general) then return false end
-  self.skillPopup = SkillDesc.open(p.name, p.general, SkillDesc.entriesFromNames(p.skills))
+  -- 服务端快照只带武将名不带技能表；客户端跑的是同一份代码，
+  -- 按名字本地查引擎数据即可还原技能与说明（查不到再退回 p.skills）。
+  local entries
+  local Generals = require "src.core.generals"
+  local g = Generals.byName(tostring(p.general))
+  if g and g.skills and #g.skills > 0 then
+    entries = SkillDesc.entriesFromSkills(g.skills)
+  else
+    entries = SkillDesc.entriesFromNames(p.skills)
+  end
+  self.skillPopup = SkillDesc.open(p.name, p.general, entries)
   return true
 end
 
