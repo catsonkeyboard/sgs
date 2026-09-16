@@ -1,32 +1,43 @@
 @echo off
-chcp 65001 >nul
 setlocal
-rem 无头测试（Windows 版）：静态检查（需 python，缺了跳过）+ 单测/对局测试
+rem UTF-8 console codepage so the game's UTF-8 log output (Chinese)
+rem renders correctly; the bat itself is ASCII-only so parsing is safe.
+chcp 65001 >nul
+rem Headless tests (Windows): static lint (python, skipped if absent)
+rem + unit/gameplay tests. Prefers lovec for visible console output.
 set "ROOT=%~dp0"
 
+where lovec >nul 2>nul
+if %errorlevel%==0 (
+  set "LOVE=lovec"
+  goto :lint
+)
 where love >nul 2>nul
 if %errorlevel%==0 (
   set "LOVE=love"
+  goto :lint
+)
+if exist "%ROOT%tools\love-win64\lovec.exe" (
+  set "LOVE=%ROOT%tools\love-win64\lovec.exe"
   goto :lint
 )
 if exist "%ROOT%tools\love-win64\love.exe" (
   set "LOVE=%ROOT%tools\love-win64\love.exe"
   goto :lint
 )
-echo 未找到 love.exe：可先运行 tools\get-love.bat 自动下载便携版，
-echo 或从 https://love2d.org 安装 / 把 zip 解压到 tools\love-win64\
+echo love.exe not found: run tools\get-love.bat first, or see https://love2d.org
 exit /b 1
 
 :lint
-echo == 静态检查：方法定义/调用语法 ==
+echo == static lint: method definitions/calls ==
 where python >nul 2>nul
 if %errorlevel%==0 (
   python "%ROOT%tools\lint_methods.py" "%ROOT%src" "%ROOT%tests"
 ) else (
-  echo （未找到 python，跳过静态检查）
+  echo python not found, skipping static lint
 )
 
 echo.
-echo == 对局与单元测试 ==
+echo == gameplay and unit tests ==
 "%LOVE%" "%ROOT%." --test
 exit /b %errorlevel%
