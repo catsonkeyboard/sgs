@@ -214,23 +214,62 @@ function Curl.parse(out, protocol)
   return parseResponse(out, protocol)
 end
 
--- 单引号包裹，供 shell 安全使用（URL 里可能带 & ? 等字符）
-local function shq(s)
-  return "'" .. tostring(s):gsub("'", "'\\''") .. "'"
+-- ===== 跨平台 shell 工具（curl 子进程用）=====
+-- macOS/Linux 走 POSIX sh（单引号转义 + rm）；Windows 走 cmd.exe
+-- （双引号转义 + del，`&` 串接）。两者都必须把密钥留在临时文件里
+-- （-H @文件），命令行只出现路径。
+-- 检测用 package.config 的路径分隔符，不依赖 jit（线程里也稳）。
+local IS_WINDOWS = package.config:sub(1, 1) == "\\"
+
+-- 临时文件路径：POSIX 用 os.tmpname()；Windows 的 os.tmpname 不带
+-- 目录且可能落在当前目录，改用 %TEMP% 下自造名字
+local function tmpPath()
+  if not IS_WINDOWS then return os.tmpname() end
+  local dir = os.getenv("TEMP") or "."
+  return dir .. "\\sgs_ai_" .. tostring(os.time()) .. "_"
+    .. tostring(math.random(100000, 999999)) .. ".tmp"
 end
 
--- 把敏感内容写进 600 权限的临时文件。
+-- 把敏感内容写进临时文件（POSIX 下收紧为 600 权限）。
 -- **密钥绝不能出现在命令行参数里**：同机任何用户 `ps aux` 就能看见，
 -- 而且会进 shell 的 history 与各种进程审计日志。curl 的 `-H @文件`
 -- 让我们只把文件路径留在命令行上。
 local function writeSecret(lines)
-  local path = os.tmpname()
+  local path = tmpPath()
   local f = io.open(path, "w")
   if not f then return nil end
   f:write(table.concat(lines, "\n") .. "\n")
   f:close()
-  pcall(function() os.execute("chmod 600 " .. shq(path)) end)
+  if not IS_WINDOWS then
+    pcall(function() os.execute("chmod 600 '" .. path:gsub("'", "'\\''") .. "'") end)
+  end
   return path
+end
+
+-- 单引号包裹，供 POSIX shell 安全使用（URL 里可能带 & ? 等字符）
+local function shq(s)
+  return "'" .. tostring(s):gsub("'", "'\\''") .. "'"
+end
+
+-- 双引号包裹，供 Windows cmd.exe 使用。& | < > ^ 在双引号内是字面量；
+-- % 的变量展开无法在引号内关掉，但接口 URL 不含 %，够用。
+local function winq(s)
+  return '"' .. tostring(s) .. '"'
+end
+
+-- 供 UI 侧线程版传输层复用（线程里不方便 require 项目模块，
+-- 所以命令拼装逻辑集中在这里，线程只拿字符串）。
+local function buildCurlCommand(timeout, url, hdr_path, body_path, is_win)
+  if is_win then
+    return string.format(
+      'curl -sS --max-time %d -X POST %s -H @%s --data-binary @%s 2>&1 & del %s %s',
+      timeout, winq(url), winq(hdr_path), winq(body_path),
+      winq(hdr_path), winq(body_path))
+  end
+  return string.format(
+    "curl -sS --max-time %d -X POST %s -H @%s --data-binary @%s 2>&1; rm -f %s %s",
+    timeout, shq(url), shq(hdr_path), shq(body_path),
+    shq(hdr_path), shq(body_path))
 end
 
 -- 同步执行。返回 {ok=, text=, err=}
@@ -249,10 +288,8 @@ function Curl:request(prompt)
     return { ok = false, err = "无法创建临时文件" }
   end
 
-  local cmd = string.format(
-    "curl -sS --max-time %d -X POST %s -H @%s --data-binary @%s 2>&1; rm -f %s %s",
-    self.timeout, shq(self.url), shq(hdr_path), shq(body_path),
-    shq(hdr_path), shq(body_path))
+  local cmd = buildCurlCommand(self.timeout, self.url, hdr_path, body_path,
+    IS_WINDOWS)
   local handle = io.popen(cmd, "r")
   if not handle then
     os.remove(body_path)
@@ -388,5 +425,8 @@ end
 Transport.mock = function(opts) return Mock.create(opts or {}) end
 Transport.curl = function(opts) return Curl.create(opts or {}) end
 Transport.proxy = function(opts) return Proxy.create(opts or {}) end
+-- 命令拼装与平台检测单独导出：UI 线程版传输层复用命令格式，单测跨平台断言
+Transport.buildCurlCommand = buildCurlCommand
+Transport.isWindows = IS_WINDOWS
 
 return Transport

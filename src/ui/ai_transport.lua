@@ -50,15 +50,31 @@ local function viaSocket(job)
   end
   outbox:push(table.concat(out))
 end
--- 敏感内容写进 600 权限的临时文件：密钥不能出现在命令行参数里，
+-- 敏感内容写进临时文件：密钥不能出现在命令行参数里，
 -- 否则同机任何用户 ps 一下就能看见。curl 的 -H @文件 让命令行只留路径。
+-- 跨平台：Windows（cmd.exe）的 os.tmpname 不带目录，改用 %TEMP%；
+-- chmod 只在 POSIX 有意义。命令拼装与 core/ai/transport.lua 的
+-- buildCurlCommand 保持同一格式（线程里 require 不了项目模块，只能内联）。
+local IS_WINDOWS = package.config:sub(1, 1) == "\\"
+local function tmpPath()
+  if not IS_WINDOWS then return os.tmpname() end
+  local dir = os.getenv("TEMP") or "."
+  return dir .. "\\sgs_ai_" .. tostring(os.time()) .. "_"
+    .. tostring(math.random(100000, 999999)) .. ".tmp"
+end
+local function q(s)
+  if IS_WINDOWS then return '"' .. tostring(s) .. '"' end
+  return "'" .. tostring(s):gsub("'", "'\\''") .. "'"
+end
 local function writeSecret(lines)
-  local path = os.tmpname()
+  local path = tmpPath()
   local f = io.open(path, "w")
   if not f then return nil end
   f:write(table.concat(lines, "\n") .. "\n")
   f:close()
-  pcall(function() os.execute("chmod 600 " .. shq(path)) end)
+  if not IS_WINDOWS then
+    pcall(function() os.execute("chmod 600 " .. q(path)) end)
+  end
   return path
 end
 while true do
@@ -76,10 +92,11 @@ while true do
     if not body_path or not hdr_path then
       outbox:push("")
     else
+      local join = IS_WINDOWS and " & del " or "; rm -f "
       local cmd = string.format(
-        "curl -sS --max-time %d -X POST %s -H @%s --data-binary @%s 2>&1; rm -f %s %s",
-        job.timeout, shq(job.url), shq(hdr_path), shq(body_path),
-        shq(hdr_path), shq(body_path))
+        "curl -sS --max-time %d -X POST %s -H @%s --data-binary @%s 2>&1%s%s %s",
+        job.timeout, q(job.url), q(hdr_path), q(body_path),
+        join, q(hdr_path), q(body_path))
       local h = io.popen(cmd, "r")
       local out = h and h:read("*a") or ""
       if h then h:close() end

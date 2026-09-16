@@ -872,5 +872,25 @@ do -- 端到端：beliefs 变化触发 on_beliefs；reasoning 摘要触发 on_re
   check(#belief_events == 1 and #reasoning_events == 1, "无变化/无摘要时不应触发回调")
 end
 
+do -- curl 命令构建的跨平台断言：POSIX 单引号 + rm；Windows 双引号 + del
+  local posix = Transport.buildCurlCommand(30, "https://llm.example.com/v1/responses?a=1&b=2",
+    "/tmp/h.json", "/tmp/b.json", false)
+  check(posix:find("curl %-sS %-%-max%-time 30 %-X POST '", 1, false) ~= nil,
+    "POSIX 命令应以 curl 开头")
+  check(posix:find("'https://llm.example.com/v1/responses?a=1&b=2'", 1, true) ~= nil,
+    "POSIX 的 URL 应被单引号包裹（& 不被 shell 解释）")
+  check(posix:find("2>&1; rm %-f '/tmp/h%.json' '/tmp/b%.json'$") ~= nil,
+    "POSIX 应以 rm -f 清理临时文件")
+
+  local win = Transport.buildCurlCommand(30, "https://llm.example.com/v1/responses?a=1&b=2",
+    [[C:\Users\某 人\AppData\Temp\sgs_ai_1.tmp]], [[C:\tmp space\b.json]], true)
+  check(win:find('%-X POST "https://llm%.example%.com/v1/responses%?a=1&b=2"') ~= nil,
+    "Windows 的 URL 应被双引号包裹")
+  check(win:find('-H @"C:\\Users\\某 人\\AppData', 1, false) ~= nil,
+    "Windows 带空格/中文的路径应被双引号包裹")
+  check(win:find('2>&1 & del ', 1, false) ~= nil and not win:find("rm "),
+    "Windows 应用 del 清理且不出现 rm")
+end
+
 print(string.format("\n===== AI 测试: %d passed, %d failed =====", passes, failures))
 if failures > 0 then error("AI 测试失败", 0) end

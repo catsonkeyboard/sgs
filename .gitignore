@@ -1,5 +1,6 @@
 # LÖVE 便携版是二进制且体积大，不入库
 tools/love.app/
+tools/love-win64/
 tools/*.zip
 
 # 注意：tools/ 下的**脚本**必须入库。

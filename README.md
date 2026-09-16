@@ -255,6 +255,39 @@ tools/ai_proxy.py         本机明文代理（标准库 http.server + urllib，
 无头模式靠 `conf.lua` 在 `--test` / `--soak` / `--net` 下关闭窗口实现，
 **不要**用 `SDL_VIDEODRIVER=dummy`（macOS 的 dummy 驱动建不出 OpenGL 上下文，会弹错误框）。
 
+## Windows 环境
+
+引擎/UI/网络层本身跨平台，需要自备一份 **LÖVE 11.5**。最省事的方式是
+一条命令自动下载便携版（Windows 10 1803+，自带 curl 与 tar）：
+
+```bat
+tools\get-love.bat
+```
+
+它会从 love2d 官方 release 下载 `love-11.5.0-win64.zip` 并解压到
+`tools\love-win64\`（`.gitignore` 已排除，不入库），之后所有 `.bat` 都能
+直接用。也可以手动获取（任选其一）：
+
+1. **安装版**：从 [love2d.org](https://love2d.org) 安装，`love` 进 PATH；
+2. **便携版**：下载 zip 解压到 `tools/love-win64/`。
+
+配好后在项目根目录用 Windows 版脚本（与 `.sh` 一一对应，自动找 PATH 或
+`tools/love-win64/` 里的 love.exe）：
+
+| 脚本 | 用途 |
+| --- | --- |
+| `run-game.bat` | 图形界面 |
+| `run-tests.bat` | 静态检查（有 python 才跑，缺了跳过）+ 单测 |
+| `tools\serve.bat [端口] [座位数]` | 联机服务端（默认 9527 / 5 座） |
+| `tools\play.bat [名字] [host] [端口]` | 联机图形客户端 |
+
+也可以直接 `love . --test` / `love .` / `love . --serve 9527 5`。
+
+**AI 玩家在 Windows**：直连模式（`SGS_AI_TRANSPORT=curl`）已适配 cmd.exe
+（双引号转义 + `%TEMP%` 临时文件 + `del` 清理，Windows 10 1803+ 自带 curl）；
+代理模式（`SGS_AI_TRANSPORT=proxy` + `python tools/ai_proxy.py`）走纯
+LuaSocket，同样可用。
+
 ## 跑 Lua 代码：`tools/lua.sh`
 
 本机 PATH 里没有 `lua` / `luajit`，但 LÖVE 自带了 **Lua 5.1 / LuaJIT 2.1**
