@@ -1,5 +1,10 @@
 # sgs
 
+> **授权提示：** 项目代码采用 GPL-3.0-or-later；`assets/` 中的 QSanguosha
+> 图片、音频、字体与皮肤配置采用 CC BY-NC-ND 4.0，只能在署名、非商业且
+> 不修改素材文件的条件下分享。商业分发必须移除并替换这些素材。详见
+> [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
 Lua / LÖVE2D 实现的三国杀身份局：可 headless 回归的纯 Lua 规则引擎、
 接入美术与音频的牌桌 UI，以及 **LLM 驱动的 AI 玩家**（任意座位可托管，
 AI 带跨步骤记忆推理隐藏身份）。
@@ -463,3 +468,19 @@ scene_net  = 联机客户端（权威在服务端，这里只渲染快照并应�
 - 压测中少量局因长时间拉锯**判平局**（连续 80 回合无人阵亡）——
   是 BOT 打不穿残局囤牌的合法结果，不是死循环；`MAX_TURNS=300` 仍是
   真正的死循环保险
+
+## 许可证与素材
+
+- 除另有说明外，代码、脚本、测试和文档采用
+  [GNU GPL v3 或更高版本](LICENSE)。
+- `assets/` 中的 470 个媒体与皮肤配置文件（不含授权说明文件）逐字节来自
+  [Mogara/QSanguosha](https://github.com/Mogara/QSanguosha)，上游声明为
+  [CC BY-NC-ND 4.0](LICENSES/CC-BY-NC-ND-4.0.txt)。这些文件未作修改。
+- **整个仓库不能据此用于商业分发**：GPL 允许代码商业使用，但捆绑素材的
+  CC BY-NC-ND 许可包含 NonCommercial 与 NoDerivatives 限制。
+- 商业发行或需要改图/改音频时，请移除 `assets/`，使用有权使用的替代素材；
+  无素材时游戏会退回文字与色块界面，也可通过 `SGS_ASSET_ROOT` 指向外部资源。
+- 素材完整性可运行 `./tools/verify-assets.sh` 校验。
+
+完整归属、来源版本、修改声明及商标免责声明见
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

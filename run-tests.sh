@@ -24,5 +24,9 @@ else
 fi
 
 echo
+echo "== 素材授权清单：逐字节校验 =="
+./tools/verify-assets.sh
+
+echo
 echo "== 对局与单元测试 =="
 exec ./tools/love.app/Contents/MacOS/love . --test
