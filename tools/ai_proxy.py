@@ -138,7 +138,29 @@ class ProxyHandler(BaseHTTPRequestHandler):
             log("[http] " + (fmt % args))
 
 
+def load_local_env():
+    """读取仓库根目录的 ai.env（KEY=VALUE，# 为注释），填进未设置的环境变量。
+
+    与启动脚本 run-game.bat / serve.bat 的加载规则一致：终端里已 export 的
+    变量优先，本地文件只做兜底，方便“双击即玩”而不用敲环境变量。
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "ai.env")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key, value = key.strip(), value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except OSError:
+        pass  # 没有 ai.env 很正常
+
+
 def main():
+    load_local_env()
     ap = argparse.ArgumentParser(description="sgs 的 LLM 本地明文代理")
     ap.add_argument("--port", type=int, default=int(os.environ.get("SGS_AI_PROXY_PORT") or DEFAULT_PORT))
     ap.add_argument("--host", default="127.0.0.1")
