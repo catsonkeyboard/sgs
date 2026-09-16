@@ -1036,6 +1036,28 @@ do -- 推理模型走 chat 协议的两个坑（glm-5 实测）：空 content + 
       .. tostring(resp) .. " err=" .. tostring(err) .. "）")
 end
 
+do -- JSON 自动修复：模型少写闭合引号的高频笔误（glm-5-turbo 实测原文）
+  local Parse2 = require "src.core.ai.parse"
+  local raw = '```json\n{"action": 2, "reason": "拆自己过河拆桥毫无意义，保留无懈可击}\n```'
+  local fixed = Parse2.repairJson(raw)
+  check(fixed and fixed.action == 2
+      and fixed.reason == "拆自己过河拆桥毫无意义，保留无懈可击",
+    "少闭合引号 + markdown 围栏应被修复（实得 action="
+      .. tostring(fixed and fixed.action) .. "）")
+  check(Parse2.repairJson('{"action":1,"reason":"好"}').action == 1,
+    "本来就合法的 JSON 不应被改坏")
+  check(Parse2.repairJson("完全不是 JSON") == nil, "垃圾输入应返回 nil 走重试")
+
+  -- 端到端：坏 JSON 也能解析出动作（不再直接机械兜底）
+  local room = makeRoom(14, { 1 })
+  local acts = {}
+  for i = 1, 3 do acts[i] = { id = i, kind = "choice", value = "选项" .. i } end
+  local resp, err = Parse2.response(raw, { type = "askForChoice",
+    player = room.players[1] }, room, acts)
+  check(resp == "选项2" and err == nil,
+    "坏 JSON 经修复应解析出动作（resp=" .. tostring(resp) .. " err=" .. tostring(err) .. "）")
+end
+
 do -- 请求摘要的牌名要中文化：thinkingLabel「正在思考：需要打出【闪】」
   local View = require "src.core.ai.view"
   local brief = View.requestBrief({ type = "askForCard", card_name = "dodge" })

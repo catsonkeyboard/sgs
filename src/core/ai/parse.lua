@@ -79,6 +79,34 @@ local function extractLastJson(raw)
 end
 Parse.extractLastJson = extractLastJson
 
+-- 自动修复模型的高频笔误：字符串少写闭合引号（实测 glm-5-turbo：
+-- "reason": "拆自己…保留无懈可击} ——引号丢了，平衡扫描永远失败）。
+-- 思路：取首 { 到末 } 的片段，统计未转义引号数；奇数说明有字符串
+-- 没闭合，在末位 } 前补一个引号再解码。修不好就返回 nil 走重试。
+local function repairJson(raw)
+  if type(raw) ~= "string" then return nil end
+  local s = raw:gsub("```%w*", "")
+  local i = s:find("{", 1, true)
+  local j = s:match(".*()}") -- 最后一个 }
+  if not i or not j or j <= i then return nil end
+  local frag = s:sub(i, j)
+  local quotes = 0
+  local k = 1
+  while k <= #frag do
+    local c = frag:sub(k, k)
+    if c == "\\" then k = k + 2 -- 跳过转义对
+    elseif c == '"' then quotes = quotes + 1 k = k + 1
+    else k = k + 1 end
+  end
+  if quotes % 2 == 1 then
+    frag = frag:sub(1, #frag - 1) .. '"' .. "}"
+  end
+  local obj = Json.decode(frag)
+  if type(obj) == "table" then return obj end
+  return nil
+end
+Parse.repairJson = repairJson
+
 local function playerBySeat(room, seat)
   if not seat then return nil end
   for _, p in ipairs(room.players) do
@@ -125,6 +153,14 @@ function Parse.response(raw, req, room, actions)
     local last = extractLastJson(raw)
     if last and last ~= data then
       data = last
+      ids = normalizeIds(data)
+    end
+  end
+  -- 提取都失败或仍缺 action：试一次自动修复（少闭合引号一类的高频笔误）
+  if not ids then
+    local fixed = repairJson(raw)
+    if fixed then
+      data = fixed
       ids = normalizeIds(data)
     end
   end
