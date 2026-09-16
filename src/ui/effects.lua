@@ -7,6 +7,8 @@
 --   - 阵亡时闪一条提示
 -- 全部按时间衰减，纯表现，不参与规则判定，也不阻塞输入。
 local class = require "src.class"
+local Scale = require "src.ui.scale"
+local S = Scale.px
 
 local Effects = class("Effects")
 
@@ -146,7 +148,7 @@ function Effects:draw(sceneW, sceneH, font, font_lg)
   -- 中部横幅
   if self.banner then
     local a = math.max(0, math.min(1, self.banner.life / BANNER_LIFE))
-    local w, h = 320, 34
+    local w, h = S(320), S(34)
     local x, y = (sceneW - w) / 2, sceneH * 0.32
     love.graphics.setColor(0, 0, 0, a * 0.45)
     love.graphics.rectangle("fill", x, y, w, h, 8, 8)
@@ -154,7 +156,7 @@ function Effects:draw(sceneW, sceneH, font, font_lg)
       self.banner.color[3], a)
     love.graphics.rectangle("line", x, y, w, h, 8, 8)
     if font then love.graphics.setFont(font) end
-    love.graphics.printf(self.banner.text, x, y + 8, w, "center")
+    love.graphics.printf(self.banner.text, x, y + S(8), w, "center")
   end
 
   love.graphics.setColor(1, 1, 1, 1)

@@ -3,8 +3,19 @@
 --       势力标识行 + 居中自适应按钮（悬停高亮）。
 -- 布局随窗口尺寸居中自适应（relayout），点击判定与绘制用同一套矩形。
 local class = require "src.class"
+local Scale = require "src.ui.scale"
+local S = Scale.px
 
 local MenuScene = class("MenuScene")
+
+local FONT_PATH = "assets/font/DroidSansFallback.ttf"
+
+local function buildFonts()
+  local f = function(size)
+    return Scale.font(FONT_PATH, size) or love.graphics.newFont(FONT_PATH, size)
+  end
+  return f(64), f(34), f(300), f(18), f(13)
+end
 
 -- 按钮配色（基础色，悬停时叠一层白提亮）
 local BTN_RED = { 0.62, 0.16, 0.13 }   -- 身份局
@@ -25,12 +36,9 @@ local KINGDOMS = {
 function MenuScene:init(on_start, on_net)
   self.on_start = on_start
   self.on_net = on_net
-  local font_path = "assets/font/DroidSansFallback.ttf"
-  self.font_title = love.graphics.newFont(font_path, 64)
-  self.font_seal = love.graphics.newFont(font_path, 34)
-  self.font_wm = love.graphics.newFont(font_path, 300)
-  self.font = love.graphics.newFont(font_path, 18)
-  self.font_sm = love.graphics.newFont(font_path, 13)
+  local font_path = FONT_PATH
+  self.font_title, self.font_seal, self.font_wm,
+    self.font, self.font_sm = buildFonts()
 
   -- 身份局按规模分档：
   --   **5 人是默认**（主1 忠1 反2 内1，节奏适中，一局不拖沓）
@@ -83,35 +91,44 @@ function MenuScene:init(on_start, on_net)
   self:refreshThinkButton()
 
   self.t = 0
-  self:relayout(1130, 650)
+  self:relayout(love.graphics.getDimensions())
+end
+
+-- 窗口尺寸/全屏变化：重建字体（尺寸随缩放光栅化才不会糊）
+function MenuScene:onResize()
+  self.font_title, self.font_seal, self.font_wm,
+    self.font, self.font_sm = buildFonts()
 end
 
 -- 居中自适应布局：三行按钮（身份局一排 / 1v1+联机一排 / 两个开关一排）。
 -- draw 每帧按实际窗口重算，点击判定读同一套矩形。
 function MenuScene:relayout(w, h)
   -- 第一行：三张身份局按钮
-  local aw, gap = 226, 22
+  local aw, gap = S(226), S(22)
   local ax = (w - (3 * aw + 2 * gap)) / 2
   for i, b in ipairs(self.buttons) do
     if b.mode == "identity" then
-      b.w, b.h = aw, 66
+      b.w, b.h = aw, S(66)
       b.x, b.y = ax + (i - 1) * (aw + gap), math.floor(h * 0.48)
     end
   end
   -- 第二行：1v1 与联机
-  local bw, gap2 = 320, 28
+  local bw, gap2 = S(320), S(28)
   local bx = (w - (2 * bw + gap2)) / 2
-  self.buttons[4].w, self.buttons[4].h = bw, 58
-  self.buttons[4].x, self.buttons[4].y = bx, math.floor(h * 0.48) + 88
-  self.buttons[5].w, self.buttons[5].h = bw, 58
-  self.buttons[5].x, self.buttons[5].y = bx + bw + gap2, math.floor(h * 0.48) + 88
+  self.buttons[4].w, self.buttons[4].h = bw, S(58)
+  self.buttons[4].x, self.buttons[4].y = bx, math.floor(h * 0.48) + S(88)
+  self.buttons[5].w, self.buttons[5].h = bw, S(58)
+  self.buttons[5].x, self.buttons[5].y = bx + bw + gap2, math.floor(h * 0.48) + S(88)
   -- 第三行：三个开关（AI 托管 / 开局选将 / AI 思考）
-  local cw, gap3 = 300, 24
+  local cw, gap3 = S(300), S(24)
   local cx = (w - (3 * cw + 2 * gap3)) / 2
-  local cy = math.floor(h * 0.48) + 170
+  local cy = math.floor(h * 0.48) + S(170)
   self.ai_button.x, self.ai_button.y = cx, cy
+  self.ai_button.w, self.ai_button.h = cw, S(48)
   self.draft_button.x, self.draft_button.y = cx + cw + gap3, cy
+  self.draft_button.w, self.draft_button.h = cw, S(48)
   self.think_button.x, self.think_button.y = cx + (cw + gap3) * 2, cy
+  self.think_button.w, self.think_button.h = cw, S(48)
   self.row_y = math.floor(h * 0.48) -- 供 draw 画开关说明行
 end
 
@@ -156,7 +173,7 @@ function MenuScene:drawButton(b)
   local x, y, w, h = b.x, b.y, b.w, b.h
   -- 投影
   love.graphics.setColor(0, 0, 0, 0.35)
-  love.graphics.rectangle("fill", x + 3, y + 4, w, h, 12, 12)
+  love.graphics.rectangle("fill", x + S(3), y + S(4), w, h, 12, 12)
   -- 底色与悬停提亮
   local c = b.color or BTN_SLATE
   love.graphics.setColor(c[1], c[2], c[3], hover and 1 or 0.92)
@@ -178,16 +195,16 @@ function MenuScene:drawButton(b)
   if b.ai_toggle or b.draft_toggle then
     -- 状态点：开 = 金色，关 = 暗灰
     love.graphics.setColor(b.on and GOLD or { 0.45, 0.48, 0.45 })
-    love.graphics.circle("fill", x + 26, y + h / 2, 5)
+    love.graphics.circle("fill", x + S(26), y + h / 2, S(5))
     love.graphics.setColor(0.97, 0.95, 0.88)
     love.graphics.setFont(self.font)
-    love.graphics.printf(b.text, x + 26, y + (h - 18) / 2, w - 26, "center")
+    love.graphics.printf(b.text, x + S(26), y + (h - S(18)) / 2, w - S(26), "center")
   else
     love.graphics.setFont(self.font)
-    love.graphics.printf(b.text, x, y + 12, w, "center")
+    love.graphics.printf(b.text, x, y + S(12), w, "center")
     love.graphics.setColor(0.88, 0.85, 0.75, 0.8)
     love.graphics.setFont(self.font_sm)
-    love.graphics.printf(b.desc, x, y + 40, w, "center")
+    love.graphics.printf(b.desc, x, y + S(40), w, "center")
   end
 end
 
@@ -206,69 +223,69 @@ function MenuScene:draw()
   local breath = 0.045 + 0.012 * math.sin(self.t * 1.6) -- 呼吸感的水印
   love.graphics.setColor(GOLD[1], GOLD[2], GOLD[3], breath)
   love.graphics.setFont(self.font_wm)
-  love.graphics.printf("杀", 0, h * 0.52 - 170, w, "center")
+  love.graphics.printf("杀", 0, h * 0.52 - S(170), w, "center")
 
   -- ===== 描金内外框与四角饰线 =====
+  local m = S(14)
   love.graphics.setColor(GOLD_DIM[1], GOLD_DIM[2], GOLD_DIM[3], 0.30)
-  love.graphics.rectangle("line", 14, 14, w - 28, h - 28, 4, 4)
+  love.graphics.rectangle("line", m, m, w - m * 2, h - m * 2, 4, 4)
   love.graphics.setColor(GOLD_DIM[1], GOLD_DIM[2], GOLD_DIM[3], 0.12)
-  love.graphics.rectangle("line", 22, 22, w - 44, h - 44, 4, 4)
+  love.graphics.rectangle("line", S(22), S(22), w - S(44), h - S(44), 4, 4)
   if love.graphics.line then
     love.graphics.setColor(GOLD_DIM[1], GOLD_DIM[2], GOLD_DIM[3], 0.5)
     if love.graphics.setLineWidth then love.graphics.setLineWidth(2) end
-    local m = 14
     for _, c in ipairs({ { m, m, 1, 1 }, { w - m, m, -1, 1 },
                          { m, h - m, 1, -1 }, { w - m, h - m, -1, -1 } }) do
-      love.graphics.line(c[1], c[2], c[1] + 26 * c[3], c[2])
-      love.graphics.line(c[1], c[2], c[1], c[2] + 26 * c[4])
+      love.graphics.line(c[1], c[2], c[1] + S(26) * c[3], c[2])
+      love.graphics.line(c[1], c[2], c[1], c[2] + S(26) * c[4])
     end
     if love.graphics.setLineWidth then love.graphics.setLineWidth(1) end
   end
 
   -- ===== 标题：描边金字 + 朱红印章 =====
-  local title_y = math.max(56, h * 0.12)
+  local title_y = math.max(S(56), h * 0.12)
   love.graphics.setFont(self.font_title)
   love.graphics.setColor(0.04, 0.02, 0.01, 0.9)
   for _, off in ipairs({ { 3, 0 }, { -3, 0 }, { 0, 3 }, { 0, -3 } }) do
-    love.graphics.printf("三 国 杀", off[1], title_y + off[2], w, "center")
+    love.graphics.printf("三 国 杀", S(off[1]), title_y + S(off[2]), w, "center")
   end
   love.graphics.setColor(GOLD[1], GOLD[2], GOLD[3], 1)
   love.graphics.printf("三 国 杀", 0, title_y, w, "center")
 
-  local seal_s = 46
-  local seal_x = w / 2 + 128
-  local seal_y = title_y + 30
+  local seal_s = S(46)
+  local seal_x = w / 2 + S(128)
+  local seal_y = title_y + S(30)
   love.graphics.setColor(0.64, 0.16, 0.12, 0.95)
   love.graphics.rectangle("fill", seal_x, seal_y, seal_s, seal_s, 6, 6)
   love.graphics.setColor(1, 0.96, 0.9, 0.85)
-  love.graphics.rectangle("line", seal_x + 4, seal_y + 4, seal_s - 8, seal_s - 8, 4, 4)
+  love.graphics.rectangle("line", seal_x + S(4), seal_y + S(4), seal_s - S(8), seal_s - S(8), 4, 4)
   love.graphics.setFont(self.font_seal)
-  love.graphics.printf("杀", seal_x, seal_y + 7, seal_s, "center")
+  love.graphics.printf("杀", seal_x, seal_y + S(7), seal_s, "center")
 
   -- 副标题与两侧饰线
-  local sub_y = title_y + 86
+  local sub_y = title_y + S(86)
   love.graphics.setColor(0.72, 0.76, 0.68)
   love.graphics.setFont(self.font)
-  love.graphics.printf("sgs · 标准牌堆 · 身份局 / 1v1 / 联机", 0, sub_y, w, "center")
+  love.graphics.printf("sgs · 标准牌堆 · 身份局 / 1v1 / 联机 · F11 全屏", 0, sub_y, w, "center")
   if love.graphics.line then
     love.graphics.setColor(GOLD_DIM[1], GOLD_DIM[2], GOLD_DIM[3], 0.35)
-    love.graphics.line(w / 2 - 320, sub_y + 10, w / 2 - 150, sub_y + 10)
-    love.graphics.line(w / 2 + 150, sub_y + 10, w / 2 + 320, sub_y + 10)
+    love.graphics.line(w / 2 - S(320), sub_y + S(10), w / 2 - S(150), sub_y + S(10))
+    love.graphics.line(w / 2 + S(150), sub_y + S(10), w / 2 + S(320), sub_y + S(10))
   end
 
   -- ===== 势力标识行：菱形底 + 势力字 =====
-  local ky = sub_y + 52
+  local ky = sub_y + S(52)
   love.graphics.setFont(self.font_sm)
   for i, k in ipairs(KINGDOMS) do
-    local kx = w / 2 + (i - 2.5) * 72
+    local kx = w / 2 + (i - 2.5) * S(72)
     love.graphics.setColor(k.color[1], k.color[2], k.color[3], 0.9)
     love.graphics.polygon("fill",
-      kx, ky - 15, kx + 15, ky, kx, ky + 15, kx - 15, ky)
+      kx, ky - S(15), kx + S(15), ky, kx, ky + S(15), kx - S(15), ky)
     love.graphics.setColor(0.05, 0.08, 0.05, 0.55)
     love.graphics.polygon("line",
-      kx, ky - 15, kx + 15, ky, kx, ky + 15, kx - 15, ky)
+      kx, ky - S(15), kx + S(15), ky, kx, ky + S(15), kx - S(15), ky)
     love.graphics.setColor(0.97, 0.95, 0.88, 0.95)
-    love.graphics.printf(k.zh, kx - 16, ky - 8, 32, "center")
+    love.graphics.printf(k.zh, kx - S(16), ky - S(8), S(32), "center")
   end
 
   -- ===== 按钮 =====
@@ -280,13 +297,14 @@ function MenuScene:draw()
   love.graphics.setFont(self.font_sm)
   for _, b in ipairs({ self.ai_button, self.draft_button, self.think_button }) do
     self:drawButton(b)
-    love.graphics.printf(b.desc, b.x - 20, self.row_y + 170 + b.h + 8, b.w + 40, "center")
+    love.graphics.printf(b.desc, b.x - S(20), self.row_y + S(170) + b.h + S(8),
+      b.w + S(40), "center")
   end
 
   -- ===== 页脚 =====
   love.graphics.setColor(0.5, 0.55, 0.5)
   love.graphics.setFont(self.font_sm)
-  love.graphics.printf("sgs · LÖVE 11.5 · LLM 驱动的 AI 玩家", 0, h - 34, w, "center")
+  love.graphics.printf("sgs · LÖVE 11.5 · LLM 驱动的 AI 玩家", 0, h - S(34), w, "center")
   love.graphics.setColor(1, 1, 1, 1)
 end
 

@@ -13,6 +13,13 @@ function love.conf(t)
   t.window.width = 1130
   t.window.height = 650
   t.window.vsync = 1
+  -- highdpi：坐标单位=物理像素，高分屏（125%/150% 缩放）不再被系统
+  -- 拉伸发糊；界面整体放大由 src/ui/scale.lua 负责。
+  -- resizable：窗口可拖边调整大小（F11 全屏见 main.lua）。
+  t.window.highdpi = true
+  t.window.resizable = true
+  t.window.minwidth = 720
+  t.window.minheight = 460
 
   for _, a in ipairs(arg or {}) do
     if HEADLESS_FLAGS[a] then

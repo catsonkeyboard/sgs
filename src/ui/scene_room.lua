@@ -34,11 +34,36 @@ local Effects = require "src.ui.effects"
 local SkillDesc = require "src.ui.skill_desc"
 local TextFit = require "src.ui.text_fit"
 local Utf8 = require "src.core.utf8"
+local Scale = require "src.ui.scale"
+local S = Scale.px
 
 local RoomScene = class("RoomScene")
 
+-- 设计基准尺寸（Scale.factor=1 时与旧版像素级一致）；实际值随窗口/DPI
+-- 等比缩放，refreshMetrics 在 init / onResize 时重算。**绘制与命中检测
+-- 必须共用这些变量**，改字号或窗口后二者自动保持一致。
 local CARD_W, CARD_H = 62, 86
 local PANEL_W, PANEL_H = 210, 104
+local CHIP_W, CHIP_H = 100, 17
+local CHIP_IMG_W, CHIP_IMG_H = 11, 15
+local FONT_PATH = "assets/font/DroidSansFallback.ttf"
+local FONT_SIZES = { font = 15, font_mid = 20, font_sm = 12 }
+
+local function refreshMetrics()
+  CARD_W, CARD_H = S(62), S(86)
+  PANEL_W, PANEL_H = S(210), S(104)
+  CHIP_W, CHIP_H = S(100), S(17)
+  CHIP_IMG_W, CHIP_IMG_H = S(11), S(15)
+end
+
+local function buildFonts()
+  local fonts = {}
+  for name, size in pairs(FONT_SIZES) do
+    fonts[name] = Scale.font(FONT_PATH, size)
+      or love.graphics.newFont(FONT_PATH, size) -- 桩环境兜底
+  end
+  return fonts
+end
 
 -- ai_mode: "off"（无人托管）/ "others"（除你以外的座位）/ "all"（全托管，含你自己）
 -- opts.seed: 固定发牌与身份的种子。测试必须传，否则每次开局局面都不同，
@@ -92,9 +117,9 @@ function RoomScene:init(on_exit, mode, size, ai_mode, opts)
   end
 
   -- 字体与回调提前初始化：选将阶段就要用；其余对局初始化在 beginPlay
-  self.font = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 15)
-  self.font_mid = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 20)
-  self.font_sm = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 12)
+  refreshMetrics()
+  local fonts = buildFonts()
+  self.font, self.font_mid, self.font_sm = fonts.font, fonts.font_mid, fonts.font_sm
   self.on_exit = on_exit
   self.ai_mode = ai_mode or "off"
   -- 菜单「AI 思考」开关（none/low/high），覆盖 SGS_AI_REASONING；
@@ -120,6 +145,21 @@ function RoomScene:init(on_exit, mode, size, ai_mode, opts)
     end
   end
   if not self.draft then self:beginPlay() end
+end
+
+-- 窗口尺寸/全屏/DPI 变化：重算布局常量、重建字体与座位锚点。
+-- 对局状态（手牌/回合/请求）不动——只调表现层。
+function RoomScene:onResize()
+  refreshMetrics()
+  local fonts = buildFonts()
+  self.font, self.font_mid, self.font_sm = fonts.font, fonts.font_mid, fonts.font_sm
+  if self.layout then
+    local vw, vh = love.graphics.getDimensions()
+    self.layout = Layout.create(self.skin, #self.players, PANEL_W, PANEL_H, vw, vh)
+    self.anchors = self.layout.anchors
+    self.panelW, self.panelH = self.layout:panelSize()
+  end
+  self:_refreshButtons()
 end
 
 -- 把选定的武将落到玩家身上（体力上限按「主公 +1」重算）
@@ -148,19 +188,19 @@ function RoomScene:drawDraft()
   love.graphics.setColor(1, 0.95, 0.8)
   love.graphics.setFont(self.font_mid)
   love.graphics.printf(lord and "你是主公 —— 从 5 张武将牌中选择一位（体力上限 +1）"
-    or "从 3 张武将牌中选择你的武将", 0, 96, w, "center")
+    or "从 3 张武将牌中选择你的武将", 0, S(96), w, "center")
   love.graphics.setColor(0.75, 0.8, 0.75)
   love.graphics.setFont(self.font_sm)
-  love.graphics.printf("其余座位已各领 3 张候选并选定 · 点击卡片确认", 0, 132, w, "center")
+  love.graphics.printf("其余座位已各领 3 张候选并选定 · 点击卡片确认 · F11 全屏", 0, S(132), w, "center")
 
   local list = self.draft.candidates
-  local bw, bh, gap = 168, 286, 22
+  local bw, bh, gap = S(168), S(286), S(22)
   local total = #list * bw + (#list - 1) * gap
   local x0 = (w - total) / 2
   self.draft.rects = {}
   local KZ = { wei = "魏", shu = "蜀", wu = "吴", qun = "群" }
   for i, g in ipairs(list) do
-    local x, y = x0 + (i - 1) * (bw + gap), 170
+    local x, y = x0 + (i - 1) * (bw + gap), S(170)
     self.draft.rects[i] = { x = x, y = y, w = bw, h = bh, g = g }
     love.graphics.setColor(0.16, 0.30, 0.42)
     love.graphics.rectangle("fill", x, y, bw, bh, 10, 10)
@@ -169,14 +209,14 @@ function RoomScene:drawDraft()
 
     love.graphics.setColor(1, 1, 1)
     love.graphics.setFont(self.font_mid)
-    love.graphics.printf(g.name, x, y + 12, bw, "center")
+    love.graphics.printf(g.name, x, y + S(12), bw, "center")
     love.graphics.setFont(self.font)
     love.graphics.printf(string.format("%s · %d 血", KZ[g.kingdom] or g.kingdom, g.max_hp),
-      x, y + 43, bw, "center")
+      x, y + S(43), bw, "center")
 
     -- 候选牌直接复用牌桌头像缓存与 Skin.generalImage，不重复加载图片。
     local avatar = self:generalImage(g)
-    local ax, ay, aw, ah = x + 18, y + 70, bw - 36, 132
+    local ax, ay, aw, ah = x + S(18), y + S(70), bw - S(36), S(132)
     if avatar then
       love.graphics.setColor(1, 1, 1)
       love.graphics.draw(avatar, ax, ay, 0, aw / avatar:getWidth(), ah / avatar:getHeight())
@@ -185,23 +225,23 @@ function RoomScene:drawDraft()
       love.graphics.rectangle("fill", ax, ay, aw, ah, 6, 6)
       love.graphics.setColor(0.62, 0.68, 0.68)
       love.graphics.setFont(self.font_sm)
-      love.graphics.printf("暂无头像", ax, ay + 56, aw, "center")
+      love.graphics.printf("暂无头像", ax, ay + S(56), aw, "center")
     end
     love.graphics.setColor(0.72, 0.62, 0.34)
     love.graphics.rectangle("line", ax, ay, aw, ah, 6, 6)
 
     love.graphics.setFont(self.font_sm)
     love.graphics.setColor(0.94, 0.90, 0.76)
-    local shown, sy, seen = 0, y + 216, {}
+    local shown, sy, seen = 0, y + S(216), {}
     for _, sk_ in ipairs(g.skills or {}) do
       if shown >= 3 then break end
       local n = sk_.zh or sk_.name
       n = type(n) == "string" and (n:match("^(.-)·") or n) or nil
       if n and not seen[n] then
         seen[n] = true
-        love.graphics.printf((sk_.lord and "[主公技] " or "") .. n, x + 6, sy,
-          bw - 12, "center")
-        sy = sy + 21
+        love.graphics.printf((sk_.lord and "[主公技] " or "") .. n, x + S(6), sy,
+          bw - S(12), "center")
+        sy = sy + S(21)
         shown = shown + 1
       end
     end
@@ -276,7 +316,8 @@ function RoomScene:beginPlay()
   -- 布局：优先按原版 layout.json 的间距参数推导（自适应人数），
   -- 缺少配置时 Layout 内部会退回与原来一致的固定锚点。
   -- 面板尺寸必须传给布局：排版与绘制用同一个宽度，否则右侧会被画布裁掉。
-  self.layout = Layout.create(self.skin, #self.players, PANEL_W, PANEL_H)
+  local vw, vh = love.graphics.getDimensions()
+  self.layout = Layout.create(self.skin, #self.players, PANEL_W, PANEL_H, vw, vh)
   self.anchors = self.layout.anchors
   self.panelW, self.panelH = self.layout:panelSize()
   self.effects = Effects.create()
@@ -300,19 +341,26 @@ end
 
 -- ===== 布局 =====
 
--- 手牌区：固定起点，间距自适应——牌多时自动收拢重叠（克己囤牌 30+ 张
+-- 手牌区：底部锚定，间距自适应——牌多时自动收拢重叠（克己囤牌 30+ 张
 -- 也不出屏幕），像真实牌桌的扇形搭接；命中检测按顺序「靠左优先」，
 -- 点重叠区选中的是下层（更靠左）那张，行为直观。
 function RoomScene:handCardRect(i)
-  local x0, y0 = 40, 520
+  local w, h = love.graphics.getDimensions()
+  local x0 = S(40)
+  local y0 = h - CARD_H - S(44)
   local n = self.human and #self.human.hand or 0
-  local spacing = CARD_W + 8
+  local spacing = CARD_W + S(8)
   if n > 1 then
-    local avail = 1130 - 40 - 40 - CARD_W -- 右侧留 40 边距
+    local avail = w - x0 - S(40) - CARD_W -- 右侧留边距
     spacing = math.min(spacing, avail / (n - 1))
-    spacing = math.max(spacing, 16) -- 再挤也保住至少一条可点的边
+    spacing = math.max(spacing, S(16)) -- 再挤也保住至少一条可点的边
   end
   return x0 + (i - 1) * spacing, y0, CARD_W, CARD_H
+end
+
+-- 五谷丰登等「场面上方展示牌」行的卡片矩形（绘制与点击命中共用）
+function RoomScene:revealedCardRect(i)
+  return S(40) + (i - 1) * (CARD_W + S(8)), S(320), CARD_W, CARD_H
 end
 
 function RoomScene:cardAt(x, y)
@@ -358,7 +406,8 @@ end
 function RoomScene:avatarRect(p)
   local a = self:anchorOf(p)
   if not a then return nil end
-  return { x = a[1] + 8, y = a[2] + 24, w = 44, h = 44 }
+  local s = S(44)
+  return { x = a[1] + S(8), y = a[2] + S(24), w = s, h = s }
 end
 
 function RoomScene:avatarAt(x, y)
@@ -551,16 +600,18 @@ function RoomScene:_refreshButtons()
     end
   end
 
+  -- 按钮列：右侧锚定（窗口拉宽时贴右边，不漂到屏幕外）
+  local vw = love.graphics.getDimensions()
   for i, b in ipairs(btns) do
-    b.x = 1130 - 40 - i * 120
-    b.y = 300
-    b.w, b.h = 110, 40
+    b.x = vw - S(40) - i * S(120)
+    b.y = S(300)
+    b.w, b.h = S(110), S(40)
   end
   -- 「退出对局」常驻：以前只有对局结束才有「返回菜单」，
   -- 中途想退出只能把游戏关掉。二次确认防误触。
   table.insert(btns, {
     text = self.confirmExit and "确认退出？" or "退出对局",
-    x = 1130 - 40 - 120, y = 348, w = 110, h = 34,
+    x = vw - S(40) - S(120), y = S(348), w = S(110), h = S(34),
     cb = function()
       if self.confirmExit then
         self.confirmExit = false
@@ -626,7 +677,7 @@ end
 function RoomScene:wheelmoved(_x, y)
   if not self.aiPopup or not y or y == 0 then return end
   local box = self:aiPopupLayout()
-  local max_fit = math.max(1, math.floor((box.h - 96) / 17))
+  local max_fit = math.max(1, math.floor((box.h - S(96)) / S(17)))
   local max_scroll = math.max(0, #self:aiPopupLines() - max_fit)
   -- 触控板一次可滚几十格：按幅度等比放大（每格 3 行）
   local dir = (y > 0) and -1 or 1 -- 上滚向前
@@ -643,7 +694,7 @@ function RoomScene:keypressed(key)
   if self.aiPopup then
     -- 「AI 推测」弹层：↑↓ 滚 1 行，PgUp/PgDn/Home/End 整页跳，Esc 关闭
     local box = self:aiPopupLayout()
-    local max_fit = math.max(1, math.floor((box.h - 96) / 17))
+    local max_fit = math.max(1, math.floor((box.h - S(96)) / S(17)))
     local total = #self:aiPopupLines()
     local max_scroll = math.max(0, total - max_fit)
     local scroll = self.aiPopupScroll or 0
@@ -840,8 +891,8 @@ function RoomScene:mousepressed(x, y, button)
   -- 五谷丰登：从展示牌中挑一张
   if req.type == "askForChooseCard" and self.revealed then
     for i, c in ipairs(self.revealed) do
-      local cx = 40 + (i - 1) * (CARD_W + 8)
-      if x >= cx and x <= cx + CARD_W and y >= 320 and y <= 320 + CARD_H then
+      local cx, cy, cw, ch = self:revealedCardRect(i)
+      if x >= cx and x <= cx + cw and y >= cy and y <= cy + ch then
         self:_step(c)
         return
       end
@@ -926,19 +977,19 @@ local function drawHp(x, y, hp, max_hp, scene)
     empty = scene.magatama.empty
   end
   if full and empty then
-    local s = 13
+    local s = S(13)
     local scale = s / full:getHeight()
     for i = 1, max_hp do
       local img = (i <= hp) and full or empty
       love.graphics.setColor(1, 1, 1)
-      love.graphics.draw(img, x + (i - 1) * (s + 2), y - s, 0, scale, scale)
+      love.graphics.draw(img, x + (i - 1) * (s + S(2)), y - s, 0, scale, scale)
     end
     return
   end
   for i = 1, max_hp do
     if i <= hp then love.graphics.setColor(0.85, 0.15, 0.1)
     else love.graphics.setColor(0.25, 0.25, 0.25) end
-    love.graphics.circle("fill", x + (i - 1) * 17, y, 6)
+    love.graphics.circle("fill", x + (i - 1) * S(17), y, S(6))
   end
 end
 
@@ -970,26 +1021,27 @@ end
 
 local function drawCard(x, y, w, h, c, font, font_sm, scene)
   local img = scene and cardImage(scene, c)
+  local r = S(6)
   if img then
     love.graphics.setColor(1, 1, 1)
     love.graphics.draw(img, x, y, 0, w / img:getWidth(), h / img:getHeight())
     love.graphics.setColor(0, 0, 0)
-    love.graphics.rectangle("line", x, y, w, h, 6, 6)
+    love.graphics.rectangle("line", x, y, w, h, r, r)
     -- 真图上叠一行牌名，保证小尺寸下也能认出来
     love.graphics.setFont(font_sm)
-    love.graphics.printf(c:zhName(), x, y + h - 18, w, "center")
+    love.graphics.printf(c:zhName(), x, y + h - S(18), w, "center")
     return
   end
   love.graphics.setColor(0.96, 0.94, 0.88)
-  love.graphics.rectangle("fill", x, y, w, h, 6, 6)
+  love.graphics.rectangle("fill", x, y, w, h, r, r)
   love.graphics.setColor(0, 0, 0)
-  love.graphics.rectangle("line", x, y, w, h, 6, 6)
+  love.graphics.rectangle("line", x, y, w, h, r, r)
   love.graphics.setColor(faceColor(c))
   love.graphics.setFont(font_sm)
-  love.graphics.print(c:suitString() .. c.number, x + 5, y + 4)
+  love.graphics.print(c:suitString() .. c.number, x + S(5), y + S(4))
   love.graphics.setColor(0, 0, 0)
   love.graphics.setFont(font)
-  love.graphics.printf(c:zhName(), x, y + h / 2 - 10, w, "center")
+  love.graphics.printf(c:zhName(), x, y + h / 2 - S(10), w, "center")
 end
 
 -- 飞牌动画的绘制闭包：特效层只给轨迹插值，牌面用与手牌同一套 drawCard
@@ -1283,15 +1335,14 @@ local CHIP_COLOR = {
 -- 马匹小牌后缀：进攻马 -1（你算别人的距离），防御马 +1（别人算你的距离）
 local CHIP_SLOT_TAG = { offensive_horse = "-1", defensive_horse = "+1" }
 
--- 装备/判定小牌网格：2 列 × N 行；格内 = 小卡图(11×15) + 牌名/距离
-local CHIP_W, CHIP_H = 100, 17
-local CHIP_IMG_W, CHIP_IMG_H = 11, 15
+-- 装备/判定小牌网格：2 列 × N 行；格内 = 小卡图 + 牌名/距离。
+-- 尺寸变量声明在文件顶部（refreshMetrics 随窗口缩放重算）。
 
 -- 粗略估文本像素宽：UTF-8 里中日韩字符占 3 字节按 13px，其余按 7px
 local function chipTextW(s)
   local cjk = select(2, s:gsub("[^\128-\191]", ""))
   local ascii = #s - cjk * 3
-  return cjk * 13 + ascii * 7
+  return S(cjk * 13 + ascii * 7)
 end
 
 function RoomScene:drawPlayerPanel(p, x, y, highlighted)
@@ -1304,53 +1355,54 @@ function RoomScene:drawPlayerPanel(p, x, y, highlighted)
   end
   if self.skillPopup and self.skillPopup.player_name == self:displayName(p) then
     love.graphics.setColor(0.95, 0.72, 0.22)
-    love.graphics.rectangle("line", x + 6, y + 22, 48, 48, 5, 5)
+    love.graphics.rectangle("line", x + S(6), y + S(22), S(48), S(48), 5, 5)
   end
 
   -- 势力图标（有资源就画，没有就不画，不占版面）
   local kimg = self:kingdomIcon(p)
   if kimg then
-    local s = 16
+    local s = S(16)
     love.graphics.setColor(1, 1, 1)
-    love.graphics.draw(kimg, x + PANEL_W - 60, y + 26, 0, s / kimg:getWidth(), s / kimg:getHeight())
+    love.graphics.draw(kimg, x + PANEL_W - S(60), y + S(26), 0, s / kimg:getWidth(), s / kimg:getHeight())
   end
 
   -- 武将头像（有原版资源时画真图，否则退回纯文字）
   local avatar = self:generalAvatar(p)
   if avatar then
-    local aw, ah = 44, 44
+    local aw, ah = S(44), S(44)
     love.graphics.setColor(1, 1, 1)
-    love.graphics.draw(avatar, x + 8, y + 24, 0, aw / avatar:getWidth(), ah / avatar:getHeight())
+    love.graphics.draw(avatar, x + S(8), y + S(24), 0, aw / avatar:getWidth(), ah / avatar:getHeight())
     love.graphics.setColor(0.6, 0.5, 0.3)
-    love.graphics.rectangle("line", x + 8, y + 24, aw, ah, 4, 4)
+    love.graphics.rectangle("line", x + S(8), y + S(24), aw, ah, 4, 4)
   end
 
   love.graphics.setFont(self.font_sm)
   love.graphics.setColor(1, 0.92, 0.75)
-  love.graphics.print(self:displayName(p), x + 8, y + 6)
+  love.graphics.print(self:displayName(p), x + S(8), y + S(6))
 
   -- 身份：本人、主公、已阵亡者可见
+  local rb = { x = x + PANEL_W - S(46), y = y + S(5), w = S(40), h = S(18) }
   if p.role and (p == self.human or p.role_revealed or not p.alive) then
     local c = ROLE_COLOR[p.role] or { 0.7, 0.7, 0.7 }
     love.graphics.setColor(c[1], c[2], c[3])
-    love.graphics.rectangle("fill", x + PANEL_W - 46, y + 5, 40, 18, 4, 4)
+    love.graphics.rectangle("fill", rb.x, rb.y, rb.w, rb.h, 4, 4)
     love.graphics.setColor(0, 0, 0)
-    love.graphics.printf(Player.ROLE_ZH[p.role] or p.role, x + PANEL_W - 46, y + 8, 40, "center")
+    love.graphics.printf(Player.ROLE_ZH[p.role] or p.role, rb.x, y + S(8), rb.w, "center")
   else
     love.graphics.setColor(0.45, 0.45, 0.45)
-    love.graphics.rectangle("fill", x + PANEL_W - 46, y + 5, 40, 18, 4, 4)
+    love.graphics.rectangle("fill", rb.x, rb.y, rb.w, rb.h, 4, 4)
     love.graphics.setColor(0, 0, 0)
-    love.graphics.printf("?", x + PANEL_W - 46, y + 8, 40, "center")
+    love.graphics.printf("?", rb.x, y + S(8), rb.w, "center")
   end
 
-  drawHp(x + 12, y + 38, p.hp, p.max_hp, self)
+  drawHp(x + S(12), y + S(38), p.hp, p.max_hp, self)
 
   love.graphics.setFont(self.font_sm)
   love.graphics.setColor(p.alive and 0.7 or 0.4, 0.75, 0.7)
-  love.graphics.print("手牌 × " .. #p.hand .. (p.alive and "" or " · 已阵亡"), x + 12, y + 56)
+  love.graphics.print("手牌 × " .. #p.hand .. (p.alive and "" or " · 已阵亡"), x + S(12), y + S(56))
   if p.chained then
     love.graphics.setColor(0.85, 0.6, 0.2)
-    love.graphics.print("连环", x + 110, y + 56)
+    love.graphics.print("连环", x + S(110), y + S(56))
   end
 
   -- 装备与判定区：小卡图 + 牌名（马匹带距离标注），2 列 × 2 行，
@@ -1362,18 +1414,18 @@ function RoomScene:drawPlayerPanel(p, x, y, highlighted)
       and { 1, 0.82, 0.18 } or CHIP_COLOR[chip.kind] or { 0.6, 0.6, 0.6 }
     love.graphics.setColor(border[1], border[2], border[3], 0.9)
     love.graphics.rectangle("line", chip.x, chip.y, chip.w, chip.h, 3, 3)
-    local tx = chip.x + 4
+    local tx = chip.x + S(4)
     if chip.img then
       love.graphics.setColor(1, 1, 1)
-      love.graphics.draw(chip.img, chip.x + 2, chip.y + 1, 0,
+      love.graphics.draw(chip.img, chip.x + S(2), chip.y + S(1), 0,
         CHIP_IMG_W / chip.img:getWidth(), CHIP_IMG_H / chip.img:getHeight())
       love.graphics.setColor(0.35, 0.3, 0.2)
-      love.graphics.rectangle("line", chip.x + 2, chip.y + 1, CHIP_IMG_W, CHIP_IMG_H)
-      tx = chip.x + 15
+      love.graphics.rectangle("line", chip.x + S(2), chip.y + S(1), CHIP_IMG_W, CHIP_IMG_H)
+      tx = chip.x + S(15)
     end
     love.graphics.setColor(0.95, 0.93, 0.85)
     love.graphics.setFont(self.font_sm)
-    love.graphics.print(chip.text, tx, chip.y + 1)
+    love.graphics.print(chip.text, tx, chip.y + S(1))
   end
 end
 
@@ -1397,10 +1449,10 @@ function RoomScene:panelChips(p, ax, ay)
   for i, t in ipairs(items) do
     local col, row = (i - 1) % 2, math.floor((i - 1) / 2)
     local img = cardImage(self, t.card)
-    local tw = chipTextW(t.text) + (img and 16 or 8)
+    local tw = chipTextW(t.text) + (img and S(16) or S(8))
     chips[#chips + 1] = {
-      x = ax + 5 + col * (CHIP_W + 1),
-      y = ay + 68 + row * (CHIP_H + 1),
+      x = ax + S(5) + col * (CHIP_W + S(1)),
+      y = ay + S(68) + row * (CHIP_H + S(1)),
       w = math.min(CHIP_W, tw), h = CHIP_H,
       text = t.text, card = t.card, kind = t.kind, img = img or false,
     }
@@ -1439,9 +1491,9 @@ end
 -- 暂停遮罩布局（继续按钮的命中矩形）
 function RoomScene:pauseOverlayLayout()
   local w, h = love.graphics.getDimensions()
-  local rw, rh = 220, 56
+  local rw, rh = S(220), S(56)
   return {
-    resume = { x = (w - rw) / 2, y = h / 2 + 26, w = rw, h = rh },
+    resume = { x = (w - rw) / 2, y = h / 2 + S(26), w = rw, h = rh },
   }
 end
 
@@ -1453,10 +1505,10 @@ function RoomScene:drawPauseOverlay()
   love.graphics.rectangle("fill", 0, 0, w, h)
   love.graphics.setFont(self.font_mid)
   love.graphics.setColor(1, 0.95, 0.8)
-  love.graphics.printf("暂 停", 0, h / 2 - 72, w, "center")
+  love.graphics.printf("暂 停", 0, h / 2 - S(72), w, "center")
   love.graphics.setFont(self.font_sm)
   love.graphics.setColor(0.75, 0.8, 0.75)
-  love.graphics.printf("对局已冻结：引擎推进、演示动画与音效全部暂停", 0, h / 2 - 26, w, "center")
+  love.graphics.printf("对局已冻结：引擎推进、演示动画与音效全部暂停", 0, h / 2 - S(26), w, "center")
   love.graphics.printf("点【继续】或按 P 回到对局（Esc 仍为退出确认）", 0, h / 2 - 6, w, "center")
   local r = self:pauseOverlayLayout().resume
   love.graphics.setColor(0.22, 0.38, 0.26)
@@ -1465,21 +1517,22 @@ function RoomScene:drawPauseOverlay()
   love.graphics.rectangle("line", r.x, r.y, r.w, r.h, 10, 10)
   love.graphics.setColor(1, 1, 1)
   love.graphics.setFont(self.font)
-  love.graphics.printf("继 续", r.x, r.y + 17, r.w, "center")
+  love.graphics.printf("继 续", r.x, r.y + S(17), r.w, "center")
 end
 
--- 右侧常驻小面板（920,400 起，约 200×190）：只显示身份判断变化（最近 5 条），
+-- 右侧常驻小面板（贴右边缘，约 200×190）：只显示身份判断变化（最近 5 条），
 -- 思维链摘要进弹层时间线，不在这刷屏。
 function RoomScene:drawAIPanel()
   if not (self.agent and self.ai_mode ~= "off") then return end
-  local x, y, w, h = 920, 400, 200, 190
+  local vw = love.graphics.getDimensions()
+  local x, y, w, h = vw - S(210), S(400), S(200), S(190)
   love.graphics.setColor(0.05, 0.08, 0.05, 0.72)
   love.graphics.rectangle("fill", x, y, w, h, 8, 8)
   love.graphics.setColor(0.82, 0.68, 0.30, 0.5)
   love.graphics.rectangle("line", x, y, w, h, 8, 8)
   love.graphics.setColor(1, 0.90, 0.58)
   love.graphics.setFont(self.font_sm)
-  love.graphics.print("AI 推测", x + 10, y + 8)
+  love.graphics.print("AI 推测", x + S(10), y + S(8))
 
   local beliefs = {}
   for _, e in ipairs(self.aiFeed or {}) do
@@ -1487,29 +1540,29 @@ function RoomScene:drawAIPanel()
   end
   if #beliefs == 0 then
     love.graphics.setColor(0.6, 0.65, 0.6)
-    love.graphics.print("AI 还没有身份判断", x + 10, y + 30)
+    love.graphics.print("AI 还没有身份判断", x + S(10), y + S(30))
   else
     local shown = math.min(5, #beliefs)
     for i = 0, shown - 1 do
       local e = beliefs[#beliefs - shown + 1 + i]
       love.graphics.setColor(0.88, 0.90, 0.84)
-      -- 超宽截断（按完整字符）：小面板只有 180px 可用宽
-      love.graphics.print(TextFit.fit(e.text, w - 20), x + 10, y + 28 + i * 16)
+      -- 超宽截断（按完整字符）：小面板可用宽随缩放
+      love.graphics.print(TextFit.fit(e.text, w - S(20)), x + S(10), y + S(28) + i * S(16))
     end
   end
   love.graphics.setColor(0.55, 0.6, 0.55)
-  love.graphics.print("点【AI 推测】看完整过程", x + 10, y + h - 20)
+  love.graphics.print("点【AI 推测】看完整过程", x + S(10), y + h - S(20))
 end
 
 -- 「AI 推测」弹层的布局（居中模态，与技能弹层同风格）
 function RoomScene:aiPopupLayout()
   local sw, sh = love.graphics.getDimensions()
-  local w = math.min(720, sw - 80)
+  local w = math.min(S(760), sw - S(40))
   local lines = self:aiPopupLines()
-  local h = math.min(sh - 40, 96 + #lines * 17)
+  local h = math.min(sh - S(40), S(96) + #lines * S(17))
   local x, y = (sw - w) / 2, (sh - h) / 2
   return { x = x, y = y, w = w, h = h,
-    close = { x = x + w - 94, y = y + 16, w = 72, h = 30 } }
+    close = { x = x + w - S(94), y = y + S(16), w = S(72), h = S(30) } }
 end
 
 function RoomScene:aiPopupShouldClose(x, y)
@@ -1593,14 +1646,14 @@ function RoomScene:drawAIPopup()
   love.graphics.rectangle("line", box.x, box.y, box.w, box.h, 12, 12)
   love.graphics.setFont(self.font_mid)
   love.graphics.setColor(1, 0.90, 0.58)
-  love.graphics.print("AI 身份推测", box.x + 24, box.y + 16)
+  love.graphics.print("AI 身份推测", box.x + S(24), box.y + S(16))
   love.graphics.setFont(self.font_sm)
   love.graphics.setColor(0.72, 0.78, 0.70)
-  love.graphics.print("各 AI 座位对全场身份的判断与变化过程", box.x + 24, box.y + 47)
+  love.graphics.print("各 AI 座位对全场身份的判断与变化过程", box.x + S(24), box.y + S(47))
 
   -- 窗口化绘制：按滚动偏移渲染可见行，右侧画滚动条
   love.graphics.setFont(self.font_sm)
-  local max_fit = math.max(1, math.floor((box.h - 96) / 17))
+  local max_fit = math.max(1, math.floor((box.h - S(96)) / S(17)))
   local lines = self:aiPopupLines()
   local total = #lines
   local max_scroll = math.max(0, total - max_fit)
@@ -1610,28 +1663,28 @@ function RoomScene:drawAIPopup()
     local ln = lines[scroll + i]
     if not ln then break end
     love.graphics.setColor(0.90, 0.92, 0.86)
-    love.graphics.print(TextFit.fit(ln, box.w - 60), box.x + 24, box.y + 78 + (i - 1) * 17)
+    love.graphics.print(TextFit.fit(ln, box.w - S(60)), box.x + S(24), box.y + S(78) + (i - 1) * S(17))
   end
   if max_scroll > 0 then
     -- 滚动条：右侧细轨道 + 按比例的滑块
-    local track_x, track_y = box.x + box.w - 14, box.y + 78
-    local track_h = max_fit * 17
+    local track_x, track_y = box.x + box.w - S(14), box.y + S(78)
+    local track_h = max_fit * S(17)
     love.graphics.setColor(1, 1, 1, 0.12)
-    love.graphics.rectangle("fill", track_x, track_y, 4, track_h, 2, 2)
-    local thumb_h = math.max(20, math.floor(track_h * max_fit / total))
+    love.graphics.rectangle("fill", track_x, track_y, S(4), track_h, 2, 2)
+    local thumb_h = math.max(S(20), math.floor(track_h * max_fit / total))
     local thumb_y = track_y + math.floor((track_h - thumb_h) * (scroll / max_scroll))
     love.graphics.setColor(0.82, 0.68, 0.30, 0.85)
-    love.graphics.rectangle("fill", track_x, thumb_y, 4, thumb_h, 2, 2)
+    love.graphics.rectangle("fill", track_x, thumb_y, S(4), thumb_h, 2, 2)
     love.graphics.setColor(0.6, 0.62, 0.58)
     love.graphics.print(string.format("%d/%d 行 · 滚轮或 ↑↓ 翻看",
-      math.min(total, scroll + max_fit), total), box.x + 24, box.y + box.h - 24)
+      math.min(total, scroll + max_fit), total), box.x + S(24), box.y + box.h - S(24))
   end
 
   local c = box.close
   love.graphics.setColor(0.28, 0.38, 0.26)
   love.graphics.rectangle("fill", c.x, c.y, c.w, c.h, 6, 6)
   love.graphics.setColor(1, 1, 1)
-  love.graphics.printf("关闭", c.x, c.y + 7, c.w, "center")
+  love.graphics.printf("关闭", c.x, c.y + S(7), c.w, "center")
 end
 
 -- 战斗日志的单行超宽截断：按完整 UTF-8 字符逐个累加，量宽收口。
@@ -1674,6 +1727,25 @@ function RoomScene:drawBackground()
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.draw(self.tableBg, 0, 0, 0, w / self.tableBg:getWidth(),
       h / self.tableBg:getHeight())
+  else
+    -- 无背景图时的内置桌布：深绿渐变（上深下浅，近似绒面牌桌）
+    local w, h = love.graphics.getDimensions()
+    local strips = 12
+    local band = math.ceil(h / strips) + 1
+    for i = 0, strips - 1 do
+      local t = i / (strips - 1)
+      love.graphics.setColor(0.07 + t * 0.05, 0.055 + t * 0.13, 0.06 + t * 0.045)
+      love.graphics.rectangle("fill", 0, i * (h / strips), w, band)
+    end
+  end
+
+  -- 暗角：四周一圈渐深的半透明描边，把视线聚到桌面中央
+  local vw, vh = love.graphics.getDimensions()
+  for i = 0, 3 do
+    local inset = i * S(18)
+    love.graphics.setColor(0, 0, 0, 0.10 - i * 0.022)
+    love.graphics.rectangle("line", inset, inset,
+      math.max(1, vw - inset * 2), math.max(1, vh - inset * 2))
   end
 
   -- 底部仪表盘底框
@@ -1690,9 +1762,11 @@ function RoomScene:drawBackground()
   end
   if self.dashBase then
     local w, h = love.graphics.getDimensions()
-    local dh = self.dashBase:getHeight()
+    -- 底框按 UI 缩放等比绘制（与座位布局同一比例），底部锚定
+    local s = Scale.factor
+    local dw, dh = self.dashBase:getWidth() * s, self.dashBase:getHeight() * s
     love.graphics.setColor(1, 1, 1, 0.85)
-    love.graphics.draw(self.dashBase, w / 2 - self.dashBase:getWidth() / 2, h - dh - 40)
+    love.graphics.draw(self.dashBase, w / 2 - dw / 2, h - dh - S(40), 0, s, s)
     love.graphics.setColor(1, 1, 1, 1)
   end
 end
@@ -1702,6 +1776,7 @@ function RoomScene:draw()
   if self.draft then self:drawDraft() return end
   love.graphics.clear(0.09, 0.13, 0.09)
   local room = self.room
+  local w, h = love.graphics.getDimensions()
 
   self:drawBackground()
 
@@ -1744,40 +1819,45 @@ function RoomScene:draw()
   if phase == "not_active" then phase = "等待"
   else phase = Room.PHASE_ZH[phase] or phase end
   love.graphics.print(string.format("第 %d 回合 · 行动：%s · 你的阶段：%s",
-    room.turn_count, cur and self:displayName(cur) or "-", phase), 460, 290)
+    room.turn_count, cur and self:displayName(cur) or "-", phase), S(460), S(290))
   love.graphics.print(string.format("摸牌堆 %d · 弃牌堆 %d",
-    #room.drawPile, #room.discardPile), 460, 315)
+    #room.drawPile, #room.discardPile), S(460), S(315))
   if self.mode == "identity" then
     love.graphics.setColor(0.6, 0.65, 0.6)
-    love.graphics.print("身份局：主公与忠臣 vs 反贼（内奸独立取胜）", 460, 340)
+    love.graphics.print("身份局：主公与忠臣 vs 反贼（内奸独立取胜）", S(460), S(340))
   end
 
   -- 动效（浮动伤害数字 / 出牌横幅）
   if self.effects then
-    local w, h = love.graphics.getDimensions()
     self.effects:draw(w, h, self.font, self.font_mid)
   end
 
   -- 五谷丰登展示区
   if self.revealed and #self.revealed > 0 then
     love.graphics.setColor(0.9, 0.85, 0.6)
-    love.graphics.print("五谷丰登：点击一张收入手中", 40, 298)
+    love.graphics.print("五谷丰登：点击一张收入手中", S(40), S(298))
     for i, c in ipairs(self.revealed) do
-      drawCard(40 + (i - 1) * (CARD_W + 8), 320, CARD_W, CARD_H, c,
-        self.font, self.font_sm, self)
+      local rx, ry = self:revealedCardRect(i)
+      drawCard(rx, ry, CARD_W, CARD_H, c, self.font, self.font_sm, self)
     end
   end
 
-  -- 手牌
+  -- 手牌：投影 + 悬浮抬起。鼠标悬停的牌上浮并描金边，
+  -- 选中的牌整体抬起——三层状态一眼可辨。
   love.graphics.setFont(self.font)
+  local hmx, hmy = mx, my
   for idx = 1, #self.human.hand do
     local c = self.human.hand[idx]
     if c == nil then break end
     local x, y = self:handCardRect(idx)
-    local lifted = ((self.selected[c] or self.picked == c) and 14 or 0)
-    -- 用 drawCard 画：有卡图就画真图（assets/image/card/*.png），
-    -- 没有才退化成白底+文字。以前这里是一段**独立的手写绘制**，
-    -- 只画白底矩形，所以手牌永远没有卡图（五谷丰登的展示牌反而有）。
+    local lifted = ((self.selected[c] or self.picked == c) and S(14) or 0)
+    local hovered = hmx >= x and hmx <= x + CARD_W and hmy >= y and hmy <= y + CARD_H
+    if hovered and self.room.pending and self.room.pending.player.is_human then
+      lifted = lifted + S(8)
+    end
+    -- 投影先画（叠在左边牌之上、本体之下），营造卡片悬浮感
+    love.graphics.setColor(0, 0, 0, 0.35)
+    love.graphics.rectangle("fill", x + S(3), y - lifted + S(5), CARD_W, CARD_H, 6, 6)
     drawCard(x, y - lifted, CARD_W, CARD_H, c, self.font, self.font_sm, self)
     -- 选中/拖拽的高亮叠在卡图之上
     if self.picked == c then
@@ -1786,6 +1866,9 @@ function RoomScene:draw()
     elseif self.selected[c] then
       love.graphics.setColor(0.95, 0.75, 0.2)
       love.graphics.rectangle("line", x, y - lifted, CARD_W, CARD_H, 6, 6)
+    elseif hovered then
+      love.graphics.setColor(1, 0.9, 0.5, 0.75)
+      love.graphics.rectangle("line", x, y - lifted, CARD_W, CARD_H, 6, 6)
     end
   end
 
@@ -1793,21 +1876,26 @@ function RoomScene:draw()
   local dx, dy = self:dragCardPos()
   if dx then
     local c = self.dragging
+    love.graphics.setColor(0, 0, 0, 0.4)
+    love.graphics.rectangle("fill", dx + S(4), dy + S(6), CARD_W, CARD_H, 6, 6)
     love.graphics.setColor(0.98, 0.96, 0.9)
     love.graphics.rectangle("fill", dx, dy, CARD_W, CARD_H, 6, 6)
     love.graphics.setColor(0.95, 0.8, 0.2)
     love.graphics.rectangle("line", dx, dy, CARD_W, CARD_H, 6, 6)
     love.graphics.setColor(faceColor(c))
     love.graphics.setFont(self.font_sm)
-    love.graphics.print(c:suitString() .. c.number, dx + 6, dy + 5)
+    love.graphics.print(c:suitString() .. c.number, dx + S(6), dy + S(5))
     love.graphics.setColor(0, 0, 0)
     love.graphics.setFont(self.font_mid)
-    love.graphics.printf(c:zhName(), dx, dy + 46, CARD_W, "center")
+    love.graphics.printf(c:zhName(), dx, dy + S(46), CARD_W, "center")
   end
 
-  -- 提示条
-  love.graphics.setColor(0.15, 0.2, 0.15)
-  love.graphics.rectangle("fill", 0, 610, 1130, 40)
+  -- 提示条（底部锚定；顶部一条金色发丝线提升质感）
+  local barH = S(40)
+  love.graphics.setColor(0.10, 0.14, 0.10, 0.92)
+  love.graphics.rectangle("fill", 0, h - barH, w, barH)
+  love.graphics.setColor(0.82, 0.68, 0.30, 0.55)
+  love.graphics.rectangle("fill", 0, h - barH, w, S(2))
   love.graphics.setFont(self.font)
   local req = room.pending
   -- 拖拽中优先显示实时距离/合法性（比 self.msg 更即时）
@@ -1846,33 +1934,41 @@ function RoomScene:draw()
     end
   end
   love.graphics.setColor(1, 1, 0.85)
-  love.graphics.print(prompt, 40, 620)
+  love.graphics.print(prompt, S(40), h - barH + S(10))
 
   -- AI 未配置时给一句明确提示：否则「开着 AI 却打得像 BOT」会让人以为是坏了
   if self.ai_mode ~= "off" and self.ai_error then
     love.graphics.setColor(1, 0.6, 0.5)
     love.graphics.setFont(self.font_sm)
-    love.graphics.print("AI 未启用（" .. self.ai_error .. "），这些座位正由规则 BOT 代打", 40, 588)
+    love.graphics.print("AI 未启用（" .. self.ai_error .. "），这些座位正由规则 BOT 代打", S(40), h - barH - S(22))
     love.graphics.setFont(self.font)
   end
 
-  -- 按钮
+  -- 按钮：双色调填充 + 金边，鼠标悬停时提亮
   love.graphics.setFont(self.font)
   for _, b in ipairs(self.buttons) do
-    love.graphics.setColor(0.2, 0.35, 0.2)
+    local hov = mx >= b.x and mx <= b.x + b.w and my >= b.y and my <= b.y + b.h
+    local lift = hov and 0.06 or 0
+    love.graphics.setColor(0.16 + lift, 0.30 + lift, 0.17 + lift)
     love.graphics.rectangle("fill", b.x, b.y, b.w, b.h, 8, 8)
-    love.graphics.setColor(1, 1, 1)
-    love.graphics.printf(b.text, b.x, b.y + 11, b.w, "center")
+    love.graphics.setColor(0.10 + lift, 0.20 + lift, 0.11 + lift)
+    love.graphics.rectangle("fill", b.x, b.y + b.h / 2, b.w, b.h / 2, 8, 8)
+    love.graphics.setColor(0.82, 0.68, 0.30, hov and 0.95 or 0.6)
+    love.graphics.rectangle("line", b.x, b.y, b.w, b.h, 8, 8)
+    love.graphics.setColor(1, 1, 1, hov and 1 or 0.92)
+    love.graphics.printf(b.text, b.x, b.y + S(11), b.w, "center")
   end
 
   -- AI 推测常驻小面板（右侧空闲区）与详情弹层（模态，最顶层）
   self:drawAIPanel()
   self:drawAIPopup()
 
-  -- 战斗日志：放在左下、手牌上方。
+  -- 战斗日志：放在左下、手牌上方（随窗口底部锚定）。
   -- 之前画在 x=620，正好压在自己的仪表盘上，长句还会超出右边缘。
-  local LOG_X, LOG_W, LOG_LINE = 12, 440, 16
+  local LOG_X, LOG_W, LOG_LINE = S(12), S(440), S(16)
   local LOG_MAX = 5
+  local _, vh2 = love.graphics.getDimensions()
+  local log_base = vh2 - CARD_H - S(44) - S(12)
   love.graphics.setFont(self.font_sm)
   local n = #room.loglines
   local first = math.max(1, n - LOG_MAX + 1)
@@ -1884,7 +1980,7 @@ function RoomScene:draw()
     return w
   end
   for i = first, n do
-    local y = 508 - LOG_LINE * (n - i)
+    local y = log_base - LOG_LINE * (n - i)
     local text = self:fitLogLine(tostring(room.loglines[i]), LOG_W, measure)
     -- 深色底衬 + 浅色文字，压在背景图上也读得清
     love.graphics.setColor(0, 0, 0, 0.45)

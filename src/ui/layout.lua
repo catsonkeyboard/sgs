@@ -7,9 +7,11 @@
 --
 -- 拿不到配置（无原版资源）时全部退回内置默认值，布局与改造前一致。
 local class = require "src.class"
+local Scale = require "src.ui.scale"
 
 local Layout = class("Layout")
 
+-- 设计基准值（1130x650 下的像素），实际按 Scale.factor 等比放大
 local DEFAULTS = {
   sceneW = 1130, sceneH = 650,
   photoW = 210, photoH = 104,
@@ -21,33 +23,36 @@ local DEFAULTS = {
   bottomBarH = 40,
 }
 
-function Layout:init(skin, n, panelW, panelH)
+function Layout:init(skin, n, panelW, panelH, sceneW, sceneH)
   self.skin = skin
   self.n = n or 4
   local sk = skin
-  self.sceneW = (sk and sk:number("room.minimumSceneSize[0]", 0))
+  local S = Scale.px
+  self.sceneW = sceneW
+    or (sk and sk:number("room.minimumSceneSize[0]", 0))
+    or nil
   if not self.sceneW or self.sceneW <= 0 then self.sceneW = DEFAULTS.sceneW end
-  self.sceneH = DEFAULTS.sceneH
+  self.sceneH = sceneH or DEFAULTS.sceneH
 
   -- 面板实际绘制尺寸由调用方（scene）给定。**布局与绘制必须用同一个尺寸**，
   -- 否则排版按 157 宽算、绘制画 210 宽，右侧面板会超出画布被裁掉。
   self.photoW = panelW or (sk and sk:number("photo.normalWidth")) or DEFAULTS.photoW
   self.photoH = panelH or (sk and sk:number("photo.normalHeight")) or DEFAULTS.photoH
-  self.roomPadding = (sk and sk:number("room.photoRoomPadding")) or DEFAULTS.roomPadding
-  self.dashPadding = (sk and sk:number("room.photoDashboardPadding")) or DEFAULTS.dashboardPadding
-  self.hDist = (sk and sk:number("room.photoHDistance")) or DEFAULTS.hDistance
-  self.vDist = (sk and sk:number("room.photoVDistance")) or DEFAULTS.vDistance
-  self.bottomBarH = DEFAULTS.bottomBarH
+  self.roomPadding = S((sk and sk:number("room.photoRoomPadding")) or DEFAULTS.roomPadding)
+  self.dashPadding = S((sk and sk:number("room.photoDashboardPadding")) or DEFAULTS.dashboardPadding)
+  self.hDist = S((sk and sk:number("room.photoHDistance")) or DEFAULTS.hDistance)
+  self.vDist = S((sk and sk:number("room.photoVDistance")) or DEFAULTS.vDistance)
+  self.bottomBarH = S(DEFAULTS.bottomBarH)
 
   -- photo 尺寸原本是 157x181（含头像），我们的面板更窄，按比例缩小后取用
-  if self.photoW > 300 then self.photoW = DEFAULTS.photoW end
-  if self.photoH > 160 then self.photoH = DEFAULTS.photoH end
+  if self.photoW > 300 * Scale.factor then self.photoW = S(DEFAULTS.photoW) end
+  if self.photoH > 160 * Scale.factor then self.photoH = S(DEFAULTS.photoH) end
 
-  self.dashboardH = (sk and sk:number("dashboard.normalHeight")) or 150
+  self.dashboardH = S((sk and sk:number("dashboard.normalHeight")) or 150)
   -- 无配置时（dashboardH 取默认 150）应精确落在原锚点 440 上，
   -- 保证没有原版资源的用户视觉零变化
-  self.dashboardY = self.sceneH - self.bottomBarH - self.dashboardH - 20
-  if self.dashboardY < 300 then self.dashboardY = DEFAULTS.dashboardY end
+  self.dashboardY = self.sceneH - self.bottomBarH - self.dashboardH - S(20)
+  if self.dashboardY < S(300) then self.dashboardY = S(DEFAULTS.dashboardY) end
 
   self.anchors = self:computeAnchors(self.n)
 end
@@ -73,7 +78,7 @@ function Layout:computeAnchors(n)
   local right = sides - left
 
   -- 顶排：沿 x 居中排开
-  local topY = self.roomPadding + 24
+  local topY = self.roomPadding + Scale.px(24)
   local totalW = top * self.photoW + (top - 1) * self.hDist
   local startX = math.max(self.roomPadding, (self.sceneW - totalW) / 2)
 

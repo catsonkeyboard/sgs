@@ -1,6 +1,9 @@
 -- 武将技能说明与共享弹层。
 -- 核心技能对象只保存执行逻辑与显示名；这里集中保存面向玩家的简明说明，
 -- 本地牌桌和联机牌桌共用，避免两套 UI 文案漂移。
+local Scale = require "src.ui.scale"
+local S = Scale.px
+
 local SkillDesc = {}
 
 SkillDesc.TEXT = {
@@ -143,12 +146,12 @@ end
 function SkillDesc.layout(popup)
   local sw, sh = love.graphics.getDimensions()
   local count = math.max(1, #(popup and popup.entries or {}))
-  local w = math.min(680, sw - 80)
-  local h = math.min(sh - 60, 112 + count * 68)
+  local w = math.min(S(680), sw - S(80))
+  local h = math.min(sh - S(60), S(112) + count * S(68))
   local x, y = (sw - w) / 2, (sh - h) / 2
   return {
     x = x, y = y, w = w, h = h,
-    close = { x = x + w - 94, y = y + 18, w = 72, h = 30 },
+    close = { x = x + w - S(94), y = y + S(18), w = S(72), h = S(30) },
   }
 end
 
@@ -173,24 +176,24 @@ function SkillDesc.draw(popup, font, font_mid, font_sm)
   love.graphics.setFont(font_mid or font)
   love.graphics.setColor(1, 0.90, 0.58)
   love.graphics.print(string.format("%s · %s", popup.player_name, popup.general_name),
-    box.x + 24, box.y + 20)
+    box.x + S(24), box.y + S(20))
   love.graphics.setFont(font_sm or font)
   love.graphics.setColor(0.72, 0.78, 0.70)
-  love.graphics.print(popup.subtitle or "武将技能说明", box.x + 24, box.y + 51)
+  love.graphics.print(popup.subtitle or "武将技能说明", box.x + S(24), box.y + S(51))
 
   local entries = popup.entries or {}
   if #entries == 0 then
     love.graphics.setColor(0.82, 0.84, 0.78)
-    love.graphics.print("该武将没有技能。", box.x + 24, box.y + 84)
+    love.graphics.print("该武将没有技能。", box.x + S(24), box.y + S(84))
   else
     for i, entry in ipairs(entries) do
-      local ey = box.y + 78 + (i - 1) * 68
+      local ey = box.y + S(78) + (i - 1) * S(68)
       love.graphics.setFont(font or font_sm)
       love.graphics.setColor(0.96, 0.76, 0.28)
-      love.graphics.print("【" .. entry.name .. "】", box.x + 24, ey)
+      love.graphics.print("【" .. entry.name .. "】", box.x + S(24), ey)
       love.graphics.setFont(font_sm or font)
       love.graphics.setColor(0.90, 0.92, 0.86)
-      love.graphics.printf(entry.desc, box.x + 112, ey + 1, box.w - 142, "left")
+      love.graphics.printf(entry.desc, box.x + S(112), ey + S(1), box.w - S(142), "left")
     end
   end
 
@@ -199,7 +202,7 @@ function SkillDesc.draw(popup, font, font_mid, font_sm)
   love.graphics.rectangle("fill", c.x, c.y, c.w, c.h, 6, 6)
   love.graphics.setColor(1, 1, 1)
   love.graphics.setFont(font_sm or font)
-  love.graphics.printf("关闭", c.x, c.y + 7, c.w, "center")
+  love.graphics.printf("关闭", c.x, c.y + S(7), c.w, "center")
 end
 
 return SkillDesc

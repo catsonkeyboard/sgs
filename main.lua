@@ -11,6 +11,7 @@ for _, a in ipairs(arg or {}) do
 end
 
 local current_scene = nil
+local Scale = require "src.ui.scale"
 
 local startGame, startNet, backToMenu
 local startNetScene
@@ -107,6 +108,7 @@ function love.load()
     love.event.quit()
     return
   end
+  Scale.refresh() -- 窗口就绪后先定 UI 缩放，再建场景（场景初始化要用）
   if autostart then
     startGame() -- 无头/GUI 泛化验证：跳过菜单直达牌桌
   else
@@ -114,9 +116,33 @@ function love.load()
   end
 end
 
-function love.keypressed(key)
+function love.keypressed(key, scancode, isrepeat)
+  -- 全屏切换（desktop 模式不改分辨率，切换即时无黑屏）：
+  --   F11 / Alt+Enter：Windows、Linux 惯用
+  --   Cmd+Enter / Ctrl+Cmd+F：macOS 惯用（F11 默认被系统「显示桌面」拦截）
+  local down = love.keyboard.isDown
+  local alt = down("lalt") or down("ralt")
+  local cmd = down("lgui") or down("rgui")
+  local ctrl = down("lctrl") or down("rctrl")
+  if key == "f11"
+    or (key == "return" and (alt or cmd))
+    or (key == "f" and cmd and ctrl) then
+    local fs = love.window.getFullscreen()
+    love.window.setFullscreen(not fs, "desktop")
+    return
+  end
   if current_scene and current_scene.keypressed then
     current_scene:keypressed(key)
+  end
+end
+
+-- 窗口尺寸变化（拖拽调窗 / 全屏切换 / 高分屏 DPI 变化）：
+-- 刷新全局 UI 缩放，并让当前场景重建字体与布局。
+function love.resize(w, h)
+  Scale.refresh()
+  if current_scene and current_scene.onResize then
+    local ok, err = pcall(current_scene.onResize, current_scene, w, h)
+    if not ok then print("[resize] 场景重建失败: " .. tostring(err)) end
   end
 end
 

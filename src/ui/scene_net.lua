@@ -11,8 +11,23 @@ local Skin = require "src.ui.skin"
 local Effects = require "src.ui.effects"
 local Audio = require "src.ui.audio"
 local SkillDesc = require "src.ui.skill_desc"
+local Scale = require "src.ui.scale"
+local S = Scale.px
 
+-- 设计基准（Scale.factor=1 与旧版一致）；随窗口/DPI 重算
 local CARD_W, CARD_H = 92, 128
+local FONT_PATH = "assets/font/DroidSansFallback.ttf"
+
+local function refreshMetrics()
+  CARD_W, CARD_H = S(92), S(128)
+end
+
+local function buildFonts()
+  local f = function(size)
+    return Scale.font(FONT_PATH, size) or love.graphics.newFont(FONT_PATH, size)
+  end
+  return f(18), f(13), f(15)
+end
 
 local NetScene = class("NetScene")
 
@@ -21,15 +36,16 @@ function NetScene:init(on_exit, client, name)
   self.client = client
   self.name = name or "我"
 
+  refreshMetrics()
   self.skin = Skin.create()
   self.effects = Effects.create()
   self.audio = Audio.create(self.skin)
-  self.layout = Layout.create(self.skin, 5, 210, 96)
+  local vw, vh = love.graphics.getDimensions()
+  self.layout = Layout.create(self.skin, 5, S(210), S(96), vw, vh)
   self.panelW, self.panelH = self.layout:panelSize()
 
-  self.font = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 18)
-  self.font_sm = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 13)
-  self.font_mid = love.graphics.newFont("assets/font/DroidSansFallback.ttf", 15)
+  local font, font_sm, font_mid = buildFonts()
+  self.font, self.font_sm, self.font_mid = font, font_sm, font_mid
 
   self.snap = nil      -- 服务端快照
   self.hand = {}       -- 本人手牌（slim 表）
@@ -97,8 +113,9 @@ end
 function NetScene:_refreshButtons()
   local btns = {}
   local function push(text, cb) table.insert(btns, { text = text, cb = cb }) end
-  local y, h = 610, 40
-  local x = 700
+  local _, vh = love.graphics.getDimensions()
+  local y = vh - S(40)
+  local x = S(700)
   if self.client.over then
     push("返回菜单", function() self.on_exit() end)
   elseif self.req then
@@ -113,13 +130,13 @@ function NetScene:_refreshButtons()
     end
   end
   for i, b in ipairs(btns) do
-    b.x, b.y, b.w, b.h = x + (i - 1) * 130, y, 120, h
+    b.x, b.y, b.w, b.h = x + (i - 1) * S(130), y, S(120), S(40)
   end
   -- 「退出对局」常驻（二次确认）：联机下退出要顺带断开连接，
   -- 否则服务端会把座位挂到 60 秒宽限结束
   table.insert(btns, {
     text = self.confirmExit and "确认退出？" or "退出对局",
-    x = 20, y = 610, w = 110, h = 40,
+    x = S(20), y = y, w = S(110), h = S(40),
     cb = function()
       if self.confirmExit then
         self.confirmExit = false
@@ -151,7 +168,19 @@ end
 -- ===== 输入 =====
 
 function NetScene:handCardRect(i)
-  return 40 + (i - 1) * (CARD_W + 8), 470, CARD_W, CARD_H
+  local _, vh = love.graphics.getDimensions()
+  return S(40) + (i - 1) * (CARD_W + S(8)), vh - CARD_H - S(52), CARD_W, CARD_H
+end
+
+-- 窗口尺寸/全屏变化：重算字体与布局（联机状态不动）
+function NetScene:onResize()
+  refreshMetrics()
+  local font, font_sm, font_mid = buildFonts()
+  self.font, self.font_sm, self.font_mid = font, font_sm, font_mid
+  local vw, vh = love.graphics.getDimensions()
+  self.layout = Layout.create(self.skin, 5, S(210), S(96), vw, vh)
+  self.panelW, self.panelH = self.layout:panelSize()
+  self:_refreshButtons()
 end
 
 function NetScene:cardAt(x, y)
@@ -179,7 +208,7 @@ end
 function NetScene:avatarRect(index)
   local a = self.layout.anchors[index]
   if not a then return nil end
-  return { x = a[1] + 6, y = a[2] + 40, w = self.panelW - 12, h = 25 }
+  return { x = a[1] + S(6), y = a[2] + S(40), w = self.panelW - S(12), h = S(25) }
 end
 
 function NetScene:avatarAt(x, y)
@@ -283,6 +312,7 @@ end
 
 function NetScene:draw()
   love.graphics.clear(0.09, 0.13, 0.09)
+  local w, h = love.graphics.getDimensions()
 
   -- 玩家面板（来自服务端快照）
   if self.snap then
@@ -293,21 +323,23 @@ function NetScene:draw()
   else
     love.graphics.setColor(0.7, 0.75, 0.7)
     love.graphics.setFont(self.font)
-    love.graphics.printf("正在连接服务端…", 0, 280, 1130, "center")
+    love.graphics.printf("正在连接服务端…", 0, S(280), w, "center")
   end
 
-  -- 手牌
+  -- 手牌（阴影 + 选中抬起，与单机桌同一套手感）
   for i, c in ipairs(self.hand) do
     local x, y = self:handCardRect(i)
-    local lifted = (self.picked == c) and 14 or 0
+    local lifted = (self.picked == c) and S(14) or 0
+    love.graphics.setColor(0, 0, 0, 0.35)
+    love.graphics.rectangle("fill", x + S(3), y - lifted + S(5), CARD_W, CARD_H, 6, 6)
     love.graphics.setColor(0.96, 0.94, 0.88)
     love.graphics.rectangle("fill", x, y - lifted, CARD_W, CARD_H, 6, 6)
     love.graphics.setColor(0, 0, 0)
     love.graphics.rectangle("line", x, y - lifted, CARD_W, CARD_H, 6, 6)
     love.graphics.setFont(self.font_mid)
-    love.graphics.printf(c.zh or c.name or "?", x, y + 46 - lifted, CARD_W, "center")
+    love.graphics.printf(c.zh or c.name or "?", x, y + S(46) - lifted, CARD_W, "center")
     love.graphics.setFont(self.font_sm)
-    love.graphics.print(tostring(c.number or ""), x + 6, y + 5 - lifted)
+    love.graphics.print(tostring(c.number or ""), x + S(6), y + S(5) - lifted)
   end
 
   -- 按钮
@@ -316,27 +348,26 @@ function NetScene:draw()
     love.graphics.rectangle("fill", b.x, b.y, b.w, b.h, 8, 8)
     love.graphics.setColor(1, 1, 1)
     love.graphics.setFont(self.font)
-    love.graphics.printf(b.text, b.x, b.y + 10, b.w, "center")
+    love.graphics.printf(b.text, b.x, b.y + S(10), b.w, "center")
   end
 
-  -- 日志（右下角最近 6 条）
+  -- 日志（提示条上方右对齐区域，最近 6 条）
   love.graphics.setFont(self.font_sm)
   love.graphics.setColor(0.75, 0.8, 0.75)
   local logs = self.client.logs or {}
   local from = math.max(1, #logs - 5)
   for i = from, #logs do
-    love.graphics.print(logs[i], 700, 470 + (i - from) * 18)
+    love.graphics.print(logs[i], S(700), S(470) + (i - from) * S(18))
   end
 
-  -- 提示条
-  love.graphics.setColor(0.15, 0.2, 0.15)
-  love.graphics.rectangle("fill", 0, 560, 700, 40)
+  -- 提示条（底部锚定）
+  love.graphics.setColor(0.10, 0.14, 0.10, 0.92)
+  love.graphics.rectangle("fill", 0, h - S(40), math.min(S(700), w), S(40))
   love.graphics.setColor(1, 0.95, 0.85)
   love.graphics.setFont(self.font)
-  love.graphics.print(self.msg or "", 16, 570)
+  love.graphics.print(self.msg or "", S(16), h - S(30))
 
   -- 动效
-  local w, h = love.graphics.getDimensions()
   self.effects:draw(w, h, self.font, self.font_mid)
 
   SkillDesc.draw(self.skillPopup, self.font, self.font_mid, self.font_sm)
@@ -348,26 +379,26 @@ function NetScene:drawPanel(p, x, y, isSelf)
   love.graphics.setColor(1, 1, 1)
   love.graphics.setFont(self.font_sm)
   love.graphics.print(string.format("%s%s", p.name or "?",
-    isSelf and "（你）" or ""), x + 8, y + 6)
+    isSelf and "（你）" or ""), x + S(8), y + S(6))
   if p.alive == false then
     love.graphics.setColor(0.9, 0.35, 0.3)
-    love.graphics.print("已阵亡", x + 8, y + 26)
+    love.graphics.print("已阵亡", x + S(8), y + S(26))
   else
     love.graphics.setColor(1, 1, 1)
     love.graphics.print(string.format("体力 %s/%s · 手牌 %s",
-      tostring(p.hp), tostring(p.max_hp), tostring(p.hand)), x + 8, y + 26)
+      tostring(p.hp), tostring(p.max_hp), tostring(p.hand)), x + S(8), y + S(26))
   end
   if p.general then
     if self.skillPopup and self.skillPopup.player_name == p.name then
       love.graphics.setColor(0.95, 0.72, 0.22)
-      love.graphics.rectangle("line", x + 5, y + 40, self.panelW - 10, 25, 4, 4)
+      love.graphics.rectangle("line", x + S(5), y + S(40), self.panelW - S(10), S(25), 4, 4)
     end
     love.graphics.setColor(0.85, 0.9, 0.85)
-    love.graphics.print(tostring(p.general) .. "（点击查看技能）", x + 8, y + 46)
+    love.graphics.print(tostring(p.general) .. "（点击查看技能）", x + S(8), y + S(46))
   end
   if p.role then
     love.graphics.setColor(0.95, 0.85, 0.4)
-    love.graphics.print(tostring(p.role), x + 8, y + 64)
+    love.graphics.print(tostring(p.role), x + S(8), y + S(64))
   end
 end
 
