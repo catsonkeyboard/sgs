@@ -813,6 +813,58 @@ do
   check(audio:playVoice("caocao") == false, "headless 下 playVoice 应静默返回 false")
 end
 
+print("\n--- 战斗日志截断不得拆坏 UTF-8 ---")
+
+do
+  -- 旧实现的续字节区间写反（[\128-\127] 空集）：中文被拆成孤立首字节，
+  -- 超宽日志一截断，print 直接抛 Invalid UTF-8（实测崩过两次）
+  local sc = RoomScene.create(function() end, "identity", 5, "off", { seed = 42 })
+  local real_font = sc.font_sm
+  sc.font_sm = setmetatable({ getWidth = function(_, t) return #t * 10 end },
+    { __index = function() return function() end end })
+  local function validUTF8(s)
+    local i = 1
+    while i <= #s do
+      local b = string.byte(s, i)
+      if b < 128 then i = i + 1
+      elseif b >= 192 then
+        local n = (b >= 240) and 4 or (b >= 224) and 3 or 2
+        if i + n - 1 > #s then return false end
+        for j = i + 1, i + n - 1 do
+          local c = string.byte(s, j)
+          if not c or c < 128 or c >= 192 then return false end
+        end
+        i = i + n
+      else return false end
+    end
+    return true
+  end
+  local measure = function(t)
+    if not (sc.font_sm and sc.font_sm.getWidth) then return nil end
+    local ok2, w = pcall(sc.font_sm.getWidth, sc.font_sm, t)
+    if not ok2 or type(w) ~= "number" then return nil end
+    return w
+  end
+
+  local long = string.rep("张飞对曹操使用过河拆桥", 10) -- 纯中文超宽行
+  local fitted = sc:fitLogLine(long, 300, measure)
+  check(validUTF8(fitted), "超宽中文日志截断后应保持合法 UTF-8")
+  check(#fitted < #long and fitted:sub(-3) == "…", "截断应收窄并以省略号结尾")
+  local zh_char = fitted:match("[\228-\233][\128-\191][\128-\191]")
+  check(zh_char ~= nil, "截断结果里应存在完整的中文字符（而非孤立首字节）")
+  local short = sc:fitLogLine("短日志", 300, measure)
+  check(short == "短日志", "未超宽应原样返回")
+  local mixed = sc:fitLogLine(string.rep("BOT·曹操 uses 杀 slash!! ", 6), 300, measure)
+  check(validUTF8(mixed), "中英混合截断也应保持合法")
+  sc.font_sm = real_font
+
+  -- draw 冒烟：塞一条超宽中文日志走完整绘制路径
+  table.insert(sc.room.loglines, string.rep("超宽日志行内容测试", 12))
+  local ok_draw, err_draw = pcall(function() sc:draw() end)
+  check(ok_draw, "含超宽日志的 draw 不应报错"
+    .. (ok_draw and "" or ("：" .. tostring(err_draw))))
+end
+
 print("\n--- AI 思考开关与推测展示 ---")
 
 do -- 文本截断必须按 UTF-8 完整字符：字节级截断会让 print 抛 Invalid UTF-8

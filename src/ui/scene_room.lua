@@ -1569,6 +1569,26 @@ function RoomScene:drawAIPopup()
   love.graphics.printf("关闭", c.x, c.y + 7, c.w, "center")
 end
 
+-- 战斗日志的单行超宽截断：按完整 UTF-8 字符逐个累加，量宽收口。
+-- 旧实现的续字节区间写反成 [\128-\127]（空集），中文被拆成孤立首字节，
+-- 拼出来的截断文本全是非法 UTF-8，print 直接崩（实测两次）。
+-- 正确区间：ASCII \1-\127，多字节首字节 \192-\255，续字节 \128-\191。
+function RoomScene:fitLogLine(text, max_w, measure)
+  local w = measure(text)
+  if not w or w <= max_w then return text end
+  local chars, acc = {}, ""
+  for ch in text:gmatch("[\1-\127\192-\255][\128-\191]*") do
+    chars[#chars + 1] = ch
+  end
+  for k = 1, #chars do
+    local cand = table.concat(chars, "", 1, k)
+    local cw = measure(cand .. "…")
+    if cw and cw > max_w then break end
+    acc = cand
+  end
+  return acc .. "…"
+end
+
 -- 桌面背景 + 底部仪表盘框体（有原版素材就画，没有就保持纯色）
 function RoomScene:drawBackground()
   if not self.skin then return end
@@ -1800,22 +1820,7 @@ function RoomScene:draw()
   end
   for i = first, n do
     local y = 508 - LOG_LINE * (n - i)
-    local text = tostring(room.loglines[i])
-    -- 超宽截断（按 UTF-8 字符逐个回退，避免截断出半个字）
-    local w = measure(text)
-    if w and w > LOG_W then
-      local chars, acc = {}, ""
-      for ch in text:gmatch("[\33-\127\192-\255][\128-\127]*") do
-        table.insert(chars, ch)
-      end
-      for k = 1, #chars do
-        local cand = table.concat(chars, "", 1, k)
-        local cw = measure(cand .. "…")
-        if cw and cw > LOG_W then break end
-        acc = cand
-      end
-      text = acc .. "…"
-    end
+    local text = self:fitLogLine(tostring(room.loglines[i]), LOG_W, measure)
     -- 深色底衬 + 浅色文字，压在背景图上也读得清
     love.graphics.setColor(0, 0, 0, 0.45)
     love.graphics.rectangle("fill", LOG_X - 3, y - 2,
