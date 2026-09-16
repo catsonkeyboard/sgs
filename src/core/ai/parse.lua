@@ -37,6 +37,48 @@ local function extractJson(raw)
 end
 Parse.extractJson = extractJson
 
+-- 从右往左找**最后一个**平衡的 JSON 对象。推理模型（glm-5 等走 chat
+-- 协议）的推理文本里常出现中间草稿 JSON，最终答案在末尾——
+-- extractJson 取第一个会拿错，这里从最后一个 } 往前反向配平尝试。
+local function extractLastJson(raw)
+  if type(raw) ~= "string" then return nil end
+  local s = raw:gsub("```%w*", "")
+  -- 收集全部 "}" 的位置，从最右边的开始反向配平
+  local closes = {}
+  local k = 1
+  while true do
+    local f = s:find("}", k, true)
+    if not f then break end
+    closes[#closes + 1] = f
+    k = f + 1
+  end
+  for ci = #closes, 1, -1 do
+    local endp = closes[ci]
+    local depth, i = 1, endp - 1
+    local in_str, esc = false, false
+    while i >= 1 do
+      local c = s:sub(i, i)
+      if in_str then
+        if esc then esc = false
+        elseif c == "\\" then esc = true
+        elseif c == '"' then in_str = false end
+      elseif c == '"' then in_str = true
+      elseif c == "}" then depth = depth + 1
+      elseif c == "{" then
+        depth = depth - 1
+        if depth == 0 then break end
+      end
+      i = i - 1
+    end
+    if i >= 1 and depth == 0 then
+      local obj = Json.decode(s:sub(i, endp))
+      if type(obj) == "table" then return obj end
+    end
+  end
+  return nil
+end
+Parse.extractLastJson = extractLastJson
+
 local function playerBySeat(room, seat)
   if not seat then return nil end
   for _, p in ipairs(room.players) do
@@ -75,10 +117,21 @@ local EXPECTED_COUNT = {
 function Parse.response(raw, req, room, actions)
   local me = req.player
   local data = extractJson(raw)
-  if type(data) ~= "table" then return nil, "输出不是合法 JSON" end
-
-  local ids = normalizeIds(data)
-  if not ids then return nil, "缺少 action/actions 字段" end
+  local ids = data and normalizeIds(data)
+  -- 首个 JSON 不可用（整个没有 JSON，或里面没有 action 字段）时，
+  -- 从最后一个 JSON 对象再试一次——推理模型的中间草稿 JSON 会把
+  -- extractJson 带偏，最终答案往往在文本末尾
+  if not ids then
+    local last = extractLastJson(raw)
+    if last and last ~= data then
+      data = last
+      ids = normalizeIds(data)
+    end
+  end
+  if not ids then
+    if type(data) ~= "table" then return nil, "输出不是合法 JSON" end
+    return nil, "缺少 action/actions 字段"
+  end
 
   local picked = {}
   for _, id in ipairs(ids) do

@@ -116,11 +116,17 @@ function Threaded:init(opts)
     and "http://127.0.0.1:8899/v1/chat/completions"
     or "https://api.openai.com/v1/chat/completions")
   self.protocol = opts.protocol or TransportLib.guessProtocol(self.url)
-  self.model = opts.model or "gpt-4o-mini"
+  -- 模型名由 fromEnv 校验后传入（SGS_AI_MODEL，必填，不写死默认）
+  self.model = opts.model
+  -- chat 协议思维链（GLM 系 thinking.type）：off/on 显式控制，nil 不发
+  self.chat_thinking = opts.chat_thinking
   self.api_key = opts.api_key or ""
   self.timeout = opts.timeout or 60
   self.temperature = opts.temperature or 0.2
-  self.max_tokens = opts.max_tokens or 300
+  -- 输出上限：推理模型（glm-5 等）先长篇推理、末尾才给 JSON，
+  -- 300 会把答案截在 JSON 之前（实测 842 字节处被掐）。
+  -- 4096 只是上限，按实际输出计费
+  self.max_tokens = opts.max_tokens or 4096
   -- Responses 协议（hy3）必须显式关掉思维链，否则单次 10 秒以上
   self.reasoning_effort = opts.reasoning_effort
   self.max_output_tokens = opts.max_output_tokens
@@ -198,16 +204,30 @@ end
 -- 没配就返回 nil + 原因，让上层决定是降级还是提示用户
 -- opts.reasoning 可覆盖 SGS_AI_REASONING（菜单「AI 思考」开关传入；
 -- 思维链开启时单次请求可达 12 秒以上，超时同步放宽到 150 秒）
+-- opts.env 可注入环境读取函数（单测用），默认 os.getenv
 local function fromEnv(opts)
   opts = opts or {}
-  local model = os.getenv("SGS_AI_MODEL") or "hy3"
-  local mode = os.getenv("SGS_AI_TRANSPORT") or "curl"
-  local effort = opts.reasoning or os.getenv("SGS_AI_REASONING") or "none"
+  local env = opts.env or os.getenv
+  local model = env("SGS_AI_MODEL")
+  local mode = env("SGS_AI_TRANSPORT") or "curl"
+  local effort = opts.reasoning or env("SGS_AI_REASONING") or "none"
   -- 思考开启（非 none）时给足思维链 + 重试的时间余量
   local timeout = (effort ~= "none" and effort ~= "") and 150 or 90
 
+  -- chat 协议的思维链：SGS_AI_THINKING=auto 不发参数（保守，防严格网关
+  -- 报未知字段）；off/on 显式控制；未设时跟随 effort（none→off，低/高→on）
+  local env_thinking = env("SGS_AI_THINKING")
+  local chat_thinking
+  if env_thinking == "auto" then
+    chat_thinking = nil
+  elseif env_thinking == "off" or env_thinking == "on" then
+    chat_thinking = env_thinking
+  else
+    chat_thinking = (effort == "none") and "off" or "on"
+  end
+
   if mode == "proxy" then
-    local base = os.getenv("SGS_AI_PROXY") or "http://127.0.0.1:8899"
+    local base = env("SGS_AI_PROXY") or "http://127.0.0.1:8899"
     local protocol = resolveProtocol(nil)
     local path = (protocol == "responses") and "/v1/responses" or "/v1/chat/completions"
     return Threaded.create({
@@ -216,17 +236,26 @@ local function fromEnv(opts)
       protocol = protocol,
       model = model,
       reasoning_effort = effort,
+      chat_thinking = chat_thinking,
       timeout = timeout,
     }), nil
   end
 
-  local url = os.getenv("SGS_AI_URL")
-  local key = os.getenv("SGS_AI_KEY") or os.getenv("OPENAI_API_KEY")
+  -- 直连模式三要素都必须在**游戏进程**里配齐。模型名必填且不写死：
+  -- 接口之间的模型名不通用，静默默认只会打出「接口不存在该模型」的
+  -- 远端报错，不如本地把话说清楚（proxy 模式的模型名可由代理侧注入，
+  -- 不受这条限制）
+  local url = env("SGS_AI_URL")
+  local key = env("SGS_AI_KEY") or env("OPENAI_API_KEY")
   if not url or url == "" then
     return nil, "未设置 SGS_AI_URL（模型接口地址）"
   end
   if not key or key == "" then
     return nil, "未设置 SGS_AI_KEY（接口密钥）"
+  end
+  if not model or model == "" then
+    return nil, "未设置 SGS_AI_MODEL（模型名，按你的接口填；"
+      .. "代理模式可改为在 ai_proxy.py 那个终端配置，由代理注入）"
   end
   return Threaded.create({
     mode = "curl",
@@ -235,6 +264,7 @@ local function fromEnv(opts)
     api_key = key,
     model = model,
     reasoning_effort = effort,
+    chat_thinking = chat_thinking,
     timeout = timeout,
   }), nil
 end

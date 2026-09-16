@@ -68,6 +68,19 @@ class ProxyHandler(BaseHTTPRequestHandler):
         else:
             self._reject(404, "只接受 POST /v1/chat/completions 与 GET /health")
 
+    def upstream_for(self):
+        # 协议由**游戏侧**决定（游戏按 SGS_AI_PROTOCOL 选请求路径与请求体格式）；
+        # 代理跟随：把 SGS_AI_URL 里的 /v1/* 端点替换成游戏本次请求的路径。
+        # 这样切协议只改游戏终端一处，代理侧 URL 不用动。
+        base = self.upstream
+        for suffix in ("/v1/responses", "/v1/chat/completions"):
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+                break
+        if self.path in ("/v1/responses", "/v1/chat/completions"):
+            return base + self.path
+        return self.upstream
+
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else b""
@@ -76,14 +89,28 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self._reject(500, "代理未配置 SGS_AI_URL")
             return
 
+        upstream = self.upstream_for()
+
+        # 模型名代理侧注入：游戏进程（proxy 模式）可以不配 SGS_AI_MODEL，
+        # 请求体不带 model 字段时在这里补上——与密钥同一哲学：
+        # 接口配置只留在代理侧。游戏侧若显式带了 model 则原样放行。
+        if self.inject_model:
+            try:
+                data = json.loads(body)
+                if not data.get("model"):
+                    data["model"] = self.inject_model
+                    body = json.dumps(data).encode()
+            except (ValueError, AttributeError):
+                pass  # 非 JSON 请求体：原样转发，让上游去报错
+
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         if self.api_key:
             headers["Authorization"] = "Bearer " + self.api_key
 
         if self.verbose:
-            log("[->] %s %d 字节" % (self.upstream, len(body)))
+            log("[->] %s %d 字节" % (upstream, len(body)))
 
-        req = urllib.request.Request(self.upstream, data=body, headers=headers, method="POST")
+        req = urllib.request.Request(upstream, data=body, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 out, status = resp.read(), resp.status
@@ -128,6 +155,11 @@ def main():
 
     ProxyHandler.upstream = upstream
     ProxyHandler.api_key = api_key
+    # 代理侧模型名：请求体缺 model 时注入（游戏 proxy 模式可完全不配模型）
+    ProxyHandler.inject_model = os.environ.get("SGS_AI_MODEL", "")
+    if not ProxyHandler.inject_model:
+        log("提示：未设置 SGS_AI_MODEL——游戏侧若也不配，上游会报缺少模型名。")
+        log("      export SGS_AI_MODEL=你的模型名（配在跑代理的这个终端即可）")
     ProxyHandler.timeout = args.timeout
     ProxyHandler.verbose = args.verbose
 

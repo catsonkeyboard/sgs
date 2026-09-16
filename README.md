@@ -96,9 +96,10 @@ diy/ 示例扩展的武将同样**默认不进随机池**（只供测试验证�
 **方式一：走本机代理（推荐）**——游戏只跟 127.0.0.1 明文通信，**密钥不进游戏进程**：
 
 ```bash
-# 终端 1
+# 终端 1（接口配置全在这边，游戏进程不需要任何密钥/模型名）
 export SGS_AI_URL="https://llm.example.com/v1/responses"
 export SGS_AI_KEY="sk-..."
+export SGS_AI_MODEL="你的模型名"    # 请求体缺 model 时代理自动注入
 ./tools/ai_proxy.py                 # 默认 127.0.0.1:8899，加 -v 看完整请求/响应
 
 # 终端 2
@@ -112,7 +113,7 @@ export SGS_AI_TRANSPORT=proxy
 # 直连（Responses API）
 export SGS_AI_URL="https://llm.example.com/v1/responses"
 export SGS_AI_KEY="sk-..."
-export SGS_AI_MODEL="hy3"
+export SGS_AI_MODEL="你的模型名"     # 必填，不写死：按你的接口填
 export SGS_AI_REASONING="none"      # ← 关键，见下
 ./run-game.sh
 ```
@@ -122,8 +123,13 @@ export SGS_AI_REASONING="none"      # ← 关键，见下
 参数必须写成 `{"reasoning": {"effort": "none"}}` —— 传 `"low"` 不被识别（会退回默认值），
 传顶层 `reasoning_effort` 完全无效。这两条都是实测踩出来的。
 
-其它环境变量：`SGS_AI_PROTOCOL`（chat / responses，默认按 URL 猜）、
-`SGS_AI_TRANSPORT`（curl / proxy）。
+其它环境变量：`SGS_AI_MODEL`（模型名不写死，按接口填；**curl 直连必配**，
+proxy 模式可只配在跑 ai_proxy.py 的那个终端、由代理注入）、
+`SGS_AI_PROTOCOL`（chat / responses，默认按 URL 猜）、
+`SGS_AI_TRANSPORT`（curl / proxy）、
+`SGS_AI_THINKING`（chat 协议的思维链开关，GLM 系 `thinking.type`；
+默认跟随「AI 思考」档位——关=disabled；`auto` 不发该字段，留给不认
+这个参数的严格网关）。直连缺必要变量时 AI 不启用，菜单/牌桌会提示原因。
 
 两种方式都不配也能玩：AI 会退化成**被动兜底**（不出牌、不响应，模型失联时最安全），不会卡死。
 

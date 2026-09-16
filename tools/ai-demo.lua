@@ -29,7 +29,10 @@ local Bot = require "src.core.bot"
 local Agent = require "src.core.ai.agent"
 local Transport = require "src.core.ai.transport"
 
-local model = os.getenv("SGS_AI_MODEL") or "hy3"
+local model = os.getenv("SGS_AI_MODEL")
+if not model or model == "" then
+  error("未设置 SGS_AI_MODEL（模型名，按你的接口填）", 0)
+end
 local mode = os.getenv("SGS_AI_TRANSPORT") or "curl"
 local url, key = os.getenv("SGS_AI_URL"), os.getenv("SGS_AI_KEY")
 local protocol = os.getenv("SGS_AI_PROTOCOL")
@@ -55,7 +58,7 @@ else
   if not url or url == "" or not key or key == "" then
     print("未配置 SGS_AI_URL / SGS_AI_KEY，无法做真机验证。")
     print("示例：export SGS_AI_URL=https://llm.example.com/v1/responses")
-    print("             export SGS_AI_KEY=sk-xxx ; export SGS_AI_MODEL=hy3")
+    print("             export SGS_AI_KEY=sk-xxx ; export SGS_AI_MODEL=你的模型名")
     return
   end
   transport = Transport.curl {

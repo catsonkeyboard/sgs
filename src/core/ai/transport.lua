@@ -38,13 +38,15 @@ local DEFAULT_PROTOCOL = "chat"
 
 local function buildBody(self, prompt)
   local protocol = self.protocol or DEFAULT_PROTOCOL
+  -- model 缺失时不带该字段（个别网关允许按账号默认模型兜底），
+  -- 绝大多数接口要求必填——由 fromEnv 提前校验，正常路径不会缺
   if protocol == "responses" then
     local body = {
-      model = self.model,
       instructions = prompt.system,
       input = prompt.user,
       stream = false,
     }
+    if self.model and self.model ~= "" then body.model = self.model end
     -- effort 只认 none/low/medium/high 里服务端支持的那几个；
     -- 不传就听服务端默认（hy3 默认 high，很慢）
     if self.reasoning_effort then
@@ -53,15 +55,24 @@ local function buildBody(self, prompt)
     if self.max_output_tokens then body.max_output_tokens = self.max_output_tokens end
     return Json.encode(body)
   end
-  return Json.encode({
-    model = self.model,
+  local chat = {
     temperature = self.temperature,
     max_tokens = self.max_tokens,
     messages = {
       { role = "system", content = prompt.system },
       { role = "user", content = prompt.user },
     },
-  })
+  }
+  if self.model and self.model ~= "" then chat.model = self.model end
+  -- chat 协议的思维链（GLM 系的 thinking.type）：显式 chat_thinking 优先，
+  -- 否则按 reasoning_effort 推导——"关"(none) → disabled，低/高 → enabled。
+  -- 推理模型不关的话每次决策都全量推理，一局慢得没法玩
+  local thinking = self.chat_thinking
+    or (self.reasoning_effort == "none" and "off"
+      or (self.reasoning_effort and self.reasoning_effort ~= "" and "on" or nil))
+  if thinking == "off" then chat.thinking = { type = "disabled" }
+  elseif thinking == "on" then chat.thinking = { type = "enabled" } end
+  return Json.encode(chat)
 end
 
 -- 从 Responses 的 output 数组里取助手文本。优先用顶层的 output_text
@@ -120,12 +131,32 @@ local function parseResponse(out, protocol)
       usage = data.usage }
   end
 
-  local content = data.choices and data.choices[1]
-    and data.choices[1].message and data.choices[1].message.content
-  if type(content) ~= "string" then
-    return { ok = false, err = "响应缺少 choices[1].message.content" }
+  -- chat 协议。推理模型（如 glm-5）的两个坑：
+  --   1) content 为空、真正内容在 reasoning_content 里（部分网关如此）；
+  --   2) content 被拆成多段（[{type="text",text=...}]）。
+  local msg = data.choices and data.choices[1] and data.choices[1].message
+  msg = type(msg) == "table" and msg or {}
+  local reasoning = msg.reasoning_content or msg.reasoning
+  local content = msg.content
+  if type(content) == "table" then
+    local parts = {}
+    for _, p in ipairs(content) do
+      if type(p) == "table" and type(p.text) == "string" then
+        parts[#parts + 1] = p.text
+      end
+    end
+    content = table.concat(parts)
   end
-  return { ok = true, text = content, usage = data.usage }
+  if type(content) ~= "string" or content == "" then
+    -- 最终答案可能写在推理文本末尾：把 reasoning_content 交给上层，
+    -- 解析层会优先取**最后一个** JSON 对象（推理中间的草稿 JSON 不能用）
+    if type(reasoning) == "string" and reasoning ~= "" then
+      return { ok = true, text = reasoning, reasoning = reasoning, usage = data.usage }
+    end
+    return { ok = false, err = "chat 响应 content 为空（推理模型的答案可能被网关丢弃）" }
+  end
+  return { ok = true, text = content,
+    reasoning = type(reasoning) == "string" and reasoning or nil, usage = data.usage }
 end
 
 -- ===== Mock：不联网，用于跑通链路与单测 =====
@@ -190,14 +221,21 @@ function Curl:init(opts)
   local url = opts.url or "https://api.openai.com/v1/chat/completions"
   self.url = url
   self.protocol = opts.protocol or (url:find("/responses", 1, true) and "responses" or "chat")
-  self.model = opts.model or "gpt-4o-mini"
+  -- 模型名必填：由调用方（fromEnv/工具）校验后传入，不写死默认值
+  self.model = opts.model
   self.api_key = opts.api_key or os.getenv("OPENAI_API_KEY") or ""
   self.timeout = opts.timeout or 60
   self.temperature = opts.temperature or 0.2
-  self.max_tokens = opts.max_tokens or 300
+  -- 输出上限：推理模型（glm-5 等）先长篇推理、末尾才给 JSON，
+  -- 300 会把答案截在 JSON 之前（实测 842 字节处被掐）。
+  -- 4096 只是上限，按实际输出计费
+  self.max_tokens = opts.max_tokens or 4096
   -- Responses 协议：关掉思维链能把单次调用从 12 秒压到 1.5 秒，务必显式给 none
   self.reasoning_effort = opts.reasoning_effort
   self.max_output_tokens = opts.max_output_tokens
+  -- chat 协议的思维链开关（GLM 系：thinking.type = disabled/enabled）。
+  -- "off"/"on" 显式控制；nil 不发该字段（保守，防严格网关报未知参数）
+  self.chat_thinking = opts.chat_thinking
   self.extra_headers = opts.extra_headers
   self._result = nil
   self._cmd = nil
@@ -330,11 +368,15 @@ function Proxy:init(opts)
   local default_path = (self.protocol == "responses") and "/v1/responses"
     or "/v1/chat/completions"
   self.url = opts.path and (base .. opts.path) or (base .. default_path)
-  self.model = opts.model or "gpt-4o-mini"
+  -- 模型名必填：由调用方（fromEnv/工具）校验后传入，不写死默认值
+  self.model = opts.model
   self.api_key = opts.api_key or ""   -- 一般留空：代理那边已经配了
   self.timeout = opts.timeout or 90
   self.temperature = opts.temperature or 0.2
-  self.max_tokens = opts.max_tokens or 300
+  -- 输出上限：推理模型（glm-5 等）先长篇推理、末尾才给 JSON，
+  -- 300 会把答案截在 JSON 之前（实测 842 字节处被掐）。
+  -- 4096 只是上限，按实际输出计费
+  self.max_tokens = opts.max_tokens or 4096
   self.reasoning_effort = opts.reasoning_effort
   self.max_output_tokens = opts.max_output_tokens
   self._result = nil

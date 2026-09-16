@@ -551,6 +551,49 @@ do
   }, { system = "S", user = "U" }))
   check(d2.messages and #d2.messages == 2 and d2.instructions == nil,
     "chat 请求体应仍是 messages 数组")
+  check(d2.model == "m", "chat 请求体应带上显式给的模型名")
+  check(d2.max_tokens == 50, "显式给的 max_tokens 应生效")
+
+  -- 输出上限默认要够推理模型「先推理后 JSON」：300 会把答案截在
+  -- JSON 之前（glm-5 实测 842 字节被掐，全文无 JSON）。
+  -- 通过真实构造器（Curl:init）验证，默认值不在 buildBody 里
+  local c = Transport.curl({ protocol = "chat", model = "m" })
+  local d3 = Json.decode(c:_body({ system = "S", user = "U" }))
+  check(d3.max_tokens >= 4096,
+    "chat 默认 max_tokens 应 ≥4096（实得 " .. tostring(d3.max_tokens) .. "）")
+
+  -- chat 协议的思维链开关（GLM 系）：跟随 effort / 显式 / 不发
+  local dt_off = Json.decode(Transport.buildBody({
+    protocol = "chat", model = "m", reasoning_effort = "none",
+  }, { system = "S", user = "U" }))
+  check(dt_off.thinking and dt_off.thinking.type == "disabled",
+    "effort=none 时 chat 应发 thinking disabled（推理模型不关会超时，实测踩过）")
+  local dt_on = Json.decode(Transport.buildBody({
+    protocol = "chat", model = "m", reasoning_effort = "high",
+  }, { system = "S", user = "U" }))
+  check(dt_on.thinking and dt_on.thinking.type == "enabled",
+    "effort=低/高 时 chat 应发 thinking enabled")
+  local dt_auto = Json.decode(Transport.buildBody({
+    protocol = "chat", model = "m",
+  }, { system = "S", user = "U" }))
+  check(dt_auto.thinking == nil,
+    "未给 effort 且未显式配置时不应发 thinking 字段（防严格网关报未知参数）")
+  local dt_explicit = Json.decode(Transport.buildBody({
+    protocol = "chat", model = "m", reasoning_effort = "high",
+    chat_thinking = "off",
+  }, { system = "S", user = "U" }))
+  check(dt_explicit.thinking.type == "disabled", "显式 chat_thinking 应覆盖 effort 推导")
+
+  -- 模型名不写死：调用方漏传时请求体不带 model 字段（不塞默认值，
+  -- 也不塞 null——塞了会打出「接口不存在该模型」的远端报错，难排查）
+  local dm1 = Json.decode(Transport.buildBody({
+    protocol = "responses",
+  }, { system = "S", user = "U" }))
+  check(dm1.model == nil, "responses 未给模型名时不应凭空带 model 字段")
+  local dm2 = Json.decode(Transport.buildBody({
+    protocol = "chat",
+  }, { system = "S", user = "U" }))
+  check(dm2.model == nil, "chat 未给模型名时不应凭空带 model 字段")
 
   -- 解析：优先 output_text
   local r1 = Transport.parseResponse(
@@ -890,6 +933,118 @@ do -- curl 命令构建的跨平台断言：POSIX 单引号 + rm；Windows 双�
     "Windows 带空格/中文的路径应被双引号包裹")
   check(win:find('2>&1 & del ', 1, false) ~= nil and not win:find("rm "),
     "Windows 应用 del 清理且不出现 rm")
+end
+
+do -- fromEnv：模型名按模式区分——直连必配游戏侧，代理模式可由代理侧注入
+  local ok_mod, AirTrans = pcall(require, "src.ui.ai_transport")
+  if not ok_mod then
+    check(false, "应能加载 src.ui.ai_transport（" .. tostring(AirTrans) .. "）")
+  else
+    local function envWith(t)
+      local real = os.getenv
+      return function(k) return t[k] ~= nil and t[k] or real(k) end
+    end
+
+    -- 直连：URL/KEY 齐但缺模型名 → 明确报错（不写死默认）
+    local t1, err1 = AirTrans.fromEnv({
+      env = envWith({ SGS_AI_URL = "https://llm.example.com/v1/responses",
+        SGS_AI_KEY = "sk-test", SGS_AI_MODEL = "" }),
+    })
+    check(t1 == nil and tostring(err1):find("SGS_AI_MODEL", 1, true) ~= nil,
+      "直连缺模型名应报 SGS_AI_MODEL 错误（实得 " .. tostring(err1) .. "）")
+
+    -- 代理模式：游戏侧不配模型名也应可用（由 ai_proxy 注入）
+    local t2, err2 = AirTrans.fromEnv({
+      env = envWith({ SGS_AI_TRANSPORT = "proxy", SGS_AI_MODEL = "" }),
+    })
+    check(t2 ~= nil, "代理模式不配模型名应仍可创建传输层（实得 " .. tostring(err2) .. "）")
+
+    -- 直连：三要素齐 → 正常创建，且模型名要真的传进去
+    local t3 = AirTrans.fromEnv({
+      env = envWith({ SGS_AI_URL = "https://llm.example.com/v1/responses",
+        SGS_AI_KEY = "sk-test", SGS_AI_MODEL = "my-model" }),
+    })
+    check(t3 ~= nil and t3.model == "my-model",
+      "直连配置齐全应创建成功并带上模型名")
+
+    -- chat 思维链映射：默认跟随 effort（none→off）；SGS_AI_THINKING 可覆盖
+    local t4 = AirTrans.fromEnv({
+      env = envWith({ SGS_AI_URL = "https://llm.example.com/v1/chat/completions",
+        SGS_AI_KEY = "sk-test", SGS_AI_MODEL = "m" }),
+    })
+    check(t4 ~= nil and t4.chat_thinking == "off",
+      "effort 默认 none 时 chat_thinking 应为 off（关闭思考）")
+    local t5 = AirTrans.fromEnv({
+      env = envWith({ SGS_AI_URL = "https://llm.example.com/v1/chat/completions",
+        SGS_AI_KEY = "sk-test", SGS_AI_MODEL = "m", SGS_AI_THINKING = "auto" }),
+    })
+    check(t5 ~= nil and t5.chat_thinking == nil,
+      "SGS_AI_THINKING=auto 应不发 thinking 字段")
+    local t6 = AirTrans.fromEnv({
+      env = envWith({ SGS_AI_URL = "https://llm.example.com/v1/chat/completions",
+        SGS_AI_KEY = "sk-test", SGS_AI_MODEL = "m", SGS_AI_THINKING = "on" }),
+    })
+    check(t6 ~= nil and t6.chat_thinking == "on", "SGS_AI_THINKING=on 应显式开启")
+  end
+end
+
+do -- 协议不匹配的报错要带人话提示（TokenHub glm-5 不支持 Responses 实测踩过）
+  local hinted = Agent.protocolHint(
+    "Model glm-5 does not support the requested protocol Responses API")
+  check(hinted:find("SGS_AI_PROTOCOL=chat", 1, true) ~= nil
+    and hinted:find("chat/completions", 1, true) ~= nil,
+    "报错含 not support + Responses 时应附协议切换提示")
+  check(Agent.protocolHint("超过 30 秒未返回") == "超过 30 秒未返回",
+    "其它错误不应被附加提示")
+  check(Agent.protocolHint(nil) == nil, "非字符串输入应原样返回")
+end
+
+do -- 推理模型走 chat 协议的两个坑（glm-5 实测）：空 content + 答案在推理末尾
+  -- 1) chat 解析：content 为空时回落 reasoning_content，多段 content 能拼接
+  local r1 = Transport.parseResponse([[
+    {"choices":[{"message":{"content":"","reasoning_content":"先想想…可能选 2 号？不对。最终：{\"action\":1,\"reason\":\"出杀\"}"}}]}]],
+    "chat")
+  check(r1.ok and r1.text:find("action", 1, true) ~= nil,
+    "content 为空时应回落到 reasoning_content（" .. tostring(r1.err) .. "）")
+  -- 注意用长括号字符串：内层 JSON 的 \" 需要保留给 JSON 解码，
+  -- 单引号字符串会把反斜杠消耗掉导致外层 JSON 非法
+  local r2 = Transport.parseResponse(
+    [[{"choices":[{"message":{"content":[{"type":"text","text":"{\"action\":1}"},{"type":"text","text":"好"}]}}]}]],
+    "chat")
+  check(r2.ok and r2.text:find("action", 1, true) ~= nil, "content 为多段时应拼接文本")
+  local r3 = Transport.parseResponse(
+    [[{"choices":[{"message":{"content":" Plain text, no json "}}]}]], "chat")
+  check(r3.ok and r3.text:find("json", 1, true) ~= nil,
+    "content 为纯文本时应原样交给解析层判 JSON（ok=true）")
+
+  -- 2) 解析层：推理文本里有草稿 JSON 时取最后一个
+  local raw = '思考：先看 {"action":3} 这个不对，再想想。结论：{"action":1,"reason":"闪他"}'
+  check(Parse.extractLastJson(raw).action == 1,
+    "extractLastJson 应取最后一个 JSON（最终答案）")
+  check(Parse.extractJson(raw).action == 3,
+    "extractJson 仍取第一个（对照，确认两者行为差异）")
+
+  -- 3) 端到端：首 JSON 是草稿（无 action 字段）→ 自动落到末尾的真答案
+  local room = makeRoom(13, { 1 })
+  local acts = {}
+  for i = 1, 3 do acts[i] = { id = i, kind = "choice", value = "选项" .. i } end
+  local resp, err = Parse.response(
+    '草稿 {"maybe":true} 不算，最终 {"action":2,"reason":"选二"}',
+    { type = "askForChoice", player = room.players[1] }, room, acts)
+  check(resp == "选项2" and err == nil,
+    "草稿 JSON 缺 action 时应回落到最后一个 JSON（实得 resp="
+      .. tostring(resp) .. " err=" .. tostring(err) .. "）")
+end
+
+do -- 请求摘要的牌名要中文化：thinkingLabel「正在思考：需要打出【闪】」
+  local View = require "src.core.ai.view"
+  local brief = View.requestBrief({ type = "askForCard", card_name = "dodge" })
+  check(brief.ask == "需要打出【闪】",
+    "askForCard 摘要应显示中文牌名（实得 " .. tostring(brief.ask) .. "）")
+  local brief2 = View.requestBrief({ type = "askForCard", card_name = "peach" })
+  check(brief2.ask == "需要打出【桃】", "peach 也应显示为【桃】")
+  local brief3 = View.requestBrief({ type = "askForCard" })
+  check(brief3.ask == "需要打出【?】", "缺牌名时安全兜底")
 end
 
 print(string.format("\n===== AI 测试: %d passed, %d failed =====", passes, failures))

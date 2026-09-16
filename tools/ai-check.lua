@@ -24,7 +24,7 @@ print("== AI 自检 ==")
 -- 1. 配置
 local url = os.getenv("SGS_AI_URL")
 local key = os.getenv("SGS_AI_KEY") or os.getenv("OPENAI_API_KEY")
-local model = os.getenv("SGS_AI_MODEL") or "hy3"
+local model = os.getenv("SGS_AI_MODEL")
 local effort = os.getenv("SGS_AI_REASONING") or "none"
 local mode = os.getenv("SGS_AI_TRANSPORT") or "curl"
 
@@ -34,7 +34,16 @@ if mode ~= "proxy" then
 else
   print("PASS  代理模式：游戏侧不需要密钥")
 end
-check(model ~= "", "模型：" .. model)
+if mode == "proxy" then
+  if model and model ~= "" then
+    check(true, "SGS_AI_MODEL 已配置（游戏侧，优先于代理侧）：" .. model)
+  else
+    check(true, "代理模式：模型名可由代理侧注入（SGS_AI_MODEL 配在 ai_proxy.py 的终端）")
+  end
+else
+  check(model and model ~= "",
+    "SGS_AI_MODEL 已配置（直连模式必须在游戏侧配置）：" .. tostring(model))
+end
 check(effort == "none",
   "思维链已关闭（SGS_AI_REASONING=" .. effort .. "）——没关的话每次调用 10 秒以上")
 print()

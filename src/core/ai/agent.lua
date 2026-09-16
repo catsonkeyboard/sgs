@@ -169,6 +169,10 @@ function Agent:_poll(req, room)
 
   local resp, err, extra = Parse.response(res.text, req, room, cur.actions)
   if err then
+    -- 解析失败时把原始输出打到终端：不同模型/网关的输出形态差异大
+    -- （如推理模型把答案藏进 reasoning_content），没有原文无从排查
+    print(string.format("[AI] 解析失败（%s），原始输出 %d 字节：\n%s",
+      tostring(err), #tostring(res.text), tostring(res.text)))
     self.stats.rejections[#self.stats.rejections + 1] = err
     if #self.stats.rejections > 20 then table.remove(self.stats.rejections, 1) end
     return self:_retryOrMechanical(req, room, err)
@@ -190,10 +194,33 @@ function Agent:_poll(req, room)
   return resp, "ready"
 end
 
+-- 给上游报错补一句人话提示。模型不支持 Responses 协议时（TokenHub 的
+-- glm-5 等），网关报错原文很长且是英文，玩家最需要的是「怎么改」。
+function Agent.protocolHint(reason)
+  if type(reason) ~= "string" then return reason end
+  if reason:find("not support", 1, true) and reason:find("Responses", 1, true) then
+    return reason
+      .. " ← 该模型可能不支持 Responses 协议：直连把 SGS_AI_URL 换成"
+      .. " …/v1/chat/completions；代理模式在**游戏**的终端"
+      .. " export SGS_AI_PROTOCOL=chat（代理会自动跟随端点，无需改代理侧）"
+  end
+  -- chat 协议的 thinking 字段（GLM 系思维链开关）不被网关接受时，
+  -- 指引逃生口：auto = 不发该字段
+  if reason:find("thinking", 1, true) and (
+      reason:find("nrecognized", 1, true) or reason:find("nknown", 1, true)
+      or reason:find("nvalid", 1, true)) then
+    return reason
+      .. " ← 网关可能不认识 thinking 参数：export SGS_AI_THINKING=auto"
+      .. " 可改为不发该字段（代价：chat 模型无法关思维链，会较慢）"
+  end
+  return reason
+end
+
 -- 重试：把上一次的失败原因回喂给模型，让它自己纠正。
 function Agent:_retryOrMechanical(req, room, reason)
   local cur = self.current
   local attempt = cur and cur.attempt or 1
+  reason = Agent.protocolHint(reason)
   self.stats.errors[#self.stats.errors + 1] = tostring(reason)
   if #self.stats.errors > 30 then table.remove(self.stats.errors, 1) end
   if self.on_error then pcall(self.on_error, reason, req) end

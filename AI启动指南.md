@@ -1,6 +1,9 @@
 # AI 玩家启动指南
 
-本项目的 AI 托管由 LLM 驱动，默认按 **hy3 模型（Responses API）** 配置（可用 `SGS_AI_MODEL` 换任意模型）。
+本项目的 AI 托管由 LLM 驱动，模型名通过 **`SGS_AI_MODEL` 显式指定**（不写死默认——接口之间的模型名不通用）。配置位置分两种：
+
+- **直连模式**：必须配在**游戏启动的终端**；
+- **代理模式**：配在**跑 ai_proxy.py 的终端**即可（游戏请求不带模型名时由代理注入），游戏侧配了则优先生效。
 本文是从零开启 AI 的最短路径；设计与实现细节见 `AI-操作方案.md`。
 
 ---
@@ -15,9 +18,10 @@
 # 终端 1：起代理
 export SGS_AI_URL="https://llm.example.com/v1/responses"
 export SGS_AI_KEY="sk-..."
+export SGS_AI_MODEL="你的模型名"    # 请求体缺 model 时代理自动注入
 ./tools/ai_proxy.py                 # 默认监听 127.0.0.1:8899，加 -v 看完整请求/响应
 
-# 终端 2：起游戏
+# 终端 2：起游戏（接口配置全在终端 1，这里只需要这两个）
 export SGS_AI_TRANSPORT=proxy
 ./run-game.sh
 ```
@@ -29,7 +33,7 @@ export SGS_AI_TRANSPORT=proxy
 ```bash
 export SGS_AI_URL="https://llm.example.com/v1/responses"
 export SGS_AI_KEY="sk-..."
-export SGS_AI_MODEL="hy3"
+export SGS_AI_MODEL="你的模型名"      # 必填：按你的接口填
 export SGS_AI_REASONING="none"      # ← 关键，见下
 ./run-game.sh
 ```
@@ -42,11 +46,12 @@ export SGS_AI_REASONING="none"      # ← 关键，见下
 | --- | --- | --- |
 | `SGS_AI_URL` | 模型接口地址（Responses 协议用 `/v1/responses`） | 无，必填（直连模式） |
 | `SGS_AI_KEY` | 接口密钥（也可用 `OPENAI_API_KEY`） | 无，必填（直连模式） |
-| `SGS_AI_MODEL` | 模型名 | `hy3` |
+| `SGS_AI_MODEL` | 模型名（不写死；直连必配游戏侧，代理模式可只配代理侧） | 无 |
 | `SGS_AI_TRANSPORT` | `curl`（直连）/ `proxy`（本机代理） | `curl` |
 | `SGS_AI_PROXY` | 代理地址（proxy 模式） | `http://127.0.0.1:8899` |
 | `SGS_AI_PROTOCOL` | 接口形态 `chat` / `responses` | 按 URL 猜，默认 `responses` |
-| `SGS_AI_REASONING` | 思维链强度 `none` / `low` / ... | `none` |
+| `SGS_AI_REASONING` | 思维链强度 `none` / `low` / ...（Responses 协议） | `none` |
+| `SGS_AI_THINKING` | chat 协议思维链（GLM 系）：`off` / `on` / `auto`（不发字段） | 跟随 AI 思考档 |
 
 ### 两个关键注意点
 
@@ -115,5 +120,15 @@ export SGS_AI_REASONING="none"
 - **什么都没配会怎样？** 可以照常玩：AI 退化为**被动兜底**
   （不出牌、不响应，模型失联时最安全），不会卡死对局。
 - **AI 一直很慢？** 检查 `SGS_AI_REASONING` 是否为 `none`（见上）。
+- **报「Model xxx does not support … Responses API」？** 该模型只支持
+  Chat Completions 协议（如 TokenHub 的 glm-5；hy3 走 Responses）。
+  - 直连模式：把 `SGS_AI_URL` 换成 `…/v1/chat/completions`（URL 会自动
+    按 chat 猜协议）；
+  - 代理模式：在**游戏**的终端 `export SGS_AI_PROTOCOL=chat`（注意不是
+    代理终端——协议由游戏侧决定，代理会自动跟随对应端点，`SGS_AI_URL`
+    不用改），重启游戏。
+  chat 协议下「AI 思考」开关会转为 GLM 系的 `thinking.type` 参数
+  （关=disabled / 开=enabled）；若网关不认这个字段报未知参数错，
+  `export SGS_AI_THINKING=auto` 可改为不发（代价：无法关思维链，单次很慢）。
 - **代理模式连不上？** 确认 `./tools/ai_proxy.py` 已启动、端口是 8899
   （或与 `SGS_AI_PROXY` 一致）；代理日志加 `-v` 查看请求明细。

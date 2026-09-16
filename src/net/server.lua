@@ -58,16 +58,18 @@ local function buildAIAgent()
     local mode = os.getenv("SGS_AI_TRANSPORT") or "curl"
     local url = os.getenv("SGS_AI_URL")
     local key = os.getenv("SGS_AI_KEY") or os.getenv("OPENAI_API_KEY")
-    local model = os.getenv("SGS_AI_MODEL") or "hy3"
+    local model = os.getenv("SGS_AI_MODEL")
     local effort = os.getenv("SGS_AI_REASONING") or "none"
     if mode == "proxy" then
+      -- proxy 模式模型名可由代理侧注入（请求体缺 model 时代理补），
+      -- 本地配了则优先带上
       transport = T.proxy {
         url = os.getenv("SGS_AI_PROXY") or "http://127.0.0.1:8899",
         protocol = os.getenv("SGS_AI_PROTOCOL") or "responses",
         model = model, reasoning_effort = effort, timeout = 90,
       }
       err = nil
-    elseif url and url ~= "" and key and key ~= "" then
+    elseif url and url ~= "" and key and key ~= "" and model and model ~= "" then
       transport = T.curl {
         url = url, api_key = key, model = model,
         protocol = os.getenv("SGS_AI_PROTOCOL"),
@@ -81,7 +83,7 @@ local function buildAIAgent()
   end
   if not transport then
     print(string.format("[服务端] SGS_NET_AI 已开但 AI 不可用：%s", tostring(err)))
-    print("            需配置 SGS_AI_URL + SGS_AI_KEY，或 SGS_AI_TRANSPORT=proxy + ./tools/ai_proxy.py")
+    print("            需配置 SGS_AI_MODEL + SGS_AI_URL + SGS_AI_KEY，或 SGS_AI_TRANSPORT=proxy + ./tools/ai_proxy.py")
     return nil, nil
   end
 
