@@ -25,6 +25,20 @@ end
 local function findRoot()
   local env = os.getenv("SGS_ASSET_ROOT")
   if env and env ~= "" and hasLayout(env) then return env end
+  -- love.filesystem.getSource()：项目目录的绝对路径，与进程 CWD 无关
+  -- （从别的目录/快捷方式启动时 CWD 不可靠，Windows 上尤其常见）。
+  -- skin 层承诺不碰 love.graphics/audio；filesystem 只读路径，无副作用，
+  -- headless 测试没有 love 时 pcall 安全跳过。
+  if love and love.filesystem then
+    local ok, src = pcall(love.filesystem.getSource)
+    if ok and type(src) == "string" and src ~= "" then
+      src = src:gsub("\\", "/")
+      -- getSource 是项目根，资源在其 assets/ 下； fused 包（.love/.exe）
+      -- 则直接以包内文件为根
+      if hasLayout(src .. "/assets") then return src .. "/assets" end
+      if hasLayout(src) then return src end
+    end
+  end
   for _, r in ipairs({ "assets", "./assets" }) do
     if hasLayout(r) then return r end
   end
@@ -48,8 +62,25 @@ local function loadJson(root, name)
   return t
 end
 
+local warned_no_root = false
+
 function Skin:init(root)
   self.root = root or findRoot()
+  if not self.root and not warned_no_root then
+    warned_no_root = true
+    print("[assets] 资源根目录未找到（assets/skins/*.json）：图片与音频全部"
+      .. "降级为内置默认。请从项目根目录启动（run-game.bat / run-game.sh）。")
+  end
+  -- 资源根可能是绝对路径（findRoot 从 getSource 解析出，与 CWD 无关）。
+  -- love.graphics.newImage / love.audio.newSource 走 physfs，只认**源内
+  -- 相对路径**，因此 Skin:path 输出前要把源目录前缀剥掉（见下）。
+  self._src_prefix = nil
+  if self.root and love and love.filesystem then
+    local ok, src = pcall(love.filesystem.getSource)
+    if ok and type(src) == "string" then
+      self._src_prefix = (src:gsub("\\", "/") .. "/")
+    end
+  end
   self.layout = loadJson(self.root, "skins/defaultSkin.layout.json")
   self.imageMap = loadJson(self.root, "skins/defaultSkin.image.json")
   self.audioMap = loadJson(self.root, "skins/defaultSkin.audio.json")
@@ -101,10 +132,16 @@ function Skin:_fill(str, ...)
   return out
 end
 
--- 资源根下的绝对路径
+-- 资源根下的路径。优先给 physfs 适用的**源内相对路径**（剥源目录前缀）；
+-- 取不到前缀时（io.open 场景 / headless）按原样拼接。
 function Skin:path(relative)
   if not (self.root and relative) then return nil end
-  return self.root .. "/" .. relative
+  local p = self.root .. "/" .. relative
+  local prefix = self._src_prefix
+  if prefix and p:sub(1, #prefix) == prefix then
+    return p:sub(#prefix + 1)
+  end
+  return p
 end
 
 -- 卡牌图片：原版 image.json 没有逐张卡的映射，靠目录约定
