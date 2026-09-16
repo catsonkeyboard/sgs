@@ -139,3 +139,9 @@ function love.mousereleased(x, y, button)
     current_scene:mousereleased(x, y, button)
   end
 end
+
+function love.wheelmoved(x, y)
+  if current_scene and current_scene.wheelmoved then
+    current_scene:wheelmoved(x, y)
+  end
+end

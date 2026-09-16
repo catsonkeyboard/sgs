@@ -7,8 +7,15 @@
 --
 -- 纯 Lua，零 love 依赖（core/ 的硬规矩），因此可 headless 测试。
 local Player = require "src.core.player"
+local Cards = require "src.core.cards"
 
 local View = {}
+
+-- 引擎牌名（dodge/slash…）→ 中文（闪/杀…）；查不到的定义（DIY 动态牌）回原名
+local function cardZh(name)
+  local def = name and Cards.get(name)
+  return (def and def.zh) or name or "?"
+end
 
 -- 花色与身份的中文名（core/generals.lua 里的技能名已是中文，这里对齐风格）
 View.SUIT_ZH = { [0] = "无", [1] = "黑桃", [2] = "红桃", [3] = "梅花", [4] = "方块" }
@@ -103,7 +110,7 @@ function View.requestBrief(req)
   if not req then return nil end
   local r = { type = req.type }
   if req.type == "askForCard" then
-    r.ask = string.format("需要打出【%s】", req.card_name or "?")
+    r.ask = string.format("需要打出【%s】", cardZh(req.card_name))
     if req.prompt then r.prompt = req.prompt end
     if req.dying then r.dying = req.dying.name end
     if req.ask_from then r.from = req.ask_from.name end

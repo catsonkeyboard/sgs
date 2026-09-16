@@ -33,6 +33,7 @@ local Layout = require "src.ui.layout"
 local Effects = require "src.ui.effects"
 local SkillDesc = require "src.ui.skill_desc"
 local TextFit = require "src.ui.text_fit"
+local Utf8 = require "src.core.utf8"
 
 local RoomScene = class("RoomScene")
 
@@ -431,7 +432,10 @@ function RoomScene:_refreshButtons()
 
   -- 「AI 推测」详情入口：AI 参与对局时常驻（点开看身份判断过程）
   if self.agent and self.ai_mode ~= "off" then
-    push("AI 推测", function() self.aiPopup = true end)
+    push("AI 推测", function()
+      self.aiPopup = true
+      self.aiPopupScroll = 0 -- 每次打开回到顶部
+    end)
   end
 
   if self.room.game_over then
@@ -599,9 +603,46 @@ function RoomScene:_exitGame()
   if self.on_exit then self.on_exit() end
 end
 
+-- 鼠标滚轮：「AI 推测」弹层滚动（每格 3 行）；其它场景暂不消费
+function RoomScene:wheelmoved(_x, y)
+  if not self.aiPopup or not y or y == 0 then return end
+  local box = self:aiPopupLayout()
+  local max_fit = math.max(1, math.floor((box.h - 96) / 17))
+  local max_scroll = math.max(0, #self:aiPopupLines() - max_fit)
+  -- 触控板一次可滚几十格：按幅度等比放大（每格 3 行）
+  local dir = (y > 0) and -1 or 1 -- 上滚向前
+  local step = dir * math.max(1, math.floor(math.abs(y))) * 3
+  self.aiPopupScroll = math.max(0, math.min(max_scroll, (self.aiPopupScroll or 0) + step))
+end
+
 function RoomScene:keypressed(key)
-  if self.skillPopup or self.aiPopup then
-    if key == "escape" then self.skillPopup = nil self.aiPopup = nil end
+  if self.aiPopup then
+    -- 「AI 推测」弹层：↑↓ 滚 1 行，PgUp/PgDn/Home/End 整页跳，Esc 关闭
+    local box = self:aiPopupLayout()
+    local max_fit = math.max(1, math.floor((box.h - 96) / 17))
+    local total = #self:aiPopupLines()
+    local max_scroll = math.max(0, total - max_fit)
+    local scroll = self.aiPopupScroll or 0
+    if key == "escape" then
+      self.aiPopup = nil
+      return
+    elseif key == "up" then
+      self.aiPopupScroll = math.max(0, scroll - 1) return
+    elseif key == "down" then
+      self.aiPopupScroll = math.min(max_scroll, scroll + 1) return
+    elseif key == "pageup" then
+      self.aiPopupScroll = math.max(0, scroll - max_fit) return
+    elseif key == "pagedown" then
+      self.aiPopupScroll = math.min(max_scroll, scroll + max_fit) return
+    elseif key == "home" then
+      self.aiPopupScroll = 0 return
+    elseif key == "end" then
+      self.aiPopupScroll = max_scroll return
+    end
+    return
+  end
+  if self.skillPopup then
+    if key == "escape" then self.skillPopup = nil end
     return
   end
   -- Esc 退出（二次确认）。注意：整个文件只能有**一个** keypressed，
@@ -1355,9 +1396,10 @@ end
 
 -- 推一条 AI 动态进 feed（kind: "belief" 身份判断变化 / "think" 思维链摘要）。
 -- 上限 40 条，旧的先丢——这里只要「过程流」，完整状态看弹层。
+-- 模型输出可能带非法 UTF-8 字节，入库前消毒（print 遇坏字节会崩）。
 function RoomScene:pushAIFeed(kind, text, turn)
   self.aiFeed = self.aiFeed or {}
-  table.insert(self.aiFeed, { kind = kind, text = tostring(text), turn = turn })
+  table.insert(self.aiFeed, { kind = kind, text = Utf8.sanitize(text), turn = turn })
   while #self.aiFeed > 40 do table.remove(self.aiFeed, 1) end
 end
 
@@ -1491,18 +1533,33 @@ function RoomScene:drawAIPopup()
   love.graphics.setColor(0.72, 0.78, 0.70)
   love.graphics.print("各 AI 座位对全场身份的判断与变化过程", box.x + 24, box.y + 47)
 
+  -- 窗口化绘制：按滚动偏移渲染可见行，右侧画滚动条
   love.graphics.setFont(self.font_sm)
-  local max_fit = math.floor((box.h - 96) / 17)
+  local max_fit = math.max(1, math.floor((box.h - 96) / 17))
   local lines = self:aiPopupLines()
-  for i, ln in ipairs(lines) do
-    if i > max_fit then
-      love.graphics.setColor(0.6, 0.62, 0.58)
-      love.graphics.print("……（还有 " .. (#lines - max_fit) .. " 行，关闭后等新判断再看）",
-        box.x + 24, box.y + 78 + (i - 1) * 17)
-      break
-    end
+  local total = #lines
+  local max_scroll = math.max(0, total - max_fit)
+  local scroll = math.min(self.aiPopupScroll or 0, max_scroll)
+  self.aiPopupScroll = scroll
+  for i = 1, max_fit do
+    local ln = lines[scroll + i]
+    if not ln then break end
     love.graphics.setColor(0.90, 0.92, 0.86)
-    love.graphics.print(TextFit.fit(ln, box.w - 48), box.x + 24, box.y + 78 + (i - 1) * 17)
+    love.graphics.print(TextFit.fit(ln, box.w - 60), box.x + 24, box.y + 78 + (i - 1) * 17)
+  end
+  if max_scroll > 0 then
+    -- 滚动条：右侧细轨道 + 按比例的滑块
+    local track_x, track_y = box.x + box.w - 14, box.y + 78
+    local track_h = max_fit * 17
+    love.graphics.setColor(1, 1, 1, 0.12)
+    love.graphics.rectangle("fill", track_x, track_y, 4, track_h, 2, 2)
+    local thumb_h = math.max(20, math.floor(track_h * max_fit / total))
+    local thumb_y = track_y + math.floor((track_h - thumb_h) * (scroll / max_scroll))
+    love.graphics.setColor(0.82, 0.68, 0.30, 0.85)
+    love.graphics.rectangle("fill", track_x, thumb_y, 4, thumb_h, 2, 2)
+    love.graphics.setColor(0.6, 0.62, 0.58)
+    love.graphics.print(string.format("%d/%d 行 · 滚轮或 ↑↓ 翻看",
+      math.min(total, scroll + max_fit), total), box.x + 24, box.y + box.h - 24)
   end
 
   local c = box.close
@@ -1594,12 +1651,15 @@ function RoomScene:draw()
     end
   end
 
-  -- 中部：回合 / 牌堆
+  -- 中部：回合 / 牌堆（阶段用引擎的中文表，not_active 显示为「等待」）
   love.graphics.setColor(0.8, 0.85, 0.8)
   love.graphics.setFont(self.font)
   local cur = room.players[room.current_seat]
-  love.graphics.print(string.format("第 %d 回合 · 行动：%s · 阶段：%s",
-    room.turn_count, cur and cur.name or "-", self.human.phase or "-"), 460, 290)
+  local phase = self.human.phase
+  if phase == "not_active" then phase = "等待"
+  else phase = Room.PHASE_ZH[phase] or phase end
+  love.graphics.print(string.format("第 %d 回合 · 行动：%s · 你的阶段：%s",
+    room.turn_count, cur and self:displayName(cur) or "-", phase), 460, 290)
   love.graphics.print(string.format("摸牌堆 %d · 弃牌堆 %d",
     #room.drawPile, #room.discardPile), 460, 315)
   if self.mode == "identity" then

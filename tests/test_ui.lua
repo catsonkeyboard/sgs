@@ -906,6 +906,47 @@ do
   check(ok_draw, "弹层开着时 draw 不应报错" .. (ok_draw and "" or ("：" .. tostring(err))))
   sc:keypressed("escape")
   check(sc.aiPopup == nil, "Esc 应关闭弹层")
+
+  -- 滚动：内容超出弹层高度时，滚轮/方向键翻看，且有边界钳制。
+  -- 弹层会先自适应长高（时间线封顶 18 行），要 8 人局那种多座位
+  -- 记忆 + notes 才会超出屏高——测试里注入假记忆撑出长内容
+  for seat = 2, 9 do
+    sc.agent.memories[seat] = require("src.core.ai.memory").create({ seat = seat })
+    sc.agent.memories[seat].beliefs = { ["P1"] = "主公", ["P3"] = "反贼" }
+    sc.agent.memories[seat].notes = "座位" .. seat .. "的长期观察记录"
+  end
+  for i = 1, 40 do sc:pushAIFeed("belief", "第" .. i .. "条判断变化记录") end
+  sc.aiPopup = true
+  sc.aiPopupScroll = 0
+  local box = sc:aiPopupLayout()
+  local max_fit = math.max(1, math.floor((box.h - 96) / 17))
+  local max_scroll = math.max(0, #sc:aiPopupLines() - max_fit)
+  check(max_scroll > 0, "多座位长内容应超出弹层高度（max_scroll="
+    .. max_scroll .. "，若为 0 则本组滚动断言空转）")
+  if max_scroll > 0 then
+    sc:wheelmoved(0, -1)
+    check(sc.aiPopupScroll == 3, "滚轮下滚一格应前进 3 行（实得 "
+      .. tostring(sc.aiPopupScroll) .. "）")
+    sc:wheelmoved(0, -100)
+    check(sc.aiPopupScroll == max_scroll, "滚到底应钳制在最大行（实得 "
+      .. tostring(sc.aiPopupScroll) .. "/" .. max_scroll .. "）")
+    sc:wheelmoved(0, 1)
+    check(sc.aiPopupScroll == max_scroll - 3, "上滚一格应回退 3 行（实得 "
+      .. tostring(sc.aiPopupScroll) .. "）")
+    sc:keypressed("home")
+    check(sc.aiPopupScroll == 0, "Home 应回到顶部")
+    sc:keypressed("end")
+    check(sc.aiPopupScroll == max_scroll, "End 应跳到底部")
+    sc:keypressed("down")
+    check(sc.aiPopupScroll == max_scroll, "已到底再按 ↓ 不应越界")
+    sc:keypressed("up")
+    check(sc.aiPopupScroll == max_scroll - 1, "↑ 应回退一行")
+    local ok_scroll_draw, err_sd = pcall(function() sc:draw() end)
+    check(ok_scroll_draw, "滚动中途绘制（含滚动条）不应报错"
+      .. (ok_scroll_draw and "" or ("：" .. tostring(err_sd))))
+  end
+  sc:keypressed("escape")
+  check(sc.aiPopup == nil, "滚动后 Esc 仍应关闭弹层")
   sc.aiPopup = true
   local box = sc:aiPopupLayout()
   check(sc:aiPopupShouldClose(box.close.x + 2, box.close.y + 2), "点关闭钮应判定关闭")
