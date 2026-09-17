@@ -1030,6 +1030,19 @@ local function cardImage(scene, c)
   return img
 end
 
+-- 花色和点数属于实体牌，不能从按牌名缓存的底图取得。
+-- 左侧窄列不超过最小手牌间距 S(16)，重叠时仍能读出两项。
+local SUIT_GLYPH = { [1] = "♠", [2] = "♥", [3] = "♣", [4] = "♦" }
+local CARD_RANK = { [1] = "A", [11] = "J", [12] = "Q", [13] = "K" }
+local function drawCardIdentity(x, y, c, font_sm)
+  love.graphics.setColor(0.98, 0.96, 0.9)
+  love.graphics.rectangle("fill", x + S(1), y + S(3), S(15), S(32), S(2), S(2))
+  love.graphics.setColor(faceColor(c))
+  love.graphics.setFont(font_sm)
+  love.graphics.printf(CARD_RANK[c.number] or tostring(c.number), x + S(1), y + S(3), S(15), "center")
+  love.graphics.print(SUIT_GLYPH[c.suit] or "?", x + S(2), y + S(18))
+end
+
 local function drawCard(x, y, w, h, c, font, font_sm, scene)
   local img = scene and cardImage(scene, c)
   local r = S(6)
@@ -1041,18 +1054,15 @@ local function drawCard(x, y, w, h, c, font, font_sm, scene)
     -- 真图上叠一行牌名，保证小尺寸下也能认出来
     love.graphics.setFont(font_sm)
     love.graphics.printf(c:zhName(), x, y + h - S(18), w, "center")
-    return
+  else
+    love.graphics.setColor(0.96, 0.94, 0.88)
+    love.graphics.rectangle("fill", x, y, w, h, r, r)
+    love.graphics.setColor(0, 0, 0)
+    love.graphics.rectangle("line", x, y, w, h, r, r)
+    love.graphics.setFont(font)
+    love.graphics.printf(c:zhName(), x, y + h / 2 - S(10), w, "center")
   end
-  love.graphics.setColor(0.96, 0.94, 0.88)
-  love.graphics.rectangle("fill", x, y, w, h, r, r)
-  love.graphics.setColor(0, 0, 0)
-  love.graphics.rectangle("line", x, y, w, h, r, r)
-  love.graphics.setColor(faceColor(c))
-  love.graphics.setFont(font_sm)
-  love.graphics.print(c:suitString() .. c.number, x + S(5), y + S(4))
-  love.graphics.setColor(0, 0, 0)
-  love.graphics.setFont(font)
-  love.graphics.printf(c:zhName(), x, y + h / 2 - S(10), w, "center")
+  drawCardIdentity(x, y, c, font_sm)
 end
 
 -- 飞牌动画的绘制闭包：特效层只给轨迹插值，牌面用与手牌同一套 drawCard
@@ -1933,16 +1943,9 @@ function RoomScene:draw()
     local c = self.dragging
     love.graphics.setColor(0, 0, 0, 0.4)
     love.graphics.rectangle("fill", dx + S(4), dy + S(6), CARD_W, CARD_H, 6, 6)
-    love.graphics.setColor(0.98, 0.96, 0.9)
-    love.graphics.rectangle("fill", dx, dy, CARD_W, CARD_H, 6, 6)
+    drawCard(dx, dy, CARD_W, CARD_H, c, self.font, self.font_sm, self)
     love.graphics.setColor(0.95, 0.8, 0.2)
     love.graphics.rectangle("line", dx, dy, CARD_W, CARD_H, 6, 6)
-    love.graphics.setColor(faceColor(c))
-    love.graphics.setFont(self.font_sm)
-    love.graphics.print(c:suitString() .. c.number, dx + S(6), dy + S(5))
-    love.graphics.setColor(0, 0, 0)
-    love.graphics.setFont(self.font_mid)
-    love.graphics.printf(c:zhName(), dx, dy + S(46), CARD_W, "center")
   end
 
   -- 提示条（底部锚定；顶部一条金色发丝线提升质感）

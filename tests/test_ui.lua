@@ -84,6 +84,56 @@ local ok_img, err_img = pcall(function() scene:draw() end)
 check(ok_img, "接入卡图后 draw() 仍应无异常"
   .. (ok_img and "" or ("：" .. tostring(err_img))))
 
+-- 花色回归：真实卡图分支也必须叠绘每张实体牌的花色/点数。
+-- 记录实际绘制调用，不能仅以 draw 不抛错作为验收。
+do
+  local Card = require "src.core.card"
+  local old_hand, old_cache = scene.human.hand, scene.cardImages
+  local old_print, old_printf, old_color = love.graphics.print, love.graphics.printf, love.graphics.setColor
+  local old_dragpos, old_dragging = scene.dragCardPos, scene.dragging
+  local glyphs = { "♠", "♥", "♣", "♦" }
+  local ranks = { "A", "10", "J", "K" }
+  local cards = {}
+  for suit = 1, 4 do
+    cards[suit] = Card.create(9000 + suit, "slash", suit, ({1, 10, 11, 13})[suit], Card.Type.Basic)
+  end
+  scene.human.hand = cards
+  local fake_img = { getWidth = function() return 93 end, getHeight = function() return 130 end }
+  for _, with_image in ipairs({false, true}) do
+    scene.cardImages = { slash = with_image and fake_img or false }
+    for _, dragging in ipairs({false, true}) do
+      local seen, numbers, color = {}, {}, {}
+      love.graphics.setColor = function(r, g, b) color = {r, g, b} end
+      love.graphics.print = function(text, x, y)
+        for suit, glyph in ipairs(glyphs) do
+          if text == glyph then
+            seen[suit] = (seen[suit] or 0) + 1
+            local red = suit == 2 or suit == 4
+            check(type(color[1]) == "number" and (red and color[1] > color[2] or not red and color[1] == color[2]),
+              "花色红黑颜色正确：" .. glyph)
+          end
+        end
+      end
+      love.graphics.printf = function(text, x, y, width)
+        if width and width <= 16 then numbers[text] = (numbers[text] or 0) + 1 end
+      end
+      scene.dragging = dragging and cards[2] or nil
+      scene.dragCardPos = function() if dragging then return 400, 300 end end
+      local ok_render, render_err = pcall(function() scene:draw() end)
+      local label = (with_image and "有图" or "无图") .. (dragging and "/拖拽" or "/普通")
+      check(ok_render, label .. "花色渲染无异常：" .. tostring(render_err))
+      for suit = 1, 4 do
+        local expected = dragging and suit == 2 and 2 or 1
+        check(seen[suit] == expected, label .. "叠绘花色 " .. glyphs[suit])
+        check(numbers[ranks[suit]] == expected, label .. "窄列显示点数 " .. ranks[suit])
+      end
+    end
+  end
+  scene.human.hand, scene.cardImages = old_hand, old_cache
+  scene.dragCardPos, scene.dragging = old_dragpos, old_dragging
+  love.graphics.print, love.graphics.printf, love.graphics.setColor = old_print, old_printf, old_color
+end
+
 -- anchorOf / panelAt：曾因「同一份文件里 anchorOf 定义了两次」而崩溃。
 -- 一份返回两个数字、一份返回 {x,y} 表，后者覆盖前者，panelAt 拿到
 -- (table, nil) → 点牌时报 "attempt to compare table with number"。
