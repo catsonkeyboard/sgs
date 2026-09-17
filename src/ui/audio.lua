@@ -96,7 +96,10 @@ local CARD_SOUND_KEY = { dodge = "jink" }
 
 function Audio:playCard(cardName, gender)
   if not cardName then return false end
-  return self:play(CARD_SOUND_KEY[cardName] or cardName, gender)
+  -- 杀/闪等也是人物语音，同样参与等待，不能与后续技能台词叠播。
+  local inst = self:play(CARD_SOUND_KEY[cardName] or cardName, gender)
+  if inst then self.voice = inst end
+  return inst
 end
 
 -- 装备音效：引擎槽位（weapon/armor/offensive_horse/defensive_horse）

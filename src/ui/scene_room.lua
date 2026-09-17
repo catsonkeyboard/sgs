@@ -332,6 +332,9 @@ function RoomScene:beginPlay()
   -- 十几条语音和特效在同一帧一起触发，全糊在一起（用户实测反馈）。
   self.presentQueue = {}
   self.presentTimer = 0
+  -- 每次可见事件都给前端一个确认边界，防止一次 step 内连续结算多个技能。
+  self.room.presentationEvents = { useCard = true, respond = true, equip = true,
+    skill = true, death = true, damage = true, skillTarget = true }
 
   self.selected = {}   -- 弃牌多选
   self.revealed = nil  -- askForChooseCard 候选
@@ -477,6 +480,8 @@ end
 -- ===== 交互 =====
 
 function RoomScene:_step(resp)
+  if self.paused or self:isPresenting()
+    or (self.room.pending and self.room.pending.type == "presentation") then return end
   self.selected = {}
   self.revealed = nil
   self.picked = nil
@@ -506,7 +511,7 @@ function RoomScene:_refreshButtons()
 
   if self.room.game_over then
     push("返回菜单", function() self.on_exit() end)
-  elseif req and req.player.is_human then
+  elseif req and req.player and req.player.is_human then
     if req.type == "askForUseCard" then
       push("结束出牌", function() self:_step(nil) end)
       if self.picked then
@@ -637,8 +642,11 @@ function RoomScene:update(dt)
   -- 语音与特效不再叠在一起。
   -- 上一条台词（技能语音/阵亡语音）还没播完时队列原地等待——
   -- 否则前一个人的语音会被下一个人的行动拦腰截断（用户实测反馈）。
-  if #self.presentQueue > 0
-    and not (self.audio and self.audio:voiceBusy()) then
+  if self.audio and self.audio:voiceBusy() then
+    self:_refreshButtons()
+    return
+  end
+  if #self.presentQueue > 0 then
     self.presentTimer = self.presentTimer - (dt or 0)
     if self.presentTimer <= 0 then
       local e = table.remove(self.presentQueue, 1)
@@ -652,7 +660,10 @@ function RoomScene:update(dt)
   if not self.room.game_over then
     -- AI 思考时这里会返回 "thinking"，什么都不做即可：
     -- 下一帧再问一次，Agent 内部会继续轮询，主线程全程不阻塞。
-    self.driver_state = self.driver:advance()
+    if self.room.pending and self.room.pending.type == "presentation" then
+      self.room:step(nil) -- 当前事件语音已结束，确认边界，最多走到下一事件
+    end
+    if not self:isPresenting() then self.driver_state = self.driver:advance() end
   end
   self:_refreshButtons()
   local req = self.room.pending
@@ -846,7 +857,7 @@ function RoomScene:mousepressed(x, y, button)
   -- 装备/判定区小牌：点击查看卡牌说明。【制衡】/弃装混选流程除外——
   -- 那时要靠点装备小牌来选中它（下方 equipCardAt 路径）
   local pending_req = self.room.pending
-  local picking_equips = pending_req and pending_req.player.is_human
+  local picking_equips = pending_req and pending_req.player and pending_req.player.is_human
     and pending_req.type == "askForDiscard" and pending_req.include_equips
   if not picking_equips and self.anchors then
     for i, p in ipairs(self.room.players or {}) do
@@ -886,7 +897,7 @@ function RoomScene:mousepressed(x, y, button)
     end
   end
   local req = self.room.pending
-  if not (req and req.player.is_human) or self.room.game_over then return end
+  if not (req and req.player and req.player.is_human) or self.room.game_over then return end
 
   -- 五谷丰登：从展示牌中挑一张
   if req.type == "askForChooseCard" and self.revealed then
@@ -1087,7 +1098,7 @@ function RoomScene:enqueuePresent(kind, d)
 end
 
 function RoomScene:isPresenting()
-  return #self.presentQueue > 0
+  return #self.presentQueue > 0 or (self.audio and self.audio:voiceBusy()) == true
 end
 
 -- 演示队列为空之前不接受玩家操作，避免状态与画面错位
@@ -1338,11 +1349,38 @@ local CHIP_SLOT_TAG = { offensive_horse = "-1", defensive_horse = "+1" }
 -- 装备/判定小牌网格：2 列 × N 行；格内 = 小卡图 + 牌名/距离。
 -- 尺寸变量声明在文件顶部（refreshMetrics 随窗口缩放重算）。
 
--- 粗略估文本像素宽：UTF-8 里中日韩字符占 3 字节按 13px，其余按 7px
-local function chipTextW(s)
-  local cjk = select(2, s:gsub("[^\128-\191]", ""))
-  local ascii = #s - cjk * 3
-  return S(cjk * 13 + ascii * 7)
+-- 卡牌小牌文字：在格内按真实宽度（font:getWidth）缩放，保证**完整显示**
+-- 装备名与 ±1；测不到宽度（桩环境）时退回字号原样打印。绘制与点击命中共用
+-- panelChips 的矩形，缩放只影响绘制、不改命中矩形，因此兼容窗口/DPI 缩放。
+local function drawChipLabel(scene, chip)
+  local font = scene.font_sm
+  love.graphics.setFont(font)
+  local pad = S(3)
+  -- 判定行空间窄，不画卡图，把宽度全留给牌名
+  local has_img = chip.img and chip.kind ~= "judge"
+  local img_inset = has_img and (CHIP_IMG_W + S(2)) or 0
+  if has_img then
+    love.graphics.setColor(1, 1, 1)
+    love.graphics.draw(chip.img, chip.x + S(2), chip.y + S(1), 0,
+      CHIP_IMG_W / chip.img:getWidth(), CHIP_IMG_H / chip.img:getHeight())
+    love.graphics.setColor(0.35, 0.3, 0.2)
+    love.graphics.rectangle("line", chip.x + S(2), chip.y + S(1), CHIP_IMG_W, CHIP_IMG_H)
+  end
+  love.graphics.setColor(0.95, 0.93, 0.85)
+  local avail = chip.w - img_inset - pad
+  local tw
+  if font.getWidth then
+    local ok, w = pcall(font.getWidth, font, chip.text)
+    if ok and type(w) == "number" then tw = w end
+  end
+  if tw and tw > avail and avail > 0 then
+    local sx = avail / tw
+    local th = S(12) * sx
+    love.graphics.print(chip.text, chip.x + img_inset + pad,
+      chip.y + (CHIP_H - th) / 2, 0, sx, sx)
+  else
+    love.graphics.print(chip.text, chip.x + img_inset + pad, chip.y + S(1))
+  end
 end
 
 function RoomScene:drawPlayerPanel(p, x, y, highlighted)
@@ -1358,12 +1396,13 @@ function RoomScene:drawPlayerPanel(p, x, y, highlighted)
     love.graphics.rectangle("line", x + S(6), y + S(22), S(48), S(48), 5, 5)
   end
 
-  -- 势力图标（有资源就画，没有就不画，不占版面）
+  -- 势力图标（有资源就画，没有就不画，不占版面）：移到顶栏左侧，
+  -- 留在判定行（y24 起）上方、不与头像右侧的判定牌挤占。
   local kimg = self:kingdomIcon(p)
   if kimg then
     local s = S(16)
     love.graphics.setColor(1, 1, 1)
-    love.graphics.draw(kimg, x + PANEL_W - S(60), y + S(26), 0, s / kimg:getWidth(), s / kimg:getHeight())
+    love.graphics.draw(kimg, x + PANEL_W - S(94), y + S(5), 0, s / kimg:getWidth(), s / kimg:getHeight())
   end
 
   -- 武将头像（有原版资源时画真图，否则退回纯文字）
@@ -1395,18 +1434,20 @@ function RoomScene:drawPlayerPanel(p, x, y, highlighted)
     love.graphics.printf("?", rb.x, y + S(8), rb.w, "center")
   end
 
-  drawHp(x + S(12), y + S(38), p.hp, p.max_hp, self)
+  -- HP 与手牌数移到头像右侧（x58 起），不再与头像(左 8~52)重叠；
+  -- 判定行在 y24、HP 顶到 y41，纵向错开互不遮挡。
+  drawHp(x + S(58), y + S(54), p.hp, p.max_hp, self)
 
   love.graphics.setFont(self.font_sm)
   love.graphics.setColor(p.alive and 0.7 or 0.4, 0.75, 0.7)
-  love.graphics.print("手牌 × " .. #p.hand .. (p.alive and "" or " · 已阵亡"), x + S(12), y + S(56))
+  love.graphics.print("手牌 × " .. #p.hand .. (p.alive and "" or " · 已阵亡"), x + S(58), y + S(56))
   if p.chained then
     love.graphics.setColor(0.85, 0.6, 0.2)
     love.graphics.print("连环", x + S(110), y + S(56))
   end
 
-  -- 装备与判定区：小卡图 + 牌名（马匹带距离标注），2 列 × 2 行，
-  -- 绘制与点击命中共用 panelChips 给出的同一套矩形
+  -- 装备与判定区：小卡图 + 牌名（马匹带距离标注），绘制与点击命中共用
+  -- panelChips 给出的同一套矩形；文字在格内按真实宽度缩放，完整显示名与 ±1
   for _, chip in ipairs(self:panelChips(p, x, y)) do
     love.graphics.setColor(0.10, 0.09, 0.07, 0.95)
     love.graphics.rectangle("fill", chip.x, chip.y, chip.w, chip.h, 3, 3)
@@ -1414,48 +1455,60 @@ function RoomScene:drawPlayerPanel(p, x, y, highlighted)
       and { 1, 0.82, 0.18 } or CHIP_COLOR[chip.kind] or { 0.6, 0.6, 0.6 }
     love.graphics.setColor(border[1], border[2], border[3], 0.9)
     love.graphics.rectangle("line", chip.x, chip.y, chip.w, chip.h, 3, 3)
-    local tx = chip.x + S(4)
-    if chip.img then
-      love.graphics.setColor(1, 1, 1)
-      love.graphics.draw(chip.img, chip.x + S(2), chip.y + S(1), 0,
-        CHIP_IMG_W / chip.img:getWidth(), CHIP_IMG_H / chip.img:getHeight())
-      love.graphics.setColor(0.35, 0.3, 0.2)
-      love.graphics.rectangle("line", chip.x + S(2), chip.y + S(1), CHIP_IMG_W, CHIP_IMG_H)
-      tx = chip.x + S(15)
-    end
-    love.graphics.setColor(0.95, 0.93, 0.85)
-    love.graphics.setFont(self.font_sm)
-    love.graphics.print(chip.text, tx, chip.y + S(1))
+    drawChipLabel(self, chip)
   end
 end
 
--- 某玩家面板底部的小牌列表（装备 + 判定区延时锦囊）。
--- 每格 = 小卡图（有卡图时）+ 牌名（马匹带 -1/+1 距离标注）。
--- ax/ay 是面板左上角；返回 { x,y,w,h,text,card,kind,img }，供绘制与点击命中。
+-- 某玩家面板上的装备/判定小牌列表。
+-- 装备最多 4 个（武器/防具/进攻马/防御马）→ 2 列 × 2 行，放在面板下半部
+-- （y 从 68 起），满 4 装备也只占两行、不再向下溢出；
+-- 判定区（乐不思蜀/兵粮寸断/闪电…）独立成一行，置于头像右侧
+-- （x 从 58 起、单行走、横向均分），不与装备抢列。
+-- 这样「满 4 装备 + 3 判定」也不会越过面板底边（104）。
+-- ax/ay 是面板左上角；返回 { x,y,w,h,text,card,kind,img }，
+-- 绘制（drawPlayerPanel）与点击命中（equipCardAt / mousepressed）共用同一套矩形。
 function RoomScene:panelChips(p, ax, ay)
   local chips = {}
   if not p then return chips end
-  local items = {}
+
+  -- 装备区：2 列 × 2 行，面板下半部
+  local equips = {}
   for _, slot in ipairs({ "weapon", "armor", "offensive_horse", "defensive_horse" }) do
     local c = p.equips and p.equips[slot]
     if c then
-      items[#items + 1] = { text = c:zhName() .. (CHIP_SLOT_TAG[slot] or ""),
+      equips[#equips + 1] = { text = c:zhName() .. (CHIP_SLOT_TAG[slot] or ""),
         card = c, kind = slot }
     end
   end
-  for _, c in ipairs(p.judges or {}) do
-    items[#items + 1] = { text = c:zhName(), card = c, kind = "judge" }
-  end
-  for i, t in ipairs(items) do
+  for i, t in ipairs(equips) do
     local col, row = (i - 1) % 2, math.floor((i - 1) / 2)
     local img = cardImage(self, t.card)
-    local tw = chipTextW(t.text) + (img and S(16) or S(8))
     chips[#chips + 1] = {
       x = ax + S(5) + col * (CHIP_W + S(1)),
       y = ay + S(68) + row * (CHIP_H + S(1)),
-      w = math.min(CHIP_W, tw), h = CHIP_H,
+      w = CHIP_W, h = CHIP_H,
       text = t.text, card = t.card, kind = t.kind, img = img or false,
     }
+  end
+
+  -- 判定区：头像右侧独立一行，横向均分（牌名按真实宽度在格内缩放）
+  local judges = {}
+  for _, c in ipairs(p.judges or {}) do
+    judges[#judges + 1] = { text = c:zhName(), card = c, kind = "judge" }
+  end
+  if #judges > 0 then
+    local jx0 = ax + S(58)
+    local jx1 = ax + PANEL_W - S(5)
+    local cw = (jx1 - jx0) / #judges
+    for i, t in ipairs(judges) do
+      local img = cardImage(self, t.card)
+      chips[#chips + 1] = {
+        x = jx0 + (i - 1) * cw,
+        y = ay + S(24),
+        w = cw, h = CHIP_H,
+        text = t.text, card = t.card, kind = "judge", img = img or false,
+      }
+    end
   end
   return chips
 end
@@ -1852,7 +1905,7 @@ function RoomScene:draw()
     local x, y = self:handCardRect(idx)
     local lifted = ((self.selected[c] or self.picked == c) and S(14) or 0)
     local hovered = hmx >= x and hmx <= x + CARD_W and hmy >= y and hmy <= y + CARD_H
-    if hovered and self.room.pending and self.room.pending.player.is_human then
+    if hovered and self.room.pending and self.room.pending.player and self.room.pending.player.is_human then
       lifted = lifted + S(8)
     end
     -- 投影先画（叠在左边牌之上、本体之下），营造卡片悬浮感
@@ -1907,7 +1960,7 @@ function RoomScene:draw()
       local role_text = room.win_role and (Player.ROLE_ZH[room.win_role] or room.win_role) or ""
       prompt = string.format("对局结束 —— %s阵营获胜（%s）。点击【返回菜单】",
         role_text, room.winner and room.winner.name or "—")
-    elseif req and req.player.is_human then
+    elseif req and req.player and req.player.is_human then
       if req.prompt then
         prompt = req.prompt
       elseif self.picked then

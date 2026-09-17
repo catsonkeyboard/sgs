@@ -23,6 +23,8 @@ end
 function Driver:advance()
   while self.room.pending and not self.room.game_over do
     local req = self.room.pending
+    -- 事件边界等待由前端确认，不是玩家请求，不能交给 BOT/AI 响应。
+    if req.type == "presentation" then return "presenting", req end
     local mode = req.player:controlMode()
 
     if mode == "human" then

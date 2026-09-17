@@ -947,6 +947,92 @@ do
   check(#scene.presentQueue == 0, "台词播完后队列应继续推进")
 end
 
+-- 满装边界：所有小牌留在面板内，互不重叠，且能点击到对应牌。
+do
+  local Card = require "src.core.card"
+  local sc = RoomScene.create(function() end, "identity", 8, "off", { seed = 42 })
+  sc.presentQueue = {}
+  local p = sc.players[2]
+  local function card(id, name) return Card.create(id, name, Card.Suit.Spade, 5, Card.Type.Equip) end
+  p.equips = { weapon = card(901, "double_sword"), armor = card(902, "silver_lion"),
+    offensive_horse = card(903, "chitu"), defensive_horse = card(904, "zhuahuangfeidian") }
+  p.judges = { card(905, "indulgence"), card(906, "supply_shortage"), card(907, "lightning") }
+  local a = sc:anchorOf(p)
+  local chips = sc:panelChips(p, a[1], a[2])
+  check(#chips == 7, "满四装备加三判定应显示七枚小牌")
+  local inside, separate = true, true
+  for i, c in ipairs(chips) do
+    inside = inside and c.x >= a[1] and c.y >= a[2]
+      and c.x + c.w <= a[1] + sc.panelW and c.y + c.h <= a[2] + sc.panelH
+    for j = i + 1, #chips do
+      local d = chips[j]
+      if c.x < d.x + d.w and d.x < c.x + c.w and c.y < d.y + d.h and d.y < c.y + c.h then separate = false end
+    end
+    sc.skillPopup = nil
+    sc:mousepressed(c.x + c.w / 2, c.y + c.h / 2, 1)
+    check(sc.skillPopup and sc.skillPopup.entries[1].name == c.card:zhName(),
+      "满装小牌中心应命中：" .. c.text)
+  end
+  check(inside, "四装备三判定均不得越出面板边界（基准210x104）")
+  check(separate, "四装备三判定矩形不得互相重叠")
+  check(chips[3].text == "赤兔-1" and chips[4].text == "爪黄飞电+1", "满装仍保留具体马名与距离后缀")
+  sc.skillPopup = nil
+  local ok, err = pcall(function() sc:draw() end)
+  check(ok, "满装八人局绘制应无异常：" .. tostring(err))
+end
+
+-- 台词忙时（包括最后一条已出队）引擎和响应都必须停住。
+do
+  local sc = RoomScene.create(function() end, "identity", 5, "off", { seed = 42 })
+  local advances, steps = 0, 0
+  local busy = true
+  sc.audio = { voiceBusy = function() return busy end }
+  sc.driver.advance = function() advances = advances + 1 end
+  sc.room.step = function() steps = steps + 1 end
+  sc.presentQueue = { { kind = "skill", data = {} } }
+  sc:update(1)
+  check(advances == 0 and steps == 0, "台词忙且队列非空时不得推进引擎")
+  sc.presentQueue = {}
+  sc:update(1)
+  sc:_step(nil)
+  check(sc:isPresenting(), "最后一条已出队但仍在说话时仍应锁住操作")
+  check(advances == 0 and steps == 0, "队列已空但台词忙时不得推进或提交响应")
+  busy = false
+  sc:update(1)
+  check(advances == 1, "台词结束后应恢复驱动")
+end
+
+-- 一次协程中连续发动两人技能，也必须停在第一人的事件边界。
+do
+  local Driver = require "src.core.driver"
+  local sc = RoomScene.create(function() end, "identity", 5, "off", { seed = 42 })
+  local r, busy, second = sc.room, false, false
+  sc.audio = { voiceBusy = function() return busy end }
+  sc.playPresent = function() busy = true end
+  r.game_over = false
+  sc.presentQueue = {}
+  r.co = coroutine.create(function()
+    r:emit("skill", { player = sc.players[1], skill = "奸雄" })
+    second = true
+    r:emit("skill", { player = sc.players[2], skill = "反馈" })
+  end)
+  r:step(nil)
+  local d = Driver.create(r)
+  check(d:advance() == "presenting" and not second, "驱动必须停在技能事件边界，不得交给BOT/AI")
+  sc:update(1)
+  check(busy and not second and #sc.presentQueue == 0, "第一条出队播放后不得提前结算第二人技能")
+  sc:update(10)
+  check(not second, "无论经过多少帧，第一条台词没结束就不得推进第二技能")
+  busy = false
+  sc:update(1)
+  check(second and #sc.presentQueue == 1 and r.pending.type == "presentation", "结束第一条后才允许生成第二条技能事件")
+  sc:update(1)
+  check(busy and not r.game_over, "第二条语音播放期间也应停在边界")
+  busy = false
+  sc:update(1)
+  check(r.game_over, "全部语音结束后协程应继续完成，不死锁")
+end
+
 -- Audio 模块：台词独占记录与 voiceBusy 判定（headless 恒为 false）
 do
   local Audio = require "src.ui.audio"

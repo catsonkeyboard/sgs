@@ -533,6 +533,13 @@ function Room:emit(name, data)
       self:log("[表现层回调出错] %s: %s", tostring(name), tostring(err))
     end
   end
+  -- 单机前端可选择在事件边界暂停协程，等待其确认后继续。
+  -- 核心不读取声音/时钟；服务端和 headless 默认不开启，不改变规则结果。
+  -- 放在回调之外 yield，避免把等待当成回调异常；协程外的测试 emit 不暂停。
+  if self.presentationEvents and self.presentationEvents[name]
+    and self.co and coroutine.running() == self.co then
+    coroutine.yield({ type = "presentation", event = name })
+  end
 end
 
 function Room:log(fmt, ...)
