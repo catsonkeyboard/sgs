@@ -282,7 +282,7 @@ function Room:askForCard(player, card_name, prompt, extra)
   if res then
     -- 表现层：任何人（含 BOT）打出的牌都广播一下——UI 据此播
     -- 「打出【闪】」的音效与飞牌动画（杀被闪、无懈、濒死求桃等全走这里）
-    self:emit("respond", { player = player, card = res, reason = card_name })
+    self:emit("respond", { player = player, card = res, reason = card_name, dying = req.dying })
     return res
   end
   -- 主公技【护驾】/【激将】：主公本人拿不出【闪】/【杀】时，

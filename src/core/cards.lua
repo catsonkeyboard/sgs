@@ -365,6 +365,7 @@ Cards.define("nullification", {
 
 Cards.define("indulgence", {
   zh = "乐不思蜀", target = "enemy", delayed = true, nullifiable = true,
+  desc = "出牌阶段，对一名其他角色使用，置于其判定区。其判定阶段进行判定：若结果不为红桃，跳过本回合的出牌阶段；否则无效。判定结算后弃置此牌。同一角色的判定区不能重复放置乐不思蜀。", 
   judge = function(room, player, card)
     local hit = room:judgeSuit(player, card) ~= Card.Suit.Heart
     room:log("%s 的【乐不思蜀】判定：%s %s", player.name, card:suitString(),
@@ -378,6 +379,7 @@ Cards.define("indulgence", {
 
 Cards.define("supply_shortage", {
   zh = "兵粮寸断", target = "enemy", delayed = true, distance = 1, nullifiable = true,
+  desc = "出牌阶段，对距离1以内的一名其他角色使用，置于其判定区。其判定阶段进行判定：若结果不为梅花，跳过本回合的摸牌阶段；否则无效。判定结算后弃置此牌。", 
   judge = function(room, player, card)
     local hit = room:judgeSuit(player, card) ~= Card.Suit.Club
     room:log("%s 的【兵粮寸断】判定：%s %s", player.name, card:suitString(),
@@ -391,6 +393,7 @@ Cards.define("supply_shortage", {
 
 Cards.define("lightning", {
   zh = "闪电", target = "self", delayed = true, nullifiable = true,
+  desc = "出牌阶段，将此牌置于自己的判定区。判定阶段进行判定：若结果为黑桃2至9，受到3点无来源的雷电伤害，并弃置闪电；否则将闪电移至下家的判定区（跳过已有闪电的角色）。", 
   judge = function(room, player, card)
     local hit = room:judgeSuit(player, card) == Card.Suit.Spade
       and card.number >= 2 and card.number <= 9

@@ -43,7 +43,7 @@ local RoomScene = class("RoomScene")
 -- 等比缩放，refreshMetrics 在 init / onResize 时重算。**绘制与命中检测
 -- 必须共用这些变量**，改字号或窗口后二者自动保持一致。
 local CARD_W, CARD_H = 62, 86
-local PANEL_W, PANEL_H = 210, 104
+local PANEL_W, PANEL_H = 210, 124
 local CHIP_W, CHIP_H = 100, 17
 local CHIP_IMG_W, CHIP_IMG_H = 11, 15
 local FONT_PATH = "assets/font/DroidSansFallback.ttf"
@@ -51,7 +51,7 @@ local FONT_SIZES = { font = 15, font_mid = 20, font_sm = 12 }
 
 local function refreshMetrics()
   CARD_W, CARD_H = S(62), S(86)
-  PANEL_W, PANEL_H = S(210), S(104)
+  PANEL_W, PANEL_H = S(210), S(124)
   CHIP_W, CHIP_H = S(100), S(17)
   CHIP_IMG_W, CHIP_IMG_H = S(11), S(15)
 end
@@ -1120,8 +1120,10 @@ function RoomScene:playPresent(e)
         audio:playCard(d.card.name, d.player.female and "female" or "male")
       end
       if fx then
-        fx:showBanner(string.format("%s 打出【%s】", self:displayName(d.player), d.card:zhName()),
-          { 0.75, 0.9, 1 })
+        local text = d.reason == "peach" and d.dying
+          and string.format("%s 使用【桃】救援 %s", self:displayName(d.player), self:displayName(d.dying))
+          or string.format("%s 打出【%s】", self:displayName(d.player), d.card:zhName())
+        fx:showBanner(text, { 0.75, 0.9, 1 })
         local a = self:anchorOf(d.player)
         if a then
           fx:flashPanel(a[1], a[2], self.panelW or PANEL_W, self.panelH or PANEL_H,
@@ -1485,7 +1487,7 @@ function RoomScene:panelChips(p, ax, ay)
     local img = cardImage(self, t.card)
     chips[#chips + 1] = {
       x = ax + S(5) + col * (CHIP_W + S(1)),
-      y = ay + S(68) + row * (CHIP_H + S(1)),
+      y = ay + S(80) + row * (CHIP_H + S(3)),
       w = CHIP_W, h = CHIP_H,
       text = t.text, card = t.card, kind = t.kind, img = img or false,
     }
@@ -1600,7 +1602,7 @@ function RoomScene:drawAIPanel()
       local e = beliefs[#beliefs - shown + 1 + i]
       love.graphics.setColor(0.88, 0.90, 0.84)
       -- 超宽截断（按完整字符）：小面板可用宽随缩放
-      love.graphics.print(TextFit.fit(e.text, w - S(20)), x + S(10), y + S(28) + i * S(16))
+      love.graphics.print(TextFit.fit(e.text, w - S(20), self.font_sm), x + S(10), y + S(28) + i * S(16))
     end
   end
   love.graphics.setColor(0.55, 0.6, 0.55)
@@ -1716,7 +1718,7 @@ function RoomScene:drawAIPopup()
     local ln = lines[scroll + i]
     if not ln then break end
     love.graphics.setColor(0.90, 0.92, 0.86)
-    love.graphics.print(TextFit.fit(ln, box.w - S(60)), box.x + S(24), box.y + S(78) + (i - 1) * S(17))
+    love.graphics.print(TextFit.fit(ln, box.w - S(60), self.font_sm), box.x + S(24), box.y + S(78) + (i - 1) * S(17))
   end
   if max_scroll > 0 then
     -- 滚动条：右侧细轨道 + 按比例的滑块
@@ -1978,6 +1980,8 @@ function RoomScene:draw()
         prompt = req.hand_only and "选择弃掉一张手牌（或不弃）"
           or "拆牌：点按钮弃掉对手一张牌（装备/判定区/随机手牌）"
       end
+    elseif req and req.type == "presentation" then
+      prompt = "正在播放行动与语音，请稍候…"
     elseif req then
       if self.driver_state == "thinking" and self.agent then
         prompt = (self.agent:thinkingLabel() or "AI 思考中") .. "…"

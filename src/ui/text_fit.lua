@@ -9,8 +9,11 @@ local TextFit = {}
 
 -- 粗略估文本像素宽（小号字体 13px：中日韩字符约 13px，ASCII 约 7px）
 function TextFit.width(s)
-  local cjk = select(2, s:gsub("[^\128-\191]", ""))
-  return cjk * 13 + (#s - cjk * 3) * 7
+  local width = 0
+  for ch in Utf8.sanitize(s):gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+    width = width + (#ch == 1 and 7 or 13)
+  end
+  return width
 end
 
 -- 按 UTF-8 完整字符截到 max_bytes 以内，结尾补省略号；不超长则原样返回。
@@ -32,16 +35,23 @@ function TextFit.truncate(s, max_bytes)
 end
 
 -- 控制在一行像素宽内：逐次收紧字节预算直到宽度达标
-function TextFit.fit(s, max_px)
-  s = tostring(s or "")
-  if TextFit.width(s) <= max_px then return s end
-  local bytes = math.floor(max_px / 13 * 3)
-  while bytes > 3 do
-    local t = TextFit.truncate(s, bytes)
-    if TextFit.width(t) <= max_px then return t end
-    bytes = bytes - 3
+function TextFit.fit(s, max_px, font)
+  s = Utf8.sanitize(tostring(s or "")):gsub("[\r\n\t]", " ")
+  local function width(text)
+    if font and font.getWidth then
+      local ok, w = pcall(font.getWidth, font, text)
+      if ok and type(w) == "number" then return w end
+    end
+    return TextFit.width(text)
   end
-  return "…"
+  if width(s) <= max_px then return s end
+  if width("…") > max_px then return "" end
+  local out = ""
+  for ch in s:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+    if width(out .. ch .. "…") > max_px then break end
+    out = out .. ch
+  end
+  return out .. "…"
 end
 
 return TextFit

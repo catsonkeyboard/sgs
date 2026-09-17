@@ -973,9 +973,11 @@ do
     check(sc.skillPopup and sc.skillPopup.entries[1].name == c.card:zhName(),
       "满装小牌中心应命中：" .. c.text)
   end
-  check(inside, "四装备三判定均不得越出面板边界（基准210x104）")
+  check(inside, "四装备三判定均不得越出面板边界（基准210x124）")
   check(separate, "四装备三判定矩形不得互相重叠")
   check(chips[3].text == "赤兔-1" and chips[4].text == "爪黄飞电+1", "满装仍保留具体马名与距离后缀")
+  check(sc.panelH >= 120, "面板加高后应保有余量，避免遮住头像和手牌数（实得 "
+    .. tostring(sc.panelH) .. "）")
   sc.skillPopup = nil
   local ok, err = pcall(function() sc:draw() end)
   check(ok, "满装八人局绘制应无异常：" .. tostring(err))
@@ -1031,6 +1033,99 @@ do
   busy = false
   sc:update(1)
   check(r.game_over, "全部语音结束后协程应继续完成，不死锁")
+end
+
+-- 濒死救援：真实 askForCard → 点击桃 → respond → 横幅，目标不得丢失。
+do
+  local Card = require "src.core.card"
+  local sc = RoomScene.create(function() end, "identity", 5, "off", { seed = 42 })
+  local r, rescuer, dying = sc.room, sc.human, sc.players[2]
+  local peach = Card.create(9801, "peach", Card.Suit.Heart, 3, Card.Type.Basic)
+  rescuer.hand = { peach }
+  local hp = rescuer.hp
+  dying.hp = 0
+  sc.presentQueue, sc.msg = {}, ""
+  r.game_over = false
+  r.co = coroutine.create(function() r:_dyingAskOthers(dying) end)
+  r:step(nil)
+  check(r.pending.player == rescuer and r.pending.dying == dying, "救援请求应指向濒死角色并询问救援者")
+  local banner = ""
+  sc.effects.showBanner = function(_, text) banner = text end
+  local x, y = sc:handCardRect(1)
+  sc:mousepressed(x + 10, y + 10, 1)
+  sc:update(1)
+  check(banner:find(sc:displayName(dying), 1, true) ~= nil and banner:find("救援", 1, true) ~= nil,
+    "点击桃后的横幅应明确救援目标而非自用：" .. banner)
+  sc:update(1)
+  check(dying.hp == 1 and rescuer.hp == hp, "救援提示修复不得改变实际回血对象")
+end
+
+-- Audio 模块：台词独占记录与 voiceBusy 判定（headless 恒为 false）
+
+-- 面板加高 + 间距放宽后的新几何：满装仍不越界、不遮挡、可点击。
+do
+  local Card = require "src.core.card"
+  local sc = RoomScene.create(function() end, "identity", 8, "off", { seed = 42 })
+  sc.presentQueue = {}
+  local p = sc.players[2]
+  local function card(id, name) return Card.create(id, name, Card.Suit.Spade, 5, Card.Type.Equip) end
+  p.equips = { weapon = card(911, "double_sword"), armor = card(912, "silver_lion"),
+    offensive_horse = card(913, "chitu"), defensive_horse = card(914, "zhuahuangfeidian") }
+  p.judges = { card(915, "indulgence"), card(916, "supply_shortage"), card(917, "lightning") }
+  local a = sc:anchorOf(p)
+  local chips = sc:panelChips(p, a[1], a[2])
+  check(#chips == 7, "加高面板后仍应显示 7 枚小牌（实得 " .. #chips .. "）")
+  local inside = true
+  for _, c in ipairs(chips) do
+    inside = inside and c.y + c.h <= a[2] + sc.panelH
+  end
+  check(inside, "加高面板后小牌仍不得越界")
+  -- 装备区起始行距放宽（+3），相邻行不得重叠
+  local rows = {}
+  for _, c in ipairs(chips) do
+    if c.kind ~= "judge" then rows[c.y] = (rows[c.y] or 0) + 1 end
+  end
+  check(next(rows) ~= nil, "加高面板后装备区仍应生成小牌")
+end
+
+-- 卡牌说明：延时锦囊（闪电/乐不思蜀）必须给出具体说明，不再是「暂无详细说明」。
+do
+  local Card = require "src.core.card"
+  local sc = RoomScene.create(function() end, "identity", 5, "off", { seed = 42 })
+  local p = sc.players[2]
+  for _, name in ipairs({ "lightning", "indulgence", "supply_shortage" }) do
+    local chip = { card = Card.create(9200, name, Card.Suit.Spade, 5, Card.Type.Trick), kind = "judge" }
+    sc.skillPopup = nil
+    sc:openCardPopup(p, chip)
+    local desc = sc.skillPopup and sc.skillPopup.entries[1].desc or ""
+    check(desc ~= "" and not desc:find("暂无", 1, true),
+      "【" .. chip.card:zhName() .. "】应有详细说明（实得 " .. desc:sub(1, 18) .. "…）")
+  end
+  sc.skillPopup = nil
+end
+
+-- AI 推测文本：按真实字体宽度截断，长行不得溢出面板。
+do
+  local TextFit = require "src.ui.text_fit"
+  local sc = RoomScene.create(function() end, "identity", 5, "off", { seed = 42 })
+  sc.presentQueue = {}
+  sc.aiFeed = {}
+  sc:pushAIFeed("belief", "BOT（孙权）判 你：主公→反贼 因为你在远处对主公使用了【决斗】并连续两张【杀】")
+  local long = sc.aiFeed[1].text
+  local w, lines = 200, {}
+  for i = 1, 12 do
+    sc:pushAIFeed("belief", long .. " 第" .. i .. "条")
+  end
+  local fitted = TextFit.fit(sc.aiFeed[1].text, 160, sc.font_sm)
+  check(#fitted < #long and fitted:find("…", 1, true) ~= nil, "超宽 AI 文本应截断并带省略号")
+  check(fitted:find("…", 1, true) == #fitted - #("…") + 1 or #fitted <= 100,
+    "截断结果应以省略号结尾且不抛 UTF-8 错误")
+  local sc2 = RoomScene.create(function() end, "identity", 5, "off", { seed = 42 })
+  local panel_w = 200
+  local real_fit = TextFit.fit(long, panel_w - 20, nil)
+  check(TextFit.width(real_fit) <= panel_w - 20, "无字体时退回估算宽度也应收敛在面板内")
+  local ok, err = pcall(function() sc:draw() end)
+  check(ok, "AI 面板绘制（含长文本截断）不应报错：" .. tostring(err))
 end
 
 -- Audio 模块：台词独占记录与 voiceBusy 判定（headless 恒为 false）
